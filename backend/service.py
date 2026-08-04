@@ -63,6 +63,7 @@ async def _run(
                 )
 
         store.finish_run(run_id, "done", fetched, inserted)
+        await _refresh_tags(inserted)
         return {
             "scope": scope,
             "status": "done",
@@ -74,7 +75,23 @@ async def _run(
 
     except Exception as e:  # 失败也要把已采数据和游标留住
         store.finish_run(run_id, "failed", fetched, inserted, f"{type(e).__name__}: {e}")
+        # 被风控掐断时也要把已采部分的标签补上,否则新条目在界面上没有分类
+        await _refresh_tags(inserted)
         raise
+
+
+async def _refresh_tags(inserted: int) -> None:
+    """采到新东西就重抽标签。
+
+    纯本地计算、无外部请求,成本可忽略;不自动做的话新采的作品在界面上
+    没有话题分类,得手工跑一次 `cli.py tags`,很容易忘。
+    """
+    if inserted <= 0:
+        return
+    try:
+        await asyncio.to_thread(store.rebuild_tags)
+    except Exception:
+        pass  # 标签是增强项,失败不该影响采集结果
 
 
 async def collect_favorites(
