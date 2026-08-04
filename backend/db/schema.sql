@@ -103,6 +103,24 @@ CREATE TABLE IF NOT EXISTS collect_runs (
     error       TEXT
 );
 
+-- ── 智能采集状态机 ──────────────────────────────────────────
+-- 每个分类各自记状态。实践教训:
+--   * 抖音对不同接口策略不同 —— 收藏能一路翻到底,点赞翻不深就 403(实测 3 次)
+--   * 调大间隔并不能解决点赞的 403(8s 撑 55 页,15s 只撑 14 页),
+--     所以要靠「主动收手 + 指数退避」,而不是猛试
+--   * 游标只往历史深处翻,翻到底之后必须换成增量同步才能发现新增内容
+CREATE TABLE IF NOT EXISTS collect_state (
+    scope            TEXT PRIMARY KEY,   -- collection | like | post
+    exhausted        INTEGER DEFAULT 0,  -- 是否已翻到历史尽头(之后只做增量)
+    blocked_until    TEXT,               -- 被限流的冷却截止时间
+    backoff_level    INTEGER DEFAULT 0,  -- 退避级数,成功后归零
+    consecutive_403  INTEGER DEFAULT 0,
+    last_status      TEXT,               -- done | failed | throttled | skipped
+    last_error       TEXT,
+    last_run_at      TEXT,
+    total_pages      INTEGER DEFAULT 0   -- 累计翻过的页数
+);
+
 -- ── 收藏夹 ──────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS collects_folders (
     collects_id   TEXT PRIMARY KEY,

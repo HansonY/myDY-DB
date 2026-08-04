@@ -31,6 +31,7 @@ async def _run(
     resume: bool,
     on_progress: Callable[[dict], None] | None = None,
     stop_after_known_pages: int = 0,
+    max_pages: int = 0,
 ) -> dict[str, Any]:
     """通用采集循环。page_iter_factory(start_cursor) → 异步页生成器。
 
@@ -50,7 +51,8 @@ async def _run(
     run_id = store.start_run(scope)
     fetched = inserted = pages = 0
     known_streak = 0
-    stopped_early = False
+    stopped_early = False   # 增量同步追上了
+    hit_cap = False         # 主动收手(没到 403 就先停)
 
     try:
         async for rows, max_cursor in page_iter_factory(start_cursor):
@@ -81,6 +83,11 @@ async def _run(
                 stopped_early = True
                 break
 
+            # 主动收手:实测被 403 拒过之后的冷却代价,远高于自己少采几页
+            if max_pages and pages >= max_pages:
+                hit_cap = True
+                break
+
         store.finish_run(run_id, "done", fetched, inserted)
         await _refresh_tags(inserted)
         return {
@@ -91,6 +98,9 @@ async def _run(
             "inserted": inserted,
             "resumed_from": start_cursor,
             "stopped_early": stopped_early,
+            "hit_cap": hit_cap,
+            # 生成器自然结束、既没撞上限也没提前停 → 说明翻到了历史尽头
+            "exhausted": not stopped_early and not hit_cap,
         }
 
     except Exception as e:  # 失败也要把已采数据和游标留住
@@ -98,6 +108,66 @@ async def _run(
         # 被风控掐断时也要把已采部分的标签补上,否则新条目在界面上没有分类
         await _refresh_tags(inserted)
         raise
+
+
+async def smart_collect(
+    on_progress: Callable[[dict], None] | None = None,
+    on_step: Callable[[dict], None] | None = None,
+) -> dict[str, Any]:
+    """智能采集:每类自己判断该续采、该增量同步、还是该跳过。
+
+    规则来自实测(见 planner.py 顶部注释):
+      * 每类独立状态与页数上限 —— 抖音对不同接口策略不同
+      * 主动收手优于被 403 —— 后者的冷却代价高得多
+      * 403 走指数退避,冷却期内直接跳过,不去试探
+      * 历史采尽后自动切成增量同步,否则永远发现不了新增内容
+      * 一类失败不影响其他类
+    """
+    import planner
+
+    store.init_db()
+    results: list[dict[str, Any]] = []
+
+    for step in planner.plan_all():
+        scope, label = step["scope"], step["label"]
+
+        if step["action"] == "skip":
+            out = {**step, "status": "skipped", "inserted": 0}
+            results.append(out)
+            if on_step:
+                on_step(out)
+            continue
+
+        fn = _COLLECTORS[scope]
+        is_sync = step["action"] == "sync"
+        try:
+            r = await fn(
+                sync=is_sync,
+                resume=not is_sync,
+                on_progress=on_progress,
+                max_pages=step.get("max_pages", 0),
+            )
+            planner.record_success(scope, r["pages"], r.get("exhausted", False))
+            out = {
+                **step, "status": "done",
+                "inserted": r["inserted"], "pages": r["pages"],
+                "exhausted": r.get("exhausted"), "hit_cap": r.get("hit_cap"),
+                "stopped_early": r.get("stopped_early"),
+            }
+        except Exception as e:
+            if planner.is_throttle_error(e):
+                cd = planner.record_throttled(scope, 0, f"{type(e).__name__}: {e}")
+                out = {**step, "status": "throttled", "inserted": 0, **cd}
+            else:
+                planner.record_failure(scope, 0, f"{type(e).__name__}: {e}")
+                out = {**step, "status": "failed", "inserted": 0,
+                       "error": f"{type(e).__name__}: {e}"}
+
+        results.append(out)
+        if on_step:
+            on_step(out)
+
+    return {"steps": results, "inserted": sum(r.get("inserted", 0) for r in results)}
 
 
 async def _refresh_tags(inserted: int) -> None:
@@ -128,6 +198,7 @@ async def collect_favorites(
     resume: bool = True,
     on_progress: Callable[[dict], None] | None = None,
     sync: bool = False,
+    max_pages: int = 0,
 ) -> dict[str, Any]:
     limit = max_items if max_items is not None else settings.max_items
     resume, stop = _sync_args(sync, resume)
@@ -137,6 +208,7 @@ async def collect_favorites(
         resume,
         on_progress,
         stop,
+        max_pages,
     )
 
 
@@ -171,6 +243,7 @@ async def collect_likes(
     resume: bool = True,
     on_progress: Callable[[dict], None] | None = None,
     sync: bool = False,
+    max_pages: int = 0,
 ) -> dict[str, Any]:
     sec_user_id = await own_sec_user_id()
     limit = max_items if max_items is not None else settings.max_items
@@ -183,6 +256,7 @@ async def collect_likes(
         resume,
         on_progress,
         stop,
+        max_pages,
     )
 
 
@@ -191,6 +265,7 @@ async def collect_posts(
     resume: bool = True,
     on_progress: Callable[[dict], None] | None = None,
     sync: bool = False,
+    max_pages: int = 0,
 ) -> dict[str, Any]:
     sec_user_id = await own_sec_user_id()
     limit = max_items if max_items is not None else settings.max_items
@@ -203,6 +278,7 @@ async def collect_posts(
         resume,
         on_progress,
         stop,
+        max_pages,
     )
 
 
@@ -232,3 +308,11 @@ async def collect_folder(
         resume,
         on_progress,
     )
+
+
+# smart_collect 用:scope → 采集函数。放在文件末尾,等三个函数都已定义。
+_COLLECTORS = {
+    "collection": collect_favorites,
+    "like": collect_likes,
+    "post": collect_posts,
+}

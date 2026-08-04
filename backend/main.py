@@ -207,6 +207,39 @@ def _require_cookie() -> None:
         )
 
 
+@app.get("/api/collect/plan")
+async def collect_plan() -> dict[str, Any]:
+    """当前各分类该做什么 + 状态。给界面展示,不发任何抖音请求。"""
+    import planner
+
+    def enrich(step: dict[str, Any]) -> dict[str, Any]:
+        st = store.get_state(step["scope"])
+        left = planner.cooldown_left(step["scope"])
+        return {
+            **step,
+            "exhausted": bool(st.get("exhausted")),
+            "total_pages": st.get("total_pages") or 0,
+            "last_status": st.get("last_status"),
+            "last_error": st.get("last_error"),
+            "last_run_at": st.get("last_run_at"),
+            "cooldown_minutes": int(left.total_seconds() // 60) + 1 if left else 0,
+        }
+
+    steps = await asyncio.to_thread(planner.plan_all)
+    return {"steps": [enrich(s) for s in steps]}
+
+
+@app.post("/api/collect/smart")
+async def collect_smart(bg: BackgroundTasks) -> dict[str, Any]:
+    """智能采集:每类自己判断续采/增量/跳过,自己处理限流退避。"""
+    _require_cookie()
+    if _collect_lock.locked():
+        raise HTTPException(409, "已有采集任务在跑,请等它结束")
+
+    bg.add_task(_guarded, lambda: service.smart_collect(on_progress=_track))
+    return {"started": True, "scope": "smart", "hint": "轮询 /api/runs 看进度"}
+
+
 @app.post("/api/collect/favorites")
 async def collect_favorites(
     bg: BackgroundTasks,

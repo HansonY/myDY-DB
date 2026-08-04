@@ -107,6 +107,60 @@ async def cmd_posts(args) -> None:
     print(f"\n✓ {result}")
 
 
+async def cmd_smart(args) -> None:
+    """智能采集:每类自己判断该做什么,自己处理限流退避。
+
+    这是日常唯一需要的命令,适合挂定时任务。
+    """
+    import planner
+    import service
+
+    print("采集计划:")
+    for s in planner.plan_all():
+        icon = {"resume": "↻", "sync": "⇅", "skip": "⏸"}[s["action"]]
+        print(f"  {icon} {s['label']:<8} {s['reason']}")
+
+    if args.dry_run:
+        print("\n(--dry-run,只看计划不执行)")
+        return
+
+    def step(o):
+        st = o["status"]
+        if st == "skipped":
+            print(f"\n⏸ {o['label']}:{o['reason']}")
+        elif st == "throttled":
+            print(f"\n⚠️ {o['label']}:被限流,冷却 {o['cooldown_minutes']} 分钟后再试"
+                  f"(已采部分与游标都保留)")
+        elif st == "failed":
+            print(f"\n✗ {o['label']}:{o['error'][:90]}")
+        else:
+            why = ("已采到历史尽头" if o.get("exhausted")
+                   else "主动收手,下次继续" if o.get("hit_cap")
+                   else "已追上最新" if o.get("stopped_early") else "")
+            print(f"\n✓ {o['label']}:新增 {o['inserted']} 条 / {o['pages']} 页 {why}")
+
+    print("\n开始采集…")
+    r = await service.smart_collect(on_progress=_progress, on_step=step)
+    print(f"\n═══ 本轮共新增 {r['inserted']} 条 ═══")
+    cmd_stats(args)
+
+
+def cmd_state(_args) -> None:
+    """看各分类的采集状态。"""
+    import planner
+
+    print(f"{'分类':<10}{'状态':<12}{'累计页':<8}{'最近':<22}说明")
+    for s in planner.plan_all():
+        st = store.get_state(s["scope"])
+        flag = ("已采尽" if st.get("exhausted") else "未采尽")
+        if planner.cooldown_left(s["scope"]):
+            flag = "冷却中"
+        print(f"{s['label']:<10}{flag:<12}{st.get('total_pages') or 0:<8}"
+              f"{(st.get('last_run_at') or '—')[:19]:<22}{s['reason']}")
+        if st.get("last_error"):
+            print(f"           └ 上次错误:{st['last_error'][:80]}")
+
+
 async def cmd_sync(args) -> None:
     """增量同步:从最新开始扫,连续几页无新增就停。
 
@@ -261,7 +315,12 @@ def main() -> None:
 
     sub.add_parser("whoami", help="解析并保存自己的 sec_user_id(点赞/作品需要)")
 
-    sp = sub.add_parser("sync", help="增量同步(日常更新用这个,发现新增内容)")
+    sp = sub.add_parser("smart", help="智能采集(推荐:自己判断+自己退避,适合挂定时)")
+    sp.add_argument("--dry-run", action="store_true", help="只打印计划,不执行")
+
+    sub.add_parser("state", help="看各分类的采集状态")
+
+    sp = sub.add_parser("sync", help="增量同步(只发现新增,不续采历史)")
     sp.add_argument("--skip-posts", action="store_true", help="不同步我的作品")
 
     for name, help_text in (
@@ -296,6 +355,8 @@ def main() -> None:
         "login": cmd_login,
         "qrlogin": cmd_qrlogin,
         "whoami": cmd_whoami,
+        "smart": cmd_smart,
+        "state": cmd_state,
         "sync": cmd_sync,
         "probe": cmd_probe,
         "favorites": cmd_favorites,

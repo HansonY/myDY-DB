@@ -279,11 +279,13 @@ footer{max-width:1240px;margin:0 auto;padding:26px 22px 48px;
       </svg>
       <input type="search" id="q" placeholder="搜文案、作者、音乐名…">
     </label>
-    <button class="btn go" id="b-fav">采集收藏</button>
+    <button class="btn go" id="b-smart">智能采集</button>
+    <button class="btn" id="b-fav">收藏</button>
     <button class="btn" id="b-like">点赞</button>
     <button class="btn" id="b-post">我的作品</button>
     <button class="btn" id="b-fold">收藏夹</button>
   </div>
+  <div class="row pad" id="plan"></div>
 
   <div class="row pad">
     <span class="row" id="srcs" style="gap:6px"></span>
@@ -388,6 +390,18 @@ async function loadTags(){
   });
   const m = $('#t-more');
   if(m) m.onclick = () => { tagsOpen=!tagsOpen; loadTags(); };
+}
+
+/* 采集计划:让「系统现在打算做什么」是可见的,而不是黑箱 */
+const PLAN_ICON = {resume:'↻', sync:'⇅', skip:'⏸'};
+async function loadPlan(){
+  const d = await api('/api/collect/plan');
+  $('#plan').innerHTML = d.steps.map(s => {
+    const cd = s.cooldown_minutes ? ` · 冷却 ${s.cooldown_minutes} 分钟` : '';
+    const st = s.action==='skip' ? '限流中' : s.exhausted ? '增量' : '续采';
+    return `<span class="chip" style="cursor:default" title="${esc(s.reason)}${esc(cd)}">
+      ${PLAN_ICON[s.action]} ${esc(s.label)} <span class="n">${st}${esc(cd)}</span></span>`;
+  }).join('');
 }
 
 async function loadAuthors(){
@@ -503,7 +517,7 @@ function setView(v){
   loadList();
 }
 
-function busy(b){ ['#b-fav','#b-like','#b-post','#b-fold'].forEach(s=>$(s).disabled=b); }
+function busy(b){ ['#b-smart','#b-fav','#b-like','#b-post','#b-fold'].forEach(s=>$(s).disabled=b); }
 
 async function pollRuns(){
   const d = await api('/api/runs');
@@ -520,7 +534,7 @@ async function pollRuns(){
     if(!polling) polling = setInterval(pollRuns, 3000);
   }else{
     busy(false);
-    if(polling){ clearInterval(polling); polling=null; await loadStats(); await loadTags(); await loadList(); }
+    if(polling){ clearInterval(polling); polling=null; await loadStats(); await loadTags(); await loadPlan(); await loadList(); }
     const last = (d.items||[])[0];
     if(last && last.status==='failed'){
       box.insertAdjacentHTML('beforeend',
@@ -540,6 +554,7 @@ async function trigger(url){
   }
 }
 
+$('#b-smart').onclick = () => trigger('/api/collect/smart');
 $('#b-fav').onclick  = () => trigger('/api/collect/favorites');
 $('#b-like').onclick = () => trigger('/api/collect/likes');
 $('#b-post').onclick = () => trigger('/api/collect/posts');
@@ -572,7 +587,7 @@ $('#q').oninput = e => {
 
 (async()=>{
   setView(view);
-  await loadStats(); await loadAuthors(); await loadTags();
+  await loadStats(); await loadAuthors(); await loadTags(); await loadPlan();
   await loadList(); await pollRuns();
 })();
 </script>

@@ -22,15 +22,21 @@ Douyin-DB 把这些视频的**文案和内容**抽出来落到本地库里,于�
 
 ---
 
-## 现在能做什么(Phase 1)
+## 现在能做什么
 
-- 采集**我的收藏**、**我的点赞**、**指定收藏夹**
-- 落本地 SQLite,含文案、作者、时长、封面、原链接
-- 关键词搜索(文案 / 作者 / 音乐名)
-- 断点续跑:中断后重跑从游标继续,不重复采集
-- Web 界面 + 命令行两种用法
+**采集**
+- 我的收藏、我的点赞、我发布的作品、指定收藏夹
+- **智能采集**:自己判断续采/增量/跳过,自己处理 403 退避(见下)
+- 断点无损:逐页落库 + 逐页存游标,任何时候中断都能接着来
+- 只读设计:不发评论、不点赞、不关注
 
-**路线图**:Phase 2 用视觉模型补全无文案的视频并做结构化提取(菜谱 → 食材/步骤)· Phase 3 语义检索与问答 · Phase 4 导出 Markdown / Obsidian、扩展到 B站小红书 YouTube。
+**浏览**
+- 列表视图(读文案)/ 网格视图(扫封面)
+- **话题标签分类**:从文案里抽 `#hashtag`,零 AI 成本(实测 88% 的作品自带)
+- 按来源 / 作者 / 标签筛选,按存入时间 / 发布时间 / 时长 / 作者排序
+- 关键词搜索;封面服务端代理 + 永久缓存(抖音 CDN 防盗链且 URL 会过期)
+
+**路线图**:大模型分析(无文案视频的视觉理解、按类型结构化提取:菜谱 → 食材/步骤)· 语义检索与问答 · 暴露为 MCP 服务供 AI 直接查询 · 导出 Markdown / Obsidian · 扩展到 B站 / 小红书 / YouTube。
 
 ---
 
@@ -95,22 +101,87 @@ macOS 上读 Safari 需要给终端「系统设置 → 隐私与安全性 → **
 
 ---
 
-## 命令行
+## 智能采集
+
+**日常只需要这一条命令:**
 
 ```bash
-python backend/cli.py init                 # 建库
-python backend/cli.py qrlogin [--keep-session]   # 扫码登录(需 playwright)
-python backend/cli.py login [--browser chrome]   # 从本机浏览器读 cookie
-python backend/cli.py probe [--max 3]      # 拉几条核对字段,不写库
-python backend/cli.py favorites [--max N] [--fresh]   # 采集收藏
-python backend/cli.py likes     [--max N] [--fresh]   # 采集点赞(需 DOUYIN_PROFILE_URL)
-python backend/cli.py folders              # 列出收藏夹
-python backend/cli.py folder <collects_id> # 采集指定收藏夹
-python backend/cli.py stats                # 统计 + 最近采集记录
-python backend/cli.py search <关键词>       # 搜索
+python backend/cli.py smart
 ```
 
-`--fresh` 忽略游标从头重采;默认是续采。
+它会自己判断每个分类该做什么,并处理限流:
+
+| 情况 | 它的行为 |
+|---|---|
+| 历史还没采完 | 从断点续采,**采够页数上限就主动收手** |
+| 历史已采尽 | 自动切成增量同步(从最新扫,连续 3 页无新增就停) |
+| 上次被限流 | 冷却期内**直接跳过**,不去试探 |
+| 被 403 | 指数退避(30 分钟 → 1 → 2 → 4 → 6 小时),已采数据与游标全保留 |
+| 某一类失败 | 不影响其他类 |
+
+看它打算做什么(不发任何请求):
+
+```bash
+python backend/cli.py smart --dry-run
+python backend/cli.py state
+```
+
+### 这些规则是实测出来的,不是猜的
+
+- **不同接口策略不同**:收藏能一路翻到历史尽头;点赞翻不深就 403,连续三次。所以每类有独立状态和页数上限。
+- **调大间隔救不了点赞**:8 秒间隔撑了 55 页(1106 条),15 秒间隔只撑了 14 页(272 条)。慢并不能换来更深。所以对策是**主动收手**——没到 403 就先停,被拒之后的冷却代价比自己少采几页高得多。
+- **游标只往旧翻**:翻到底之后再用续采模式,永远发现不了新增内容,必须切成增量同步。
+
+### 挂定时任务(每天自动采)
+
+macOS 用 launchd,把下面存成 `~/Library/LaunchAgents/com.douyin-db.smart.plist` 后 `launchctl load` 它:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.douyin-db.smart</string>
+  <key>WorkingDirectory</key><string>/path/to/Douyin-DB</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/path/to/Douyin-DB/.venv/bin/python</string>
+    <string>backend/cli.py</string><string>smart</string>
+  </array>
+  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>9</integer></dict>
+  <key>StandardOutPath</key><string>/tmp/douyin-db.log</string>
+  <key>StandardErrorPath</key><string>/tmp/douyin-db.log</string>
+</dict></plist>
+```
+
+Linux / cron:`0 9 * * * cd /path/to/Douyin-DB && .venv/bin/python backend/cli.py smart >> /tmp/douyin-db.log 2>&1`
+
+---
+
+## 全部命令
+
+```bash
+python backend/cli.py init                       # 建库
+python backend/cli.py qrlogin [--keep-session]   # 扫码登录(需 playwright)
+python backend/cli.py login [--browser chrome]   # 从本机浏览器读 cookie
+python backend/cli.py whoami                     # 解析自己的 sec_user_id
+python backend/cli.py probe [--max 3]            # 拉几条核对字段,不写库
+
+python backend/cli.py smart [--dry-run]          # 智能采集(推荐)
+python backend/cli.py state                      # 各分类采集状态
+python backend/cli.py sync                       # 只做增量同步
+
+python backend/cli.py favorites [--max N] [--fresh]   # 单独采收藏
+python backend/cli.py likes     [--max N] [--fresh]   # 单独采点赞
+python backend/cli.py posts     [--max N] [--fresh]   # 单独采我的作品
+python backend/cli.py folders                    # 列出收藏夹
+python backend/cli.py folder <collects_id>       # 采集指定收藏夹
+
+python backend/cli.py stats                      # 统计 + 最近采集记录
+python backend/cli.py tags [--top 25]            # 重抽 #话题标签
+python backend/cli.py search <关键词>             # 搜索
+```
+
+`--fresh` 忽略游标从最新重扫;默认是从断点续采。
 
 ---
 

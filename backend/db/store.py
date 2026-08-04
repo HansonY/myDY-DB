@@ -405,6 +405,48 @@ def finish_run(
         )
 
 
+# ── 智能采集状态 ────────────────────────────────────────────
+
+def get_state(scope: str) -> dict[str, Any]:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM collect_state WHERE scope = ?", (scope,)
+        ).fetchone()
+    if row:
+        return dict(row)
+    return {
+        "scope": scope, "exhausted": 0, "blocked_until": None,
+        "backoff_level": 0, "consecutive_403": 0, "last_status": None,
+        "last_error": None, "last_run_at": None, "total_pages": 0,
+    }
+
+
+def all_states() -> list[dict[str, Any]]:
+    with connect() as conn:
+        return [dict(r) for r in conn.execute("SELECT * FROM collect_state")]
+
+
+def save_state(scope: str, **fields: Any) -> None:
+    """只更新传入的字段,其余保持原样。"""
+    cur = get_state(scope)
+    cur.update(fields)
+    cur["scope"] = scope
+    cols = [
+        "scope", "exhausted", "blocked_until", "backoff_level",
+        "consecutive_403", "last_status", "last_error", "last_run_at",
+        "total_pages",
+    ]
+    row = {c: cur.get(c) for c in cols}
+    updates = ",".join(f"{c}=excluded.{c}" for c in cols if c != "scope")
+    with connect() as conn:
+        conn.execute(
+            f"INSERT INTO collect_state ({','.join(cols)}) "
+            f"VALUES ({','.join(':'+c for c in cols)}) "
+            f"ON CONFLICT(scope) DO UPDATE SET {updates}",
+            row,
+        )
+
+
 def latest_runs(limit: int = 10) -> list[dict[str, Any]]:
     with connect() as conn:
         return [
