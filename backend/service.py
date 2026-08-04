@@ -30,8 +30,17 @@ async def _run(
     page_iter_factory: Callable[[int], Any],
     resume: bool,
     on_progress: Callable[[dict], None] | None = None,
+    stop_after_known_pages: int = 0,
 ) -> dict[str, Any]:
-    """通用采集循环。page_iter_factory(start_cursor) → 异步页生成器。"""
+    """通用采集循环。page_iter_factory(start_cursor) → 异步页生成器。
+
+    两种模式:
+      * resume=True  —— 从游标继续,**往历史深处翻**。用于首次全量采集被
+        风控中断后接着采。
+      * resume=False —— 从最新开始扫。这是发现「新增收藏」的唯一方式,因为
+        游标分页只会越翻越旧。配合 stop_after_known_pages 做增量同步:
+        连续 N 页全是已知条目就停,不必扫完几千条。
+    """
     store.init_db()
 
     if not resume:
@@ -40,14 +49,20 @@ async def _run(
 
     run_id = store.start_run(scope)
     fetched = inserted = pages = 0
+    known_streak = 0
+    stopped_early = False
 
     try:
         async for rows, max_cursor in page_iter_factory(start_cursor):
             pages += 1
+            new_here = 0
             if rows:
-                f, i = await asyncio.to_thread(_persist_page, rows)
+                f, new_here = await asyncio.to_thread(_persist_page, rows)
                 fetched += f
-                inserted += i
+                inserted += new_here
+            # 增量同步:这一页没带来新条目就累计,连续多页如此说明追上了。
+            # 空页也算 —— 它同样代表「没有新东西」。
+            known_streak = known_streak + 1 if new_here == 0 else 0
             if max_cursor:
                 await asyncio.to_thread(store.save_cursor, scope, max_cursor)
 
@@ -62,6 +77,10 @@ async def _run(
                     }
                 )
 
+            if stop_after_known_pages and known_streak >= stop_after_known_pages:
+                stopped_early = True
+                break
+
         store.finish_run(run_id, "done", fetched, inserted)
         await _refresh_tags(inserted)
         return {
@@ -71,6 +90,7 @@ async def _run(
             "fetched": fetched,
             "inserted": inserted,
             "resumed_from": start_cursor,
+            "stopped_early": stopped_early,
         }
 
     except Exception as e:  # 失败也要把已采数据和游标留住
@@ -94,17 +114,29 @@ async def _refresh_tags(inserted: int) -> None:
         pass  # 标签是增强项,失败不该影响采集结果
 
 
+# 增量同步时,连续几页全是已知条目就认为追上了
+SYNC_KNOWN_PAGES = 3
+
+
+def _sync_args(sync: bool, resume: bool) -> tuple[bool, int]:
+    """sync 模式必须从最新开始扫(resume=False),否则只会越翻越旧。"""
+    return (False, SYNC_KNOWN_PAGES) if sync else (resume, 0)
+
+
 async def collect_favorites(
     max_items: int | None = None,
     resume: bool = True,
     on_progress: Callable[[dict], None] | None = None,
+    sync: bool = False,
 ) -> dict[str, Any]:
     limit = max_items if max_items is not None else settings.max_items
+    resume, stop = _sync_args(sync, resume)
     return await _run(
         "collection",
         lambda cur: douyin.collect_favorites(max_items=limit, start_cursor=cur),
         resume,
         on_progress,
+        stop,
     )
 
 
@@ -138,9 +170,11 @@ async def collect_likes(
     max_items: int | None = None,
     resume: bool = True,
     on_progress: Callable[[dict], None] | None = None,
+    sync: bool = False,
 ) -> dict[str, Any]:
     sec_user_id = await own_sec_user_id()
     limit = max_items if max_items is not None else settings.max_items
+    resume, stop = _sync_args(sync, resume)
     return await _run(
         "like",
         lambda cur: douyin.collect_likes(
@@ -148,6 +182,7 @@ async def collect_likes(
         ),
         resume,
         on_progress,
+        stop,
     )
 
 
@@ -155,9 +190,11 @@ async def collect_posts(
     max_items: int | None = None,
     resume: bool = True,
     on_progress: Callable[[dict], None] | None = None,
+    sync: bool = False,
 ) -> dict[str, Any]:
     sec_user_id = await own_sec_user_id()
     limit = max_items if max_items is not None else settings.max_items
+    resume, stop = _sync_args(sync, resume)
     return await _run(
         "post",
         lambda cur: douyin.collect_posts(
@@ -165,6 +202,7 @@ async def collect_posts(
         ),
         resume,
         on_progress,
+        stop,
     )
 
 

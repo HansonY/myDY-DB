@@ -107,6 +107,29 @@ async def cmd_posts(args) -> None:
     print(f"\n✓ {result}")
 
 
+async def cmd_sync(args) -> None:
+    """增量同步:从最新开始扫,连续几页无新增就停。
+
+    日常更新用这个,不要用 favorites —— 后者是从游标往历史深处翻,
+    发现不了你新收藏的东西。
+    """
+    import service
+
+    jobs = [("收藏", service.collect_favorites), ("点赞", service.collect_likes)]
+    if not args.skip_posts:
+        jobs.append(("我的作品", service.collect_posts))
+
+    for name, fn in jobs:
+        print(f"\n── {name} ──")
+        try:
+            r = await fn(sync=True, on_progress=_progress)
+            tail = "(连续多页无新增,已提前停止)" if r.get("stopped_early") else ""
+            print(f"  新增 {r['inserted']} 条,扫了 {r['pages']} 页 {tail}")
+        except Exception as e:
+            print(f"  ✗ {type(e).__name__}: {str(e)[:90]}")
+            print("    已采部分和游标都保留了。")
+
+
 async def cmd_probe(args) -> None:
     """只拉几条,核对字段映射是否正确。不写库。"""
     from collector import douyin
@@ -238,6 +261,9 @@ def main() -> None:
 
     sub.add_parser("whoami", help="解析并保存自己的 sec_user_id(点赞/作品需要)")
 
+    sp = sub.add_parser("sync", help="增量同步(日常更新用这个,发现新增内容)")
+    sp.add_argument("--skip-posts", action="store_true", help="不同步我的作品")
+
     for name, help_text in (
         ("favorites", "采集我的收藏"),
         ("likes", "采集我的点赞"),
@@ -270,6 +296,7 @@ def main() -> None:
         "login": cmd_login,
         "qrlogin": cmd_qrlogin,
         "whoami": cmd_whoami,
+        "sync": cmd_sync,
         "probe": cmd_probe,
         "favorites": cmd_favorites,
         "likes": cmd_likes,
