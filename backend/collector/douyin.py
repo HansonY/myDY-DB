@@ -60,6 +60,18 @@ def build_kwargs() -> dict[str, Any]:
     }
 
 
+def _make_handler() -> DouyinHandler:
+    """建 handler,并关掉 f2 自带的 Bark 推送。
+
+    f2 每次采集结束会往 https://api.day.app/ 发一条通知(它自带的 conf.yaml
+    默认开着)。对本项目是纯负担:多一次不必要的外部请求 + 失败时刷一屏 ERROR。
+    不去改 f2 的配置文件 —— 升级依赖就没了,改实例属性才稳。
+    """
+    handler = DouyinHandler(build_kwargs())
+    handler.enable_bark = False
+    return handler
+
+
 def _pick(item: dict[str, Any], *names: str) -> Any:
     """按优先级取第一个非空字段(用于 desc_raw → desc 这类回退)。"""
     for n in names:
@@ -67,6 +79,16 @@ def _pick(item: dict[str, Any], *names: str) -> Any:
         if v not in (None, "", []):
             return v
     return None
+
+
+def _fix_time(v: Any) -> Any:
+    """f2 把时间格式成 `2026-07-17 10-47-29` —— 时间部分的冒号被换成横线
+    (为了能安全用作文件名)。入库需要可解析、可排序的时间,把它还原回来。
+    """
+    if not isinstance(v, str) or " " not in v:
+        return v
+    date, _, clock = v.partition(" ")
+    return f"{date} {clock.replace('-', ':')}"
 
 
 def _normalize(
@@ -89,6 +111,7 @@ def _normalize(
     row["nickname"] = _pick(item, "nickname_raw", "nickname")
     row["music_title"] = _pick(item, "music_title_raw", "music_title")
 
+    row["create_time"] = _fix_time(row.get("create_time"))
     row["aweme_id"] = str(aweme_id)
     row["collects_id"] = collects_id
     row["collects_name"] = collects_name
@@ -126,7 +149,7 @@ async def collect_favorites(
     max_items: int | None = None, start_cursor: int = 0
 ) -> AsyncIterator[tuple[list[dict[str, Any]], Any]]:
     """我收藏的作品。只需 cookie。"""
-    handler = DouyinHandler(build_kwargs())
+    handler = _make_handler()
     agen = handler.fetch_user_collection_videos(
         max_cursor=start_cursor,
         page_counts=settings.collect_page_size,
@@ -140,7 +163,7 @@ async def collect_likes(
     sec_user_id: str, max_items: int | None = None, start_cursor: int = 0
 ) -> AsyncIterator[tuple[list[dict[str, Any]], Any]]:
     """我点赞的作品。需要自己的 sec_user_id,且账号点赞列表须对自己可见。"""
-    handler = DouyinHandler(build_kwargs())
+    handler = _make_handler()
     agen = handler.fetch_user_like_videos(
         sec_user_id=sec_user_id,
         max_cursor=start_cursor,
@@ -153,7 +176,7 @@ async def collect_likes(
 
 async def list_folders() -> list[dict[str, Any]]:
     """我的收藏夹清单。只靠 cookie —— 即使填别人的 URL 也只能拿到自己的。"""
-    handler = DouyinHandler(build_kwargs())
+    handler = _make_handler()
     folders: list[dict[str, Any]] = []
 
     async for page in handler.fetch_user_collects(
@@ -181,7 +204,7 @@ async def collect_folder(
     start_cursor: int = 0,
 ) -> AsyncIterator[tuple[list[dict[str, Any]], Any]]:
     """某个收藏夹内的作品。"""
-    handler = DouyinHandler(build_kwargs())
+    handler = _make_handler()
     agen = handler.fetch_user_collects_videos(
         collects_id=collects_id,
         max_cursor=start_cursor,
