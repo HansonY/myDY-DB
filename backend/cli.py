@@ -191,6 +191,15 @@ def cmd_stats(_args) -> None:
             )
 
 
+def cmd_tags(args) -> None:
+    """从文案重抽 #话题标签(零成本,不发任何网络请求)。"""
+    tagged, distinct = store.rebuild_tags()
+    print(f"✓ {tagged} 条作品有标签,{distinct} 个不同标签\n")
+    print(f"Top {args.top}:")
+    for t in store.top_tags(args.top):
+        print(f"  {t['n']:>4}  {t['tag']}")
+
+
 def cmd_search(args) -> None:
     rows = store.list_videos(q=args.keyword, limit=args.limit)
     total = store.count_videos(q=args.keyword)
@@ -247,6 +256,9 @@ def main() -> None:
 
     sub.add_parser("stats", help="统计")
 
+    sp = sub.add_parser("tags", help="从文案重抽 #话题标签(零成本)")
+    sp.add_argument("--top", type=int, default=25)
+
     sp = sub.add_parser("search", help="关键词搜索")
     sp.add_argument("keyword")
     sp.add_argument("--limit", type=int, default=20)
@@ -265,6 +277,7 @@ def main() -> None:
         "folders": cmd_folders,
         "folder": cmd_folder,
         "stats": cmd_stats,
+        "tags": cmd_tags,
         "search": cmd_search,
     }
     fn = handlers[args.cmd]

@@ -61,6 +61,8 @@
   .tagrow{margin-top:7px;display:flex;gap:6px;flex-wrap:wrap}
   .tag{font-size:11.5px;padding:1px 7px;border-radius:20px;background:var(--panel-2);
       color:var(--dim);border:1px solid var(--line)}
+  .tag.hash{cursor:pointer}
+  .tag.hash:hover{color:var(--accent);border-color:var(--accent)}
   .empty-state{text-align:center;padding:64px 20px;color:var(--dim)}
   .empty-state code{background:var(--panel-2);padding:2px 7px;border-radius:5px;color:var(--fg)}
   footer{max-width:1100px;margin:0 auto;padding:0 20px 40px;display:flex;gap:10px;justify-content:center}
@@ -89,6 +91,7 @@
     <select id="author"><option value="">全部作者</option></select>
     <button class="chip" id="btn-reset">重置</button>
   </div>
+  <div class="bar2" id="tag-chips"></div>
 </div></header>
 
 <main>
@@ -107,7 +110,7 @@ const api = (p, o) => fetch(p, o).then(async r => {
 const esc = s => (s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 let offset = 0, limit = 50, total = 0, q = '', polling = null;
-let source = '', sort = 'collected', author = '';
+let source = '', sort = 'collected', author = '', tag = '', tagsOpen = false;
 
 const SRC = {collection:'收藏', like:'点赞', post:'我的作品', collects:'收藏夹'};
 
@@ -122,12 +125,13 @@ function secs(ms){
   return h < 24 ? `${h}h${String(Math.floor(t%3600/60)).padStart(2,'0')}m` : '直播/超长';
 }
 
-function params(extra){
+function params(){
   const p = new URLSearchParams({limit, offset, sort});
   if (q) p.set('q', q);
   if (source) p.set('source', source);
   if (author) p.set('nickname', author);
-  return p.toString() + (extra || '');
+  if (tag) p.set('tag', tag);
+  return p.toString();
 }
 
 async function loadStats(){
@@ -162,7 +166,7 @@ async function loadList(){
   total = d.total;
 
   if (!d.items.length){
-    $('#list').innerHTML = (q || source || author)
+    $('#list').innerHTML = (q || source || author || tag)
       ? `<div class="empty-state">当前条件下没有结果。<button class="more" onclick="resetAll()">重置筛选</button></div>`
       : `<div class="empty-state">库还是空的。<br><br>点右上角 <code>采集收藏</code>,或命令行跑 <code>python backend/cli.py favorites</code></div>`;
     $('#pager').innerHTML = '';
@@ -192,6 +196,8 @@ async function loadList(){
         <div class="tagrow">
           ${srcs.map(s => `<span class="tag">${SRC[s] || s}</span>`).join('')}
           ${folders.map(f => `<span class="tag">📁 ${esc(f)}</span>`).join('')}
+          ${(v.tags || '').split(',').filter(Boolean).slice(0, 6).map(t =>
+            `<span class="tag hash" onclick="byTag('${esc(t).replace(/'/g,"\\'")}')"># ${esc(t)}</span>`).join('')}
           ${v.music_title ? `<span class="tag">♪ ${esc(v.music_title)}</span>` : ''}
         </div>
       </div>
@@ -221,16 +227,41 @@ window.byAuthor = name => {
 };
 
 window.resetAll = () => {
-  q = ''; source = ''; author = ''; sort = 'collected'; offset = 0;
+  q = ''; source = ''; author = ''; tag = ''; sort = 'collected'; offset = 0;
   $('#q').value = ''; $('#author').value = ''; $('#sort').value = 'collected';
-  loadStats(); loadList();
+  loadStats(); loadTags(); loadList();
 };
+
+window.byTag = t => { tag = (tag === t) ? '' : t; offset = 0; loadTags(); loadList(); };
 
 async function loadAuthors(){
   const d = await api('/api/authors?limit=60');
   $('#author').innerHTML = '<option value="">全部作者</option>' +
     d.items.map(a => `<option value="${esc(a.nickname)}">${esc(a.nickname)} (${a.n})</option>`).join('');
   $('#author').value = author;
+}
+
+// 话题标签来自文案里的 #hashtag —— 零成本的分类信息
+async function loadTags(){
+  const d = await api('/api/tags?limit=120');
+  if (!d.items.length){ $('#tag-chips').innerHTML = ''; return; }
+  const shown = tagsOpen ? d.items : d.items.slice(0, 18);
+  $('#tag-chips').innerHTML =
+    shown.map(t =>
+      `<span class="chip${tag === t.tag ? ' on' : ''}" data-tag="${esc(t.tag)}"># ${esc(t.tag)} ${t.n}</span>`
+    ).join('') +
+    (d.items.length > 18
+      ? `<button class="more" id="tag-toggle">${tagsOpen ? '收起' : `更多 (${d.items.length - 18})`}</button>`
+      : '');
+
+  $('#tag-chips').querySelectorAll('.chip').forEach(el => {
+    el.onclick = () => {
+      tag = (tag === el.dataset.tag) ? '' : el.dataset.tag;  // 再点一次取消
+      offset = 0; loadTags(); loadList();
+    };
+  });
+  const t = $('#tag-toggle');
+  if (t) t.onclick = () => { tagsOpen = !tagsOpen; loadTags(); };
 }
 
 async function pollRuns(){
@@ -293,7 +324,10 @@ $('#q').oninput = e => {
   t = setTimeout(() => { q = e.target.value.trim(); offset = 0; loadList(); }, 250);
 };
 
-(async () => { await loadStats(); await loadAuthors(); await loadList(); await pollRuns(); })();
+(async () => {
+  await loadStats(); await loadAuthors(); await loadTags();
+  await loadList(); await pollRuns();
+})();
 </script>
 </body>
 </html>

@@ -114,11 +114,58 @@ def upsert_videos(items: Iterable[dict[str, Any]]) -> tuple[int, int]:
     return len(items), len(items) - len(existing)
 
 
+def rebuild_tags() -> tuple[int, int]:
+    """从所有文案里重抽 #话题标签,重建 tags 表。
+
+    零成本的分类信息 —— 抖音文案几乎都带 hashtag,不调模型就能把上千条
+    散装收藏变成可浏览类目。幂等,可反复执行。
+    返回 (有标签的作品数, 不同标签数)。
+    """
+    from extractor.hashtags import extract
+
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT aweme_id, description FROM videos "
+            "WHERE description IS NOT NULL AND description LIKE '%#%'"
+        ).fetchall()
+
+        pairs = [
+            (r["aweme_id"], t) for r in rows for t in extract(r["description"])
+        ]
+        conn.execute("DELETE FROM tags")
+        conn.executemany(
+            "INSERT OR IGNORE INTO tags (aweme_id, tag) VALUES (?, ?)", pairs
+        )
+        tagged = conn.execute(
+            "SELECT COUNT(DISTINCT aweme_id) AS n FROM tags"
+        ).fetchone()["n"]
+        distinct = conn.execute(
+            "SELECT COUNT(*) AS n FROM (SELECT 1 FROM tags GROUP BY LOWER(tag))"
+        ).fetchone()["n"]
+    return tagged, distinct
+
+
+def top_tags(limit: int = 40) -> list[dict[str, Any]]:
+    """热门标签。按 LOWER 分组合并 AI/ai 这类大小写重复;
+    展示取 MIN(tag) —— ASCII 里大写在前,缩写读起来更顺(AI 而非 ai)。
+    """
+    with connect() as conn:
+        return [
+            dict(r)
+            for r in conn.execute(
+                "SELECT MIN(tag) AS tag, COUNT(DISTINCT aweme_id) AS n FROM tags "
+                "GROUP BY LOWER(tag) ORDER BY n DESC, tag LIMIT ?",
+                (limit,),
+            )
+        ]
+
+
 def _filters(
     q: str | None,
     source: str | None,
     collects_id: str | None,
     nickname: str | None,
+    tag: str | None = None,
 ) -> tuple[list[str], list[Any]]:
     where: list[str] = []
     params: list[Any] = []
@@ -143,6 +190,13 @@ def _filters(
             "WHERE s.aweme_id = v.aweme_id AND s.collects_id = ?)"
         )
         params.append(collects_id)
+    if tag:
+        # 大小写不敏感:AI 与 ai 视为同一个标签
+        where.append(
+            "EXISTS (SELECT 1 FROM tags t "
+            "WHERE t.aweme_id = v.aweme_id AND LOWER(t.tag) = LOWER(?))"
+        )
+        params.append(tag)
     return where, params
 
 
@@ -163,20 +217,23 @@ def list_videos(
     collects_id: str | None = None,
     nickname: str | None = None,
     sort: str = "collected",
+    tag: str | None = None,
 ) -> list[dict[str, Any]]:
-    """列表 + 关键词搜索 + 来源/收藏夹/作者筛选 + 排序。
+    """列表 + 关键词搜索 + 来源/收藏夹/作者/标签筛选 + 排序。
 
     关键词用 LIKE:几千条数据下瞬时返回,不值得引入 FTS5。
     语义检索留给后续的向量库。
     """
-    where, params = _filters(q, source, collects_id, nickname)
+    where, params = _filters(q, source, collects_id, nickname, tag)
 
     sql = (
         "SELECT v.*, "
         "  (SELECT GROUP_CONCAT(DISTINCT s.source) FROM video_sources s "
         "    WHERE s.aweme_id = v.aweme_id) AS sources, "
         "  (SELECT GROUP_CONCAT(DISTINCT s.collects_name) FROM video_sources s "
-        "    WHERE s.aweme_id = v.aweme_id AND s.collects_name IS NOT NULL) AS folders "
+        "    WHERE s.aweme_id = v.aweme_id AND s.collects_name IS NOT NULL) AS folders, "
+        "  (SELECT GROUP_CONCAT(t.tag) FROM tags t "
+        "    WHERE t.aweme_id = v.aweme_id) AS tags "
         "FROM videos v"
     )
     if where:
@@ -193,8 +250,9 @@ def count_videos(
     source: str | None = None,
     collects_id: str | None = None,
     nickname: str | None = None,
+    tag: str | None = None,
 ) -> int:
-    where, params = _filters(q, source, collects_id, nickname)
+    where, params = _filters(q, source, collects_id, nickname, tag)
     sql = "SELECT COUNT(*) AS n FROM videos v"
     if where:
         sql += " WHERE " + " AND ".join(where)

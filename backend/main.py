@@ -80,15 +80,16 @@ async def get_videos(
     source: str | None = None,
     collects_id: str | None = None,
     nickname: str | None = None,
+    tag: str | None = None,
     sort: str = "collected",
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> dict[str, Any]:
     items = await asyncio.to_thread(
-        store.list_videos, q, source, limit, offset, collects_id, nickname, sort
+        store.list_videos, q, source, limit, offset, collects_id, nickname, sort, tag
     )
     total = await asyncio.to_thread(
-        store.count_videos, q, source, collects_id, nickname
+        store.count_videos, q, source, collects_id, nickname, tag
     )
     return {"total": total, "limit": limit, "offset": offset, "items": items}
 
@@ -96,6 +97,18 @@ async def get_videos(
 @app.get("/api/authors")
 async def get_authors(limit: int = Query(30, ge=1, le=200)) -> dict[str, Any]:
     return {"items": await asyncio.to_thread(store.top_authors, limit)}
+
+
+@app.get("/api/tags")
+async def get_tags(limit: int = Query(40, ge=1, le=300)) -> dict[str, Any]:
+    return {"items": await asyncio.to_thread(store.top_tags, limit)}
+
+
+@app.post("/api/tags/rebuild")
+async def rebuild_tags() -> dict[str, Any]:
+    """从文案重抽 hashtag。零成本、无外部请求,采集后跑一次即可。"""
+    tagged, distinct = await asyncio.to_thread(store.rebuild_tags)
+    return {"tagged_videos": tagged, "distinct_tags": distinct}
 
 
 @app.get("/api/cover/{aweme_id}")
