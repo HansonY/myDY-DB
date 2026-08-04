@@ -98,11 +98,12 @@ async function loadStats(){
     Object.entries(s.by_source || {}).map(([k,v]) =>
       `<span>${({collection:'收藏',like:'点赞',collects:'收藏夹'})[k]||k} <b>${v}</b></span>`).join('');
 
+  // 用专属 class,避免把采集失败的 .warn 提示一起删掉
   const n = $('#notices');
-  n.querySelector('.warn')?.remove();
+  n.querySelector('.cookie-warn')?.remove();
   if (!h.cookie_configured){
     n.insertAdjacentHTML('afterbegin',
-      `<div class="notice warn">还没配置 cookie。把 <code>.env.example</code> 复制为 <code>.env</code>,填入 <code>DOUYIN_COOKIE</code> 后重启服务。cookie 只存在你本机。</div>`);
+      `<div class="notice warn cookie-warn">还没登录。跑 <code>python backend/cli.py qrlogin</code> 扫码,或把 cookie 填进 <code>.env</code>。cookie 只存在你本机。</div>`);
   }
   return h;
 }

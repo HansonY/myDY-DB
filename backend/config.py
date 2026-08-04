@@ -53,3 +53,18 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def reload() -> Settings:
+    """从 .env 重新读取配置。
+
+    必要性:`cli.py qrlogin` / `login` 会在服务运行期间改写 .env。
+    配置是 import 时读一次的单例,不重载的话服务里还是旧的空 cookie ——
+    网页上点采集会一直报「未配置」,得重启服务才好,这是很烂的体验。
+
+    这里**原地更新**同一个对象而不是换新对象:各模块都 `from config import
+    settings` 持有了引用,换对象它们看不到。
+    """
+    fresh = Settings()
+    settings.__dict__.update(fresh.__dict__)
+    return settings

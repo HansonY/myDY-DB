@@ -18,6 +18,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+import config
 import service
 from config import settings
 from db import store
@@ -55,6 +56,8 @@ _last_progress: dict[str, Any] = {}
 
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
+    # 重载配置:用户可能在服务运行期间跑了 qrlogin 改写 .env
+    config.reload()
     return {
         "ok": True,
         "cookie_configured": settings.has_cookie,
@@ -122,6 +125,7 @@ async def _guarded(coro_factory) -> None:
 
 
 def _require_cookie() -> None:
+    config.reload()  # 同上:采集前先确认拿到的是最新 cookie
     if not settings.has_cookie:
         raise HTTPException(
             400, "DOUYIN_COOKIE 未配置。请复制 .env.example 为 .env 并填入你自己的 cookie。"
