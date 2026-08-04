@@ -84,6 +84,29 @@ def cmd_login(args) -> None:
     print("  下一步:python backend/cli.py probe")
 
 
+async def cmd_whoami(args) -> None:
+    """解析并保存自己的 sec_user_id(点赞、我的作品需要)。"""
+    from collector import whoami
+    from config import ROOT
+
+    sec, uid = await whoami.resolve(ROOT / "data" / "browser-profile")
+    whoami.write_to_env(sec, ROOT / ".env")
+    print(f"✓ 自己的 uid          : {uid}")
+    print(f"✓ 自己的 sec_user_id  : {sec}")
+    print(f"  已写入 {ROOT / '.env'} 的 DOUYIN_SEC_USER_ID")
+    print("  现在可以采:likes(点赞) / posts(我的作品)")
+
+
+async def cmd_posts(args) -> None:
+    from service import collect_posts
+
+    print("采集我发布的作品…")
+    result = await collect_posts(
+        max_items=args.max, resume=not args.fresh, on_progress=_progress
+    )
+    print(f"\n✓ {result}")
+
+
 async def cmd_probe(args) -> None:
     """只拉几条,核对字段映射是否正确。不写库。"""
     from collector import douyin
@@ -204,7 +227,13 @@ def main() -> None:
     sp = sub.add_parser("probe", help="拉几条核对字段(不写库)")
     sp.add_argument("--max", type=int, default=3)
 
-    for name, help_text in (("favorites", "采集我的收藏"), ("likes", "采集我的点赞")):
+    sub.add_parser("whoami", help="解析并保存自己的 sec_user_id(点赞/作品需要)")
+
+    for name, help_text in (
+        ("favorites", "采集我的收藏"),
+        ("likes", "采集我的点赞"),
+        ("posts", "采集我发布的作品"),
+    ):
         sp = sub.add_parser(name, help=help_text)
         sp.add_argument("--max", type=int, default=None, help="最多采集条数")
         sp.add_argument("--fresh", action="store_true", help="忽略游标,从头重采")
@@ -228,9 +257,11 @@ def main() -> None:
         "init": cmd_init,
         "login": cmd_login,
         "qrlogin": cmd_qrlogin,
+        "whoami": cmd_whoami,
         "probe": cmd_probe,
         "favorites": cmd_favorites,
         "likes": cmd_likes,
+        "posts": cmd_posts,
         "folders": cmd_folders,
         "folder": cmd_folder,
         "stats": cmd_stats,

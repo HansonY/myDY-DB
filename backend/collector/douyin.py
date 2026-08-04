@@ -174,6 +174,21 @@ async def collect_likes(
         yield out
 
 
+async def collect_posts(
+    sec_user_id: str, max_items: int | None = None, start_cursor: int = 0
+) -> AsyncIterator[tuple[list[dict[str, Any]], Any]]:
+    """我自己发布的作品。需要自己的 sec_user_id。"""
+    handler = _make_handler()
+    agen = handler.fetch_user_post_videos(
+        sec_user_id=sec_user_id,
+        max_cursor=start_cursor,
+        page_counts=settings.collect_page_size,
+        max_counts=max_items,
+    )
+    async for out in _iter_pages(agen, "post"):
+        yield out
+
+
 async def list_folders() -> list[dict[str, Any]]:
     """我的收藏夹清单。只靠 cookie —— 即使填别人的 URL 也只能拿到自己的。"""
     handler = _make_handler()

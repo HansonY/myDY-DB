@@ -21,6 +21,16 @@
   .stats{display:flex;gap:18px;flex-wrap:wrap;color:var(--dim);font-size:13px;margin-bottom:12px}
   .stats b{color:var(--fg);font-variant-numeric:tabular-nums}
   .bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .bar2{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:9px}
+  .chip{padding:4px 11px;border-radius:20px;border:1px solid var(--line);
+      background:var(--panel);color:var(--dim);cursor:pointer;font-size:12.5px}
+  .chip:hover{border-color:#3a4552;color:var(--fg)}
+  .chip.on{background:var(--accent);border-color:var(--accent);color:#fff}
+  select{padding:4px 9px;border-radius:8px;border:1px solid var(--line);
+      background:var(--panel);color:var(--fg);font-size:12.5px;max-width:190px}
+  .sep{width:1px;height:18px;background:var(--line);margin:0 3px}
+  .more{background:none;border:none;color:var(--accent);cursor:pointer;
+      padding:2px 0;font-size:12.5px}
   input[type=search]{flex:1;min-width:200px;padding:9px 12px;border-radius:8px;
       border:1px solid var(--line);background:var(--panel);color:var(--fg);font-size:14px}
   input[type=search]:focus{outline:none;border-color:var(--accent)}
@@ -44,7 +54,10 @@
   .meta{display:flex;gap:10px;align-items:center;color:var(--dim);font-size:12.5px;margin-bottom:5px}
   .who{color:var(--fg);font-weight:500}
   .desc{white-space:pre-wrap;word-break:break-word;max-height:4.9em;overflow:hidden}
+  .desc.open{max-height:none}
   .desc.empty{color:var(--dim);font-style:italic}
+  .who{cursor:pointer}
+  .who:hover{color:var(--accent)}
   .tagrow{margin-top:7px;display:flex;gap:6px;flex-wrap:wrap}
   .tag{font-size:11.5px;padding:1px 7px;border-radius:20px;background:var(--panel-2);
       color:var(--dim);border:1px solid var(--line)}
@@ -61,7 +74,20 @@
     <input type="search" id="q" placeholder="搜文案、作者、音乐名…">
     <button id="btn-fav" class="primary">采集收藏</button>
     <button id="btn-like">采集点赞</button>
+    <button id="btn-posts">我的作品</button>
     <button id="btn-folders">同步收藏夹</button>
+  </div>
+  <div class="bar2">
+    <span id="src-chips"></span>
+    <span class="sep"></span>
+    <select id="sort">
+      <option value="collected">按存入时间</option>
+      <option value="published">按发布时间</option>
+      <option value="duration">按时长</option>
+      <option value="author">按作者</option>
+    </select>
+    <select id="author"><option value="">全部作者</option></select>
+    <button class="chip" id="btn-reset">重置</button>
   </div>
 </div></header>
 
@@ -81,12 +107,27 @@ const api = (p, o) => fetch(p, o).then(async r => {
 const esc = s => (s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 let offset = 0, limit = 50, total = 0, q = '', polling = null;
+let source = '', sort = 'collected', author = '';
 
-// 毫秒 → m:ss（收藏里有 8 分钟以上的长视频,纯秒数读不出来）
+const SRC = {collection:'收藏', like:'点赞', post:'我的作品', collects:'收藏夹'};
+
+// 毫秒 → 时长。收藏里既有 8 分钟的长视频,也有 24 小时的直播回放,
+// 纯秒数和纯 m:ss 都读不出来。
 function secs(ms){
   if (!ms) return '';
   const t = Math.round(ms/1000);
-  return t < 60 ? t + 's' : `${Math.floor(t/60)}:${String(t%60).padStart(2,'0')}`;
+  if (t < 60)    return t + 's';
+  if (t < 3600)  return `${Math.floor(t/60)}:${String(t%60).padStart(2,'0')}`;
+  const h = Math.floor(t/3600);
+  return h < 24 ? `${h}h${String(Math.floor(t%3600/60)).padStart(2,'0')}m` : '直播/超长';
+}
+
+function params(extra){
+  const p = new URLSearchParams({limit, offset, sort});
+  if (q) p.set('q', q);
+  if (source) p.set('source', source);
+  if (author) p.set('nickname', author);
+  return p.toString() + (extra || '');
 }
 
 async function loadStats(){
@@ -94,9 +135,17 @@ async function loadStats(){
   $('#stats').innerHTML =
     `<span>作品 <b>${s.total}</b></span>` +
     `<span>有文案 <b>${s.with_description}</b></span>` +
-    `<span>作者 <b>${s.authors}</b></span>` +
-    Object.entries(s.by_source || {}).map(([k,v]) =>
-      `<span>${({collection:'收藏',like:'点赞',collects:'收藏夹'})[k]||k} <b>${v}</b></span>`).join('');
+    `<span>作者 <b>${s.authors}</b></span>`;
+
+  // 来源筛选 chip：按库里实际有的来源渲染
+  const entries = Object.entries(s.by_source || {});
+  $('#src-chips').innerHTML =
+    `<span class="chip${source ? '' : ' on'}" data-src="">全部 ${s.total}</span>` +
+    entries.map(([k,v]) =>
+      `<span class="chip${source === k ? ' on' : ''}" data-src="${k}">${SRC[k]||k} ${v}</span>`).join('');
+  $('#src-chips').querySelectorAll('.chip').forEach(el => {
+    el.onclick = () => { source = el.dataset.src; offset = 0; loadStats(); loadList(); };
+  });
 
   // 用专属 class,避免把采集失败的 .warn 提示一起删掉
   const n = $('#notices');
@@ -109,12 +158,12 @@ async function loadStats(){
 }
 
 async function loadList(){
-  const d = await api(`/api/videos?limit=${limit}&offset=${offset}` + (q ? `&q=${encodeURIComponent(q)}` : ''));
+  const d = await api('/api/videos?' + params());
   total = d.total;
 
   if (!d.items.length){
-    $('#list').innerHTML = q
-      ? `<div class="empty-state">没找到「${esc(q)}」</div>`
+    $('#list').innerHTML = (q || source || author)
+      ? `<div class="empty-state">当前条件下没有结果。<button class="more" onclick="resetAll()">重置筛选</button></div>`
       : `<div class="empty-state">库还是空的。<br><br>点右上角 <code>采集收藏</code>,或命令行跑 <code>python backend/cli.py favorites</code></div>`;
     $('#pager').innerHTML = '';
     return;
@@ -122,22 +171,27 @@ async function loadList(){
 
   $('#list').innerHTML = d.items.map(v => {
     const desc = (v.description || '').trim();
+    const long = desc.length > 150 || desc.split('\n').length > 3;
+    const srcs = (v.sources || v.source || '').split(',').filter(Boolean);
+    const folders = (v.folders || '').split(',').filter(Boolean);
     return `<div class="card">
       ${v.cover
-        ? `<img class="thumb" src="${esc(v.cover)}" referrerpolicy="no-referrer" loading="lazy"
+        ? `<img class="thumb" src="/api/cover/${encodeURIComponent(v.aweme_id)}" loading="lazy"
              onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'thumb'}))">`
         : `<div class="thumb"></div>`}
       <div class="body">
         <div class="meta">
-          <span class="who">${esc(v.nickname) || '未知作者'}</span>
+          <span class="who" onclick="byAuthor('${esc(v.nickname).replace(/'/g,"\\'")}')"
+                title="只看这个作者">${esc(v.nickname) || '未知作者'}</span>
           ${v.create_time ? `<span>${esc(String(v.create_time))}</span>` : ''}
           ${v.video_duration ? `<span>${secs(v.video_duration)}</span>` : ''}
           <a href="${esc(v.share_url)}" target="_blank" rel="noreferrer">打开 ↗</a>
         </div>
-        <div class="desc${desc ? '' : ' empty'}">${desc ? esc(desc) : '（无文案 — 需 Phase 2 的视觉理解补全）'}</div>
+        <div class="desc${desc ? '' : ' empty'}">${desc ? esc(desc) : '（无文案）'}</div>
+        ${long ? `<button class="more" onclick="toggleDesc(this)">展开全文</button>` : ''}
         <div class="tagrow">
-          <span class="tag">${({collection:'收藏',like:'点赞',collects:'收藏夹'})[v.source] || v.source}</span>
-          ${v.collects_name ? `<span class="tag">${esc(v.collects_name)}</span>` : ''}
+          ${srcs.map(s => `<span class="tag">${SRC[s] || s}</span>`).join('')}
+          ${folders.map(f => `<span class="tag">📁 ${esc(f)}</span>`).join('')}
           ${v.music_title ? `<span class="tag">♪ ${esc(v.music_title)}</span>` : ''}
         </div>
       </div>
@@ -153,6 +207,31 @@ async function loadList(){
 }
 
 window.go = d => { offset = Math.max(0, offset + d * limit); loadList(); window.scrollTo({top:0}); };
+
+window.toggleDesc = btn => {
+  const el = btn.previousElementSibling;
+  el.classList.toggle('open');
+  btn.textContent = el.classList.contains('open') ? '收起' : '展开全文';
+};
+
+window.byAuthor = name => {
+  author = author === name ? '' : name;
+  $('#author').value = author;
+  offset = 0; loadList();
+};
+
+window.resetAll = () => {
+  q = ''; source = ''; author = ''; sort = 'collected'; offset = 0;
+  $('#q').value = ''; $('#author').value = ''; $('#sort').value = 'collected';
+  loadStats(); loadList();
+};
+
+async function loadAuthors(){
+  const d = await api('/api/authors?limit=60');
+  $('#author').innerHTML = '<option value="">全部作者</option>' +
+    d.items.map(a => `<option value="${esc(a.nickname)}">${esc(a.nickname)} (${a.n})</option>`).join('');
+  $('#author').value = author;
+}
 
 async function pollRuns(){
   const d = await api('/api/runs');
@@ -178,7 +257,7 @@ async function pollRuns(){
 }
 
 function setButtons(busy){
-  ['#btn-fav','#btn-like','#btn-folders'].forEach(s => $(s).disabled = busy);
+  ['#btn-fav','#btn-like','#btn-posts','#btn-folders'].forEach(s => $(s).disabled = busy);
 }
 
 async function trigger(url){
@@ -192,6 +271,10 @@ async function trigger(url){
 
 $('#btn-fav').onclick     = () => trigger('/api/collect/favorites');
 $('#btn-like').onclick    = () => trigger('/api/collect/likes');
+$('#btn-posts').onclick   = () => trigger('/api/collect/posts');
+$('#btn-reset').onclick   = () => resetAll();
+$('#sort').onchange       = e => { sort = e.target.value; offset = 0; loadList(); };
+$('#author').onchange     = e => { author = e.target.value; offset = 0; loadList(); };
 $('#btn-folders').onclick = async () => {
   setButtons(true);
   try {
@@ -210,7 +293,7 @@ $('#q').oninput = e => {
   t = setTimeout(() => { q = e.target.value.trim(); offset = 0; loadList(); }, 250);
 };
 
-(async () => { await loadStats(); await loadList(); await pollRuns(); })();
+(async () => { await loadStats(); await loadAuthors(); await loadList(); await pollRuns(); })();
 </script>
 </body>
 </html>

@@ -34,6 +34,23 @@ CREATE INDEX IF NOT EXISTS idx_videos_collects    ON videos(collects_id);
 CREATE INDEX IF NOT EXISTS idx_videos_collected   ON videos(collected_at DESC);
 CREATE INDEX IF NOT EXISTS idx_videos_nickname    ON videos(nickname);
 
+-- ── 作品 ↔ 来源(多对多)──────────────────────────────────────
+-- 同一作品可能同时出现在「收藏」「点赞」和某个收藏夹里。
+-- videos.source 只是首次发现来源;真正的归属关系看这张表 ——
+-- 否则采完点赞会把收藏的 source 覆盖掉,信息静默丢失。
+CREATE TABLE IF NOT EXISTS video_sources (
+    aweme_id      TEXT NOT NULL,
+    source        TEXT NOT NULL,              -- collection 收藏 | like 点赞 | post 我的作品 | collects 收藏夹
+    collects_id   TEXT NOT NULL DEFAULT '',   -- 收藏夹 id;非收藏夹来源为空串(参与主键,不能用 NULL)
+    collects_name TEXT,
+    collected_at  TEXT NOT NULL,
+    PRIMARY KEY (aweme_id, source, collects_id),
+    FOREIGN KEY (aweme_id) REFERENCES videos(aweme_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_vs_source   ON video_sources(source);
+CREATE INDEX IF NOT EXISTS idx_vs_collects ON video_sources(collects_id);
+
 -- ── 文本层(文案 / 字幕 / ASR / 视觉理解)──────────────────────
 CREATE TABLE IF NOT EXISTS transcripts (
     aweme_id    TEXT NOT NULL,

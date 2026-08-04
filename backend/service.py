@@ -91,21 +91,59 @@ async def collect_favorites(
     )
 
 
+async def own_sec_user_id() -> str:
+    """拿到自己的 sec_user_id(点赞、我的作品都要)。
+
+    优先用 .env 里由 `cli.py whoami` 写好的值;否则退回从主页 URL 解析。
+    注意 `user/self` 这类别名解析不出来,会得到字面量 "self" —— 直接拒掉,
+    否则拿它去请求只会静默返回空,极难排查。
+    """
+    sec = settings.douyin_sec_user_id.strip()
+    if sec:
+        return sec
+
+    url = settings.douyin_profile_url.strip()
+    if not url:
+        raise RuntimeError(
+            "需要自己的 sec_user_id。跑一次:python backend/cli.py whoami"
+        )
+
+    sec = (await douyin.resolve_sec_user_id(url) or "").strip()
+    if not sec.startswith("MS4wLjAB"):
+        raise RuntimeError(
+            f"从主页 URL 解析出的不是有效 sec_user_id(得到 {sec!r})。"
+            "`user/self` 这类别名解析不出来 —— 跑 `python backend/cli.py whoami` 自动获取。"
+        )
+    return sec
+
+
 async def collect_likes(
     max_items: int | None = None,
     resume: bool = True,
     on_progress: Callable[[dict], None] | None = None,
 ) -> dict[str, Any]:
-    if not settings.douyin_profile_url.strip():
-        raise RuntimeError(
-            "采集点赞列表需要 DOUYIN_PROFILE_URL(你自己的主页地址)。"
-            "只想采收藏的话用 favorites。"
-        )
-    sec_user_id = await douyin.resolve_sec_user_id(settings.douyin_profile_url.strip())
+    sec_user_id = await own_sec_user_id()
     limit = max_items if max_items is not None else settings.max_items
     return await _run(
         "like",
         lambda cur: douyin.collect_likes(
+            sec_user_id=sec_user_id, max_items=limit, start_cursor=cur
+        ),
+        resume,
+        on_progress,
+    )
+
+
+async def collect_posts(
+    max_items: int | None = None,
+    resume: bool = True,
+    on_progress: Callable[[dict], None] | None = None,
+) -> dict[str, Any]:
+    sec_user_id = await own_sec_user_id()
+    limit = max_items if max_items is not None else settings.max_items
+    return await _run(
+        "post",
+        lambda cur: douyin.collect_posts(
             sec_user_id=sec_user_id, max_items=limit, start_cursor=cur
         ),
         resume,

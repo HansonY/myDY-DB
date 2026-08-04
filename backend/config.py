@@ -17,7 +17,11 @@ class Settings(BaseSettings):
 
     # ── 抖音登录态 ──────────────────────────────
     douyin_cookie: str = ""
-    # 采集「点赞」列表时需要:你自己的主页 URL(用于解析 sec_user_id)
+    # 采集「点赞」「我的作品」需要自己的 sec_user_id。
+    # 由 `cli.py whoami` 自动解析写入,一般不用手填。
+    douyin_sec_user_id: str = ""
+    # 备选:自己的主页 URL。注意 `user/self` 这种别名解析不出 ID,得是含
+    # MS4wLjAB… 的真实地址。优先用 whoami 自动解析。
     douyin_profile_url: str = ""
 
     # ── AI(Phase 2 起需要)──────────────────────

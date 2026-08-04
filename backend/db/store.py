@@ -37,9 +37,17 @@ def connect() -> sqlite3.Connection:
 
 
 def init_db() -> None:
-    """建表(幂等)。"""
+    """建表 + 迁移(幂等)。"""
     with connect() as conn:
         conn.executescript(SCHEMA_FILE.read_text(encoding="utf-8"))
+        # 把早期只存在 videos.source 的归属关系补进 video_sources。
+        # 幂等,可反复执行。
+        conn.execute(
+            "INSERT OR IGNORE INTO video_sources "
+            "(aweme_id, source, collects_id, collects_name, collected_at) "
+            "SELECT aweme_id, source, COALESCE(collects_id, ''), collects_name, collected_at "
+            "FROM videos WHERE source IS NOT NULL AND TRIM(source) <> ''"
+        )
 
 
 # ── 作品 ────────────────────────────────────────────────────
@@ -74,17 +82,77 @@ def upsert_videos(items: Iterable[dict[str, Any]]) -> tuple[int, int]:
 
         cols = list(_VIDEO_COLUMNS) + ["collected_at", "updated_at"]
         placeholders = ",".join(f":{c}" for c in cols)
-        # 把 collected_at 排除在 UPDATE 之外 —— 重复采集时保留首次入库时间
-        updates = ",".join(
-            f"{c}=excluded.{c}" for c in cols if c not in ("aweme_id", "collected_at")
-        )
+        # 这几列排除在 UPDATE 之外:
+        #   collected_at / source / collects_* —— videos 表保留「首次发现」的信息,
+        #   完整的归属关系由 video_sources 承担。否则采完点赞会把收藏的 source 冲掉。
+        _keep = {"aweme_id", "collected_at", "source", "collects_id", "collects_name"}
+        updates = ",".join(f"{c}=excluded.{c}" for c in cols if c not in _keep)
         conn.executemany(
             f"INSERT INTO videos ({','.join(cols)}) VALUES ({placeholders}) "
             f"ON CONFLICT(aweme_id) DO UPDATE SET {updates}",
             rows,
         )
 
+        # 归属关系:一条作品可以同时属于收藏、点赞、多个收藏夹
+        conn.executemany(
+            "INSERT INTO video_sources "
+            "(aweme_id, source, collects_id, collects_name, collected_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(aweme_id, source, collects_id) DO NOTHING",
+            [
+                (
+                    r["aweme_id"],
+                    r["source"],
+                    r.get("collects_id") or "",
+                    r.get("collects_name"),
+                    now,
+                )
+                for r in rows
+            ],
+        )
+
     return len(items), len(items) - len(existing)
+
+
+def _filters(
+    q: str | None,
+    source: str | None,
+    collects_id: str | None,
+    nickname: str | None,
+) -> tuple[list[str], list[Any]]:
+    where: list[str] = []
+    params: list[Any] = []
+    if q:
+        where.append(
+            "(v.description LIKE ? OR v.nickname LIKE ? OR v.music_title LIKE ?)"
+        )
+        params += [f"%{q}%"] * 3
+    if nickname:
+        where.append("v.nickname = ?")
+        params.append(nickname)
+    # 来源筛选走关联表 —— 一条作品可能同属多个来源
+    if source:
+        where.append(
+            "EXISTS (SELECT 1 FROM video_sources s "
+            "WHERE s.aweme_id = v.aweme_id AND s.source = ?)"
+        )
+        params.append(source)
+    if collects_id:
+        where.append(
+            "EXISTS (SELECT 1 FROM video_sources s "
+            "WHERE s.aweme_id = v.aweme_id AND s.collects_id = ?)"
+        )
+        params.append(collects_id)
+    return where, params
+
+
+# 排序白名单:直接拼列名进 SQL,必须限定取值
+_SORTS = {
+    "collected": "v.collected_at DESC, v.rowid DESC",   # 我什么时候存的
+    "published": "v.create_time DESC",                  # 作品什么时候发的
+    "duration": "v.video_duration DESC",
+    "author": "v.nickname ASC, v.create_time DESC",
+}
 
 
 def list_videos(
@@ -92,44 +160,60 @@ def list_videos(
     source: str | None = None,
     limit: int = 50,
     offset: int = 0,
+    collects_id: str | None = None,
+    nickname: str | None = None,
+    sort: str = "collected",
 ) -> list[dict[str, Any]]:
-    """列表 + 关键词搜索。
+    """列表 + 关键词搜索 + 来源/收藏夹/作者筛选 + 排序。
 
-    Phase 1 用 LIKE:几千条数据下瞬时返回,不值得引入 FTS5。
-    语义检索在 Phase 3 由向量库承担。
+    关键词用 LIKE:几千条数据下瞬时返回,不值得引入 FTS5。
+    语义检索留给后续的向量库。
     """
-    where, params = [], []
-    if q:
-        where.append("(description LIKE ? OR nickname LIKE ? OR music_title LIKE ?)")
-        params += [f"%{q}%"] * 3
-    if source:
-        where.append("source = ?")
-        params.append(source)
+    where, params = _filters(q, source, collects_id, nickname)
 
-    sql = "SELECT * FROM videos"
+    sql = (
+        "SELECT v.*, "
+        "  (SELECT GROUP_CONCAT(DISTINCT s.source) FROM video_sources s "
+        "    WHERE s.aweme_id = v.aweme_id) AS sources, "
+        "  (SELECT GROUP_CONCAT(DISTINCT s.collects_name) FROM video_sources s "
+        "    WHERE s.aweme_id = v.aweme_id AND s.collects_name IS NOT NULL) AS folders "
+        "FROM videos v"
+    )
     if where:
         sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY collected_at DESC, rowid DESC LIMIT ? OFFSET ?"
+    sql += f" ORDER BY {_SORTS.get(sort, _SORTS['collected'])} LIMIT ? OFFSET ?"
     params += [limit, offset]
 
     with connect() as conn:
         return [dict(r) for r in conn.execute(sql, params)]
 
 
-def count_videos(q: str | None = None, source: str | None = None) -> int:
-    where, params = [], []
-    if q:
-        where.append("(description LIKE ? OR nickname LIKE ? OR music_title LIKE ?)")
-        params += [f"%{q}%"] * 3
-    if source:
-        where.append("source = ?")
-        params.append(source)
-
-    sql = "SELECT COUNT(*) AS n FROM videos"
+def count_videos(
+    q: str | None = None,
+    source: str | None = None,
+    collects_id: str | None = None,
+    nickname: str | None = None,
+) -> int:
+    where, params = _filters(q, source, collects_id, nickname)
+    sql = "SELECT COUNT(*) AS n FROM videos v"
     if where:
         sql += " WHERE " + " AND ".join(where)
     with connect() as conn:
         return conn.execute(sql, params).fetchone()["n"]
+
+
+def top_authors(limit: int = 30) -> list[dict[str, Any]]:
+    """按作品数排的作者榜 —— 900+ 作者时需要个入口。"""
+    with connect() as conn:
+        return [
+            dict(r)
+            for r in conn.execute(
+                "SELECT nickname, COUNT(*) AS n FROM videos "
+                "WHERE nickname IS NOT NULL AND TRIM(nickname) <> '' "
+                "GROUP BY nickname ORDER BY n DESC, nickname LIMIT ?",
+                (limit,),
+            )
+        ]
 
 
 def get_video(aweme_id: str) -> dict[str, Any] | None:
@@ -143,10 +227,12 @@ def get_video(aweme_id: str) -> dict[str, Any] | None:
 def stats() -> dict[str, Any]:
     with connect() as conn:
         total = conn.execute("SELECT COUNT(*) AS n FROM videos").fetchone()["n"]
+        # 从关联表统计:一条作品同属多类时各计一次,所以各项之和会大于 total
         by_source = {
             r["source"]: r["n"]
             for r in conn.execute(
-                "SELECT source, COUNT(*) AS n FROM videos GROUP BY source"
+                "SELECT source, COUNT(DISTINCT aweme_id) AS n "
+                "FROM video_sources GROUP BY source ORDER BY n DESC"
             )
         }
         with_desc = conn.execute(

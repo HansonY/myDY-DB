@@ -14,16 +14,19 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 import config
 import service
-from config import settings
+from config import ROOT, settings
 from db import store
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+COVER_DIR = ROOT / "data" / "covers"
 
 
 @asynccontextmanager
@@ -75,12 +78,71 @@ async def get_stats() -> dict[str, Any]:
 async def get_videos(
     q: str | None = None,
     source: str | None = None,
+    collects_id: str | None = None,
+    nickname: str | None = None,
+    sort: str = "collected",
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> dict[str, Any]:
-    items = await asyncio.to_thread(store.list_videos, q, source, limit, offset)
-    total = await asyncio.to_thread(store.count_videos, q, source)
+    items = await asyncio.to_thread(
+        store.list_videos, q, source, limit, offset, collects_id, nickname, sort
+    )
+    total = await asyncio.to_thread(
+        store.count_videos, q, source, collects_id, nickname
+    )
     return {"total": total, "limit": limit, "offset": offset, "items": items}
+
+
+@app.get("/api/authors")
+async def get_authors(limit: int = Query(30, ge=1, le=200)) -> dict[str, Any]:
+    return {"items": await asyncio.to_thread(store.top_authors, limit)}
+
+
+@app.get("/api/cover/{aweme_id}")
+async def get_cover(aweme_id: str):
+    """封面图代理 + 本地缓存。
+
+    为什么必须走服务端:
+      1. **防盗链** —— 抖音 CDN 要 `Referer: https://www.douyin.com/`,
+         浏览器从本站直连拿不到图(这就是列表里那些空白块的真因)。
+      2. **URL 会过期** —— 所有封面 URL 都带 `x-expires` 签名参数。
+         不落本地的话,过一段时间全部失效,知识库就没有缩略图了。
+    缓存一次即永久可用。
+    """
+    safe_id = "".join(ch for ch in aweme_id if ch.isalnum())  # 防路径穿越
+    if not safe_id:
+        raise HTTPException(400, "非法 id")
+
+    path = COVER_DIR / f"{safe_id}.jpg"
+    if path.exists():
+        return FileResponse(path, media_type="image/jpeg")
+
+    row = await asyncio.to_thread(store.get_video, safe_id)
+    if not row or not row.get("cover"):
+        raise HTTPException(404, "没有封面")
+
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as cli:
+            r = await cli.get(
+                row["cover"],
+                headers={
+                    "Referer": "https://www.douyin.com/",
+                    "User-Agent": (
+                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+                    ),
+                },
+            )
+    except Exception as e:
+        raise HTTPException(502, f"取封面失败:{type(e).__name__}") from e
+
+    if r.status_code != 200 or not r.content:
+        # 多半是签名已过期 —— 无法补救,只能重采该作品
+        raise HTTPException(404, f"封面已失效(上游 {r.status_code})")
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(r.content)
+    return Response(r.content, media_type="image/jpeg")
 
 
 @app.get("/api/videos/{aweme_id}")
@@ -151,6 +213,13 @@ async def collect_favorites(
     return {"started": True, "scope": "collection", "hint": "轮询 /api/runs 看进度"}
 
 
+def _require_own_id() -> None:
+    if not (settings.douyin_sec_user_id.strip() or settings.douyin_profile_url.strip()):
+        raise HTTPException(
+            400, "需要自己的 sec_user_id。先跑一次:python backend/cli.py whoami"
+        )
+
+
 @app.post("/api/collect/likes")
 async def collect_likes(
     bg: BackgroundTasks,
@@ -158,8 +227,7 @@ async def collect_likes(
     fresh: bool = False,
 ) -> dict[str, Any]:
     _require_cookie()
-    if not settings.douyin_profile_url.strip():
-        raise HTTPException(400, "采集点赞需要 DOUYIN_PROFILE_URL(你自己的主页地址)")
+    _require_own_id()
     if _collect_lock.locked():
         raise HTTPException(409, "已有采集任务在跑,请等它结束")
 
@@ -170,6 +238,26 @@ async def collect_likes(
         ),
     )
     return {"started": True, "scope": "like", "hint": "轮询 /api/runs 看进度"}
+
+
+@app.post("/api/collect/posts")
+async def collect_posts(
+    bg: BackgroundTasks,
+    max_items: int | None = None,
+    fresh: bool = False,
+) -> dict[str, Any]:
+    _require_cookie()
+    _require_own_id()
+    if _collect_lock.locked():
+        raise HTTPException(409, "已有采集任务在跑,请等它结束")
+
+    bg.add_task(
+        _guarded,
+        lambda: service.collect_posts(
+            max_items=max_items, resume=not fresh, on_progress=_track
+        ),
+    )
+    return {"started": True, "scope": "post", "hint": "轮询 /api/runs 看进度"}
 
 
 @app.post("/api/collect/folders/sync")
