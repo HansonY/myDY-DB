@@ -37,6 +37,53 @@ def cmd_init(_args) -> None:
     print(f"✓ 数据库已就绪:{settings.db_file}")
 
 
+async def cmd_qrlogin(args) -> None:
+    """扫码登录:开真浏览器,用户扫码,自动收 cookie。"""
+    from collector import cookie as ck
+    from config import ROOT
+
+    profile = (ROOT / "data" / "browser-profile") if args.keep_session else None
+    cookie = await ck.qr_login(timeout=args.timeout, profile_dir=profile)
+
+    ck.write_to_env(cookie, ROOT / ".env")
+    print(f"\n✓ cookie 已写入 {ROOT / '.env'}(长度 {len(cookie)},内容不打印)")
+    print("  下一步:python backend/cli.py probe")
+
+
+def cmd_login(args) -> None:
+    """从本机浏览器自动读取 cookie 写入 .env,免手工 F12 复制。"""
+    from collector import cookie as ck
+    from config import ROOT
+
+    if args.browser:
+        cookie, diag = ck.read_from_browser(args.browser)
+        diags = [diag]
+    else:
+        cookie, diags = ck.autodetect()
+
+    print("浏览器探测结果:")
+    for d in diags:
+        if "error" in d:
+            print(f"  {d['browser']:<10} ✗ {d['error'][:70]}")
+        else:
+            state = "已登录" if d.get("logged_in") else "未登录(只有匿名 cookie)"
+            print(f"  {d['browser']:<10} 读到 {d['count']} 条 · {state}")
+
+    if not cookie:
+        print(
+            "\n✗ 没有找到已登录抖音的浏览器。三条出路:\n"
+            "  1. 在 Chrome 里登录一次 www.douyin.com,再重跑本命令\n"
+            "  2. 用 Safari 登录的话:系统设置 → 隐私与安全性 → 完全磁盘访问权限,\n"
+            "     把你的终端(Terminal / iTerm)加进去,然后重跑\n"
+            "  3. 手工填:把 cookie 粘进 .env 的 DOUYIN_COOKIE="
+        )
+        sys.exit(1)
+
+    ck.write_to_env(cookie, ROOT / ".env")
+    print(f"\n✓ cookie 已写入 {ROOT / '.env'}(长度 {len(cookie)},内容不打印)")
+    print("  下一步:python backend/cli.py probe")
+
+
 async def cmd_probe(args) -> None:
     """只拉几条,核对字段映射是否正确。不写库。"""
     from collector import douyin
@@ -139,6 +186,21 @@ def main() -> None:
 
     sub.add_parser("init", help="建库")
 
+    sp = sub.add_parser("login", help="从本机浏览器自动读取 cookie 写入 .env")
+    sp.add_argument(
+        "--browser",
+        choices=["chrome", "safari", "edge", "firefox", "brave", "chromium", "vivaldi", "opera"],
+        help="指定浏览器;不指定则依次自动探测",
+    )
+
+    sp = sub.add_parser("qrlogin", help="扫码登录(开真浏览器,需 playwright)")
+    sp.add_argument("--timeout", type=int, default=240, help="等待扫码的秒数")
+    sp.add_argument(
+        "--keep-session",
+        action="store_true",
+        help="保留浏览器登录态到 data/browser-profile,下次多半不用再扫",
+    )
+
     sp = sub.add_parser("probe", help="拉几条核对字段(不写库)")
     sp.add_argument("--max", type=int, default=3)
 
@@ -164,6 +226,8 @@ def main() -> None:
 
     handlers = {
         "init": cmd_init,
+        "login": cmd_login,
+        "qrlogin": cmd_qrlogin,
         "probe": cmd_probe,
         "favorites": cmd_favorites,
         "likes": cmd_likes,

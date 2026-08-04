@@ -59,15 +59,38 @@ cp .env.example .env      # 然后填入 DOUYIN_COOKIE
 .venv/bin/python -m uvicorn main:app --app-dir backend --port 8000
 ```
 
-### 怎么拿 cookie
+### 怎么登录(三种,按省事排序)
 
-1. 浏览器登录 `www.douyin.com`
-2. 打开开发者工具(F12)→ **Network** 面板 → 刷新页面
-3. 点任意一条 `www.douyin.com` 请求 → **Request Headers**
-4. 复制 `Cookie:` 后面**一整串**值,粘进 `.env` 的 `DOUYIN_COOKIE=`
+**① 扫码登录 — 最省事**
+
+```bash
+pip install -r backend/requirements-login.txt && playwright install chromium   # 一次性,约 300MB
+python backend/cli.py qrlogin --keep-session
+```
+
+弹出真浏览器 → 你自己点「登录」用抖音 App 扫码 → cookie 自动写进 `.env`。
+`--keep-session` 会保留登录态到 `data/browser-profile`,下次多半不用再扫。
+
+> 这里刻意**不自动化登录流程**(不点按钮、不找二维码元素),只开页面 + 轮询会话 cookie。
+> 抖音怎么改登录页都不会挂 —— 依赖选择器的实现一改版就废。
+
+**② 从本机浏览器读 — 零新依赖**
+
+```bash
+python backend/cli.py login              # 自动探测
+python backend/cli.py login --browser chrome
+```
+
+前提是你已在该浏览器登录过抖音。
+macOS 上读 Safari 需要给终端「系统设置 → 隐私与安全性 → **完全磁盘访问权限**」。
+
+**③ 手工填 — 兜底**
+
+浏览器登录 `www.douyin.com` → F12 → **Network** → 刷新 → 点任一 `www.douyin.com` 请求
+→ **Request Headers** → 复制 `Cookie:` 后面一整串,粘进 `.env` 的 `DOUYIN_COOKIE=`。
 
 > ⚠️ **cookie 等同于账号控制权。**
-> 它只写在你本机的 `.env`(已被 `.gitignore` 忽略)。
+> 它只写在你本机的 `.env`(已被 `.gitignore` 忽略),不经过任何网络。
 > 不要分享、不要粘到公开场所、不要提交进 git。
 
 ---
@@ -76,6 +99,8 @@ cp .env.example .env      # 然后填入 DOUYIN_COOKIE
 
 ```bash
 python backend/cli.py init                 # 建库
+python backend/cli.py qrlogin [--keep-session]   # 扫码登录(需 playwright)
+python backend/cli.py login [--browser chrome]   # 从本机浏览器读 cookie
 python backend/cli.py probe [--max 3]      # 拉几条核对字段,不写库
 python backend/cli.py favorites [--max N] [--fresh]   # 采集收藏
 python backend/cli.py likes     [--max N] [--fresh]   # 采集点赞(需 DOUYIN_PROFILE_URL)

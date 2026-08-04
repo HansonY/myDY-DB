@@ -1,0 +1,8 @@
+# 可选:扫码登录(cli.py qrlogin)才需要。约 300MB(含 Chromium)。
+# 装法:
+#   pip install -r backend/requirements-login.txt
+#   playwright install chromium
+#
+# 不装也能用 —— 手工填 cookie 或 `cli.py login` 从本机浏览器读。
+# Docker 镜像里默认不装(容器内没有可交互的浏览器,扫不了码)。
+playwright>=1.49
