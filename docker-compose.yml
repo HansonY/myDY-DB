@@ -1,0 +1,12 @@
+services:
+  douyin-db:
+    build: .
+    container_name: douyin-db
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      # 数据留在宿主机:重建容器不丢库
+      - ./data:/app/data
+    restart: unless-stopped

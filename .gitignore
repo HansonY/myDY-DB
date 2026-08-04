@@ -1,0 +1,39 @@
+# ── 机密:绝不入库 ────────────────────────────────
+.env
+.env.*
+!.env.example
+*.cookie
+cookies.txt
+**/conf.yaml
+**/f2_conf.yaml
+
+# ── 数据与产物 ──────────────────────────────────
+*.db
+*.db-journal
+*.db-wal
+*.sqlite
+*.sqlite3
+data/
+downloads/
+frames/
+media/
+
+# ── Python ────────────────────────────────────
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# ── Node / Next.js ────────────────────────────
+node_modules/
+.next/
+out/
+dist/
+*.tsbuildinfo
+
+# ── 系统 ──────────────────────────────────────
+.DS_Store
+*.log

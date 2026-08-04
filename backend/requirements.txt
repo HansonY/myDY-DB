@@ -1,0 +1,13 @@
+# ⚠️ f2 把依赖版本钉死(httpx==0.27.2 / click==8.1.7 / cryptography==44.0.0 等),
+#    因此本文件不再对这些传递依赖加约束,一律让 f2 的钉子生效,避免 ResolutionImpossible。
+#    若将来 f2 的钉子与后端冲突到无法共存,再把 f2 拆到独立 venv 用 CLI 子进程调用。
+
+# 采集
+f2>=0.0.1.7            # 抖音/TikTok 多平台异步采集(收藏/喜欢列表)
+yt-dlp>=2025.1.1       # 兜底:单链接补抓 + 取字幕
+
+# 后端
+fastapi>=0.115
+uvicorn[standard]>=0.34
+pydantic-settings>=2.7
+python-dotenv>=1.0
