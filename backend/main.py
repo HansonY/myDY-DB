@@ -32,6 +32,7 @@ COVER_DIR = ROOT / "data" / "covers"
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     store.init_db()
+    service.ORIGIN = "web"      # 界面里要能区分「网页在采」和「命令行在采」
     yield
 
 
@@ -65,7 +66,7 @@ async def health() -> dict[str, Any]:
         "ok": True,
         "cookie_configured": settings.has_cookie,
         "db": str(settings.db_file),
-        "collecting": _collect_lock.locked(),
+        "collecting": bool(await asyncio.to_thread(store.active_run)),
     }
 
 
@@ -174,9 +175,14 @@ async def get_folders() -> dict[str, Any]:
 
 @app.get("/api/runs")
 async def get_runs(limit: int = Query(10, ge=1, le=50)) -> dict[str, Any]:
+    """进度以库为准,这样命令行跑的采集在界面上也看得见。"""
+    run = await asyncio.to_thread(store.active_run)
     return {
-        "collecting": _collect_lock.locked(),
-        "progress": _last_progress,
+        "collecting": bool(run),
+        # 优先用库里的进度(可能来自命令行进程);没有再退回本进程内存
+        "progress": (run or {}).get("progress") or _last_progress,
+        "origin": (run or {}).get("origin"),
+        "active_scope": (run or {}).get("scope"),
         "items": await asyncio.to_thread(store.latest_runs, limit),
     }
 
@@ -234,8 +240,7 @@ async def collect_plan() -> dict[str, Any]:
 async def collect_smart(bg: BackgroundTasks) -> dict[str, Any]:
     """智能采集:每类自己判断续采/增量/跳过,自己处理限流退避。"""
     _require_cookie()
-    if _collect_lock.locked():
-        raise HTTPException(409, "已有采集任务在跑,请等它结束")
+    await _require_idle()
 
     bg.add_task(_guarded, lambda: service.smart_collect(on_progress=_track))
     return {"started": True, "scope": "smart", "hint": "轮询 /api/runs 看进度"}
@@ -248,8 +253,7 @@ async def collect_favorites(
     fresh: bool = False,
 ) -> dict[str, Any]:
     _require_cookie()
-    if _collect_lock.locked():
-        raise HTTPException(409, "已有采集任务在跑,请等它结束")
+    await _require_idle()
 
     bg.add_task(
         _guarded,
@@ -258,6 +262,17 @@ async def collect_favorites(
         ),
     )
     return {"started": True, "scope": "collection", "hint": "轮询 /api/runs 看进度"}
+
+
+async def _require_idle() -> None:
+    """跨进程互斥。命令行在采时点界面按钮必须被拒 —— 两个进程一起打抖音接口
+    是风控的主要诱因。"""
+    run = await asyncio.to_thread(store.active_run)
+    if run:
+        who = "命令行" if run.get("origin") == "cli" else "网页"
+        p = run.get("progress") or {}
+        at = f",已到第 {p.get('pages')} 页" if p.get("pages") else ""
+        raise HTTPException(409, f"{who}正在采集「{run.get('scope')}」{at},请等它结束")
 
 
 def _require_own_id() -> None:
@@ -275,8 +290,7 @@ async def collect_likes(
 ) -> dict[str, Any]:
     _require_cookie()
     _require_own_id()
-    if _collect_lock.locked():
-        raise HTTPException(409, "已有采集任务在跑,请等它结束")
+    await _require_idle()
 
     bg.add_task(
         _guarded,
@@ -295,8 +309,7 @@ async def collect_posts(
 ) -> dict[str, Any]:
     _require_cookie()
     _require_own_id()
-    if _collect_lock.locked():
-        raise HTTPException(409, "已有采集任务在跑,请等它结束")
+    await _require_idle()
 
     bg.add_task(
         _guarded,
@@ -310,8 +323,7 @@ async def collect_posts(
 @app.post("/api/collect/folders/sync")
 async def sync_folders() -> dict[str, Any]:
     _require_cookie()
-    if _collect_lock.locked():
-        raise HTTPException(409, "已有采集任务在跑,请等它结束")
+    await _require_idle()
     async with _collect_lock:
         return {"items": await service.sync_folders()}
 
@@ -324,8 +336,7 @@ async def collect_folder(
     fresh: bool = False,
 ) -> dict[str, Any]:
     _require_cookie()
-    if _collect_lock.locked():
-        raise HTTPException(409, "已有采集任务在跑,请等它结束")
+    await _require_idle()
 
     bg.add_task(
         _guarded,

@@ -15,6 +15,32 @@ from config import settings
 from db import store
 
 
+# 这个进程是谁:界面里要能说清「命令行在采」还是「网页在采」。
+# main.py 启动时会改成 "web"。
+ORIGIN = "cli"
+
+
+class AlreadyCollecting(RuntimeError):
+    """已有另一个采集在跑(可能是另一个进程)。"""
+
+    def __init__(self, run: dict[str, Any]):
+        who = "命令行" if run.get("origin") == "cli" else "网页"
+        p = run.get("progress") or {}
+        detail = f",已到第 {p.get('pages')} 页" if p.get("pages") else ""
+        super().__init__(
+            f"{who}正在采集「{run.get('scope')}」{detail}。"
+            "同时跑两个采集会让两个进程一起打抖音接口,这是风控的主要诱因 —— 请等它结束。"
+        )
+        self.run = run
+
+
+def guard_single_run() -> None:
+    """跨进程互斥:库里有活着的采集就拒绝新的。"""
+    run = store.active_run()
+    if run:
+        raise AlreadyCollecting(run)
+
+
 def _persist_page(rows: list[dict[str, Any]]) -> tuple[int, int]:
     """落库一页,并把文案写入文本层(Phase 1 的免费信息)。"""
     fetched, inserted = store.upsert_videos(rows)
@@ -43,12 +69,13 @@ async def _run(
         连续 N 页全是已知条目就停,不必扫完几千条。
     """
     store.init_db()
+    guard_single_run()      # 无论从命令行还是网页进来,都先看库里有没有别人在跑
 
     if not resume:
         store.clear_cursor(scope)
     start_cursor = store.load_cursor(scope) if resume else 0
 
-    run_id = store.start_run(scope)
+    run_id = store.start_run(scope, origin=ORIGIN)
     fetched = inserted = pages = 0
     known_streak = 0
     stopped_early = False   # 增量同步追上了
@@ -68,16 +95,17 @@ async def _run(
             if max_cursor:
                 await asyncio.to_thread(store.save_cursor, scope, max_cursor)
 
+            info = {
+                "scope": scope,
+                "pages": pages,
+                "fetched": fetched,
+                "inserted": inserted,
+                "cursor": max_cursor,
+            }
+            # 心跳 + 进度落库:另一个进程(界面)只能从库里看到进度
+            await asyncio.to_thread(store.beat_run, run_id, info)
             if on_progress:
-                on_progress(
-                    {
-                        "scope": scope,
-                        "pages": pages,
-                        "fetched": fetched,
-                        "inserted": inserted,
-                        "cursor": max_cursor,
-                    }
-                )
+                on_progress(info)
 
             if stop_after_known_pages and known_streak >= stop_after_known_pages:
                 stopped_early = True
@@ -126,6 +154,7 @@ async def smart_collect(
     import planner
 
     store.init_db()
+    guard_single_run()      # 先整体拦一次,别等到逐类跑时才发现
     results: list[dict[str, Any]] = []
 
     for step in planner.plan_all():
@@ -154,6 +183,8 @@ async def smart_collect(
                 "exhausted": r.get("exhausted"), "hit_cap": r.get("hit_cap"),
                 "stopped_early": r.get("stopped_early"),
             }
+        except AlreadyCollecting:
+            raise       # 别人抢在中途开始跑了 —— 整体中止,不要记成某一类失败
         except Exception as e:
             if planner.is_throttle_error(e):
                 cd = planner.record_throttled(scope, 0, f"{type(e).__name__}: {e}")

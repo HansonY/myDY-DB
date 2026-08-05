@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,10 +37,28 @@ def connect() -> sqlite3.Connection:
     return conn
 
 
+def _add_missing_columns(conn: sqlite3.Connection) -> None:
+    """给已存在的表补新增列(CREATE TABLE IF NOT EXISTS 不会加列)。"""
+    wanted = {
+        "collect_runs": {
+            "pid": "INTEGER",
+            "origin": "TEXT",
+            "heartbeat_at": "TEXT",
+            "progress": "TEXT",
+        },
+    }
+    for table, cols in wanted.items():
+        have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for col, decl in cols.items():
+            if col not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+
+
 def init_db() -> None:
     """建表 + 迁移(幂等)。"""
     with connect() as conn:
         conn.executescript(SCHEMA_FILE.read_text(encoding="utf-8"))
+        _add_missing_columns(conn)
         # 把早期只存在 videos.source 的归属关系补进 video_sources。
         # 幂等,可反复执行。
         conn.execute(
@@ -385,13 +404,29 @@ def clear_cursor(scope: str) -> None:
 
 # ── 采集任务记录 ────────────────────────────────────────────
 
-def start_run(scope: str) -> int:
+def start_run(scope: str, origin: str = "cli") -> int:
     with connect() as conn:
         cur = conn.execute(
-            "INSERT INTO collect_runs (scope, started_at, status) VALUES (?, ?, 'running')",
-            (scope, _now()),
+            "INSERT INTO collect_runs (scope, started_at, status, pid, origin, heartbeat_at) "
+            "VALUES (?, ?, 'running', ?, ?, ?)",
+            (scope, _now(), os.getpid(), origin, _now()),
         )
         return cur.lastrowid
+
+
+def beat_run(run_id: int, progress: dict[str, Any] | None = None) -> None:
+    """心跳 + 进度。进度落库才能被另一个进程(界面)看到。"""
+    with connect() as conn:
+        conn.execute(
+            "UPDATE collect_runs SET heartbeat_at=?, progress=?, fetched=?, inserted=? WHERE id=?",
+            (
+                _now(),
+                json.dumps(progress, ensure_ascii=False) if progress else None,
+                (progress or {}).get("fetched", 0),
+                (progress or {}).get("inserted", 0),
+                run_id,
+            ),
+        )
 
 
 def finish_run(
@@ -403,6 +438,71 @@ def finish_run(
             "WHERE id=?",
             (_now(), status, fetched, inserted, error, run_id),
         )
+
+
+# ── 跨进程采集锁 ────────────────────────────────────────────
+# 进程内的 asyncio.Lock 拦不住另一个进程。命令行与 Web 同时采集会让两个进程
+# 一起打抖音接口 —— 风控的头号诱因。所以「是否在采」必须以库为准。
+
+_STALE_SECONDS = 150        # 心跳超过这么久没更新 → 疑似死亡
+_HUNG_SECONDS = 30 * 60     # 进程还活着但这么久没心跳 → 判定卡死
+
+
+def _pid_alive(pid: int | None) -> bool:
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)     # 只探测,不发真信号
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True         # 存在但不属于当前用户
+    except OSError:
+        return False
+
+
+def _age_seconds(ts: str | None) -> float:
+    if not ts:
+        return float("inf")
+    try:
+        return (datetime.now(timezone.utc) - datetime.fromisoformat(ts)).total_seconds()
+    except ValueError:
+        return float("inf")
+
+
+def active_run() -> dict[str, Any] | None:
+    """返回当前真正在跑的采集,顺手把僵尸记录标掉。
+
+    判活规则:进程还在 且 心跳没超过卡死阈值;或进程查不到但心跳很新
+    (刚启动、还没来得及写 pid 的窗口)。
+    """
+    with connect() as conn:
+        rows = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT * FROM collect_runs WHERE status='running' ORDER BY id DESC"
+            )
+        ]
+        alive_row = None
+        for r in rows:
+            age = _age_seconds(r.get("heartbeat_at") or r.get("started_at"))
+            alive = _pid_alive(r.get("pid"))
+            is_live = (alive and age < _HUNG_SECONDS) or (not alive and age < _STALE_SECONDS)
+            if is_live and alive_row is None:
+                alive_row = r
+            elif not is_live:
+                conn.execute(
+                    "UPDATE collect_runs SET status='stale', finished_at=?, "
+                    "error='进程已退出或长时间无心跳,记录被回收' WHERE id=?",
+                    (_now(), r["id"]),
+                )
+    if alive_row and alive_row.get("progress"):
+        try:
+            alive_row["progress"] = json.loads(alive_row["progress"])
+        except (TypeError, ValueError):
+            alive_row["progress"] = None
+    return alive_row
 
 
 # ── 智能采集状态 ────────────────────────────────────────────

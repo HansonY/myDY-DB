@@ -552,9 +552,12 @@ async function pollRuns(){
 
   if(d.collecting){
     const p=d.progress||{};
+    // 采集可能是命令行进程在跑(状态来自数据库,跨进程可见),要说清是谁
+    const who = d.origin==='cli' ? '命令行正在采集' : '采集中';
+    const sc  = d.active_scope ? `「${esc(SRC[d.active_scope]||d.active_scope)}」` : '';
     box.insertAdjacentHTML('beforeend',
-      `<div class="notice busy rn"><span class="spin"></span><div>采集中 · 第 ${p.pages??0} 页 · 已抓 ${p.fetched??0} 条(新增 ${p.inserted??0})<br>
-       <span style="opacity:.72">抖音有风控,翻页间隔是刻意留的,慢是正常的。</span></div></div>`);
+      `<div class="notice busy rn"><span class="spin"></span><div>${who}${sc} · 第 ${p.pages??0} 页 · 已抓 ${p.fetched??0} 条(新增 ${p.inserted??0})<br>
+       <span style="opacity:.72">抖音有风控,翻页间隔是刻意留的,慢是正常的。期间采集按钮会锁住,避免两个进程一起打接口。</span></div></div>`);
     busy(true); await loadStats(); await loadList();
     if(!polling) polling=setInterval(pollRuns,3000);
   }else{

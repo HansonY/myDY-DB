@@ -91,17 +91,27 @@ CREATE TABLE IF NOT EXISTS cursors (
     updated_at  TEXT NOT NULL
 );
 
--- ── 采集任务记录 ────────────────────────────────────────────
+-- ── 采集任务记录(同时充当跨进程锁)──────────────────────────
+-- 为什么锁必须落库:命令行和 Web 是两个进程。进程内的 asyncio.Lock 拦不住
+-- 对方 —— 实测命令行在采时点界面按钮会直接放行,两个进程同时打抖音接口,
+-- 这正是触发风控的头号原因。
+-- pid + heartbeat_at 用来区分「真的在跑」和「进程崩了留下的僵尸记录」。
 CREATE TABLE IF NOT EXISTS collect_runs (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    scope       TEXT NOT NULL,
-    started_at  TEXT NOT NULL,
-    finished_at TEXT,
-    status      TEXT NOT NULL,      -- running | done | failed
-    fetched     INTEGER DEFAULT 0,
-    inserted    INTEGER DEFAULT 0,
-    error       TEXT
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope        TEXT NOT NULL,
+    started_at   TEXT NOT NULL,
+    finished_at  TEXT,
+    status       TEXT NOT NULL,      -- running | done | failed | stale
+    fetched      INTEGER DEFAULT 0,
+    inserted     INTEGER DEFAULT 0,
+    error        TEXT,
+    pid          INTEGER,            -- 哪个进程在跑
+    origin       TEXT,               -- cli | web,界面要能说清是谁在采
+    heartbeat_at TEXT,               -- 每页更新一次
+    progress     TEXT                -- JSON 进度,跨进程可见
 );
+
+CREATE INDEX IF NOT EXISTS idx_runs_status ON collect_runs(status);
 
 -- ── 智能采集状态机 ──────────────────────────────────────────
 -- 每个分类各自记状态。实践教训:
