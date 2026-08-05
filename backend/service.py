@@ -23,8 +23,11 @@ ORIGIN = "cli"
 class AlreadyCollecting(RuntimeError):
     """已有另一个采集在跑(可能是另一个进程)。"""
 
+    # 三个入口都会写 origin,少一个就会把 MCP 误报成「网页」
+    ORIGIN_LABEL = {"cli": "命令行", "web": "网页", "mcp": "MCP(AI)"}
+
     def __init__(self, run: dict[str, Any]):
-        who = "命令行" if run.get("origin") == "cli" else "网页"
+        who = self.ORIGIN_LABEL.get(run.get("origin") or "", "另一个进程")
         p = run.get("progress") or {}
         detail = f",已到第 {p.get('pages')} 页" if p.get("pages") else ""
         super().__init__(

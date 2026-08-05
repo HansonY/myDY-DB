@@ -308,7 +308,7 @@ async def _require_idle() -> None:
     是风控的主要诱因。"""
     run = await asyncio.to_thread(store.active_run)
     if run:
-        who = "命令行" if run.get("origin") == "cli" else "网页"
+        who = service.AlreadyCollecting.ORIGIN_LABEL.get(run.get("origin") or "", "另一个进程")
         p = run.get("progress") or {}
         at = f",已到第 {p.get('pages')} 页" if p.get("pages") else ""
         raise HTTPException(409, f"{who}正在采集「{run.get('scope')}」{at},请等它结束")

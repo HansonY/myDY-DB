@@ -615,7 +615,7 @@ async function pollRuns(){
   if(d.collecting){
     const p=d.progress||{};
     // 采集可能是命令行进程在跑(状态来自数据库,跨进程可见),要说清是谁
-    const who = d.origin==='cli' ? '命令行正在采集' : '采集中';
+    const who = ({cli:'命令行正在采集', mcp:'AI(MCP)正在采集', web:'采集中'})[d.origin] || '采集中';
     const sc  = d.active_scope ? `「${esc(SRC[d.active_scope]||d.active_scope)}」` : '';
     box.insertAdjacentHTML('beforeend',
       `<div class="notice busy rn"><span class="spin"></span><div>${who}${sc} · 第 ${p.pages??0} 页 · 已抓 ${p.fetched??0} 条(新增 ${p.inserted??0})<br>
