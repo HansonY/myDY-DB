@@ -177,9 +177,9 @@ async def cmd_state(args) -> None:
         print(f"{s['label']:<10}{s['collected']:>7}{tot_s:>8}{pct:>9}  {flag:<8}{s['reason']}")
         if st.get("last_error"):
             print(f"{'':<10}└ 上次错误:{st['last_error'][:70]}")
-    print("\n注:* = 手填的总数。收藏没有官方计数字段(抖音不提供「我收藏了多少条」),")
-    print("   在 App 里看到数字后用 --set collection=N 填进来即可。")
-    print("   缺口也可能是原作者删稿造成的永久差额。")
+    print("\n注:* = 手填的总数(--set SCOPE=N)。三类分母都能自动取,")
+    print("   来自抖音 self 端点:作品/点赞/收藏。")
+    print("   缺口可能是原作者删稿造成的永久差额,连续确认两遍后就会接受现状。")
 
 
 async def cmd_sync(args) -> None:

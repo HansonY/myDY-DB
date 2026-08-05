@@ -5,10 +5,17 @@
   点赞被 403 打断后续采,生成器自然结束了,于是被标成已采尽 ——
   但抖音资料接口说有 1876 条,库里只有 1457,少了 419 条。
 
-哪些有分母:
-  * 我的作品 → profile.aweme_count      ✅ 官方计数
-  * 点赞     → profile.favoriting_count ✅ 官方计数
-  * 收藏     ❌ 抖音资料接口不提供收藏数,只能靠 App 里人工核对
+三个分母都能拿到,都在 **`/aweme/v1/web/user/profile/self/`**(自己专属端点):
+  * 我的作品 → `user.aweme_count`
+  * 点赞     → `user.favoriting_count`
+  * 收藏     → `user_collect_count.collect_count_list[item_type=2].collect_count`
+
+两个坑:
+  1. f2 的 `fetch_user_profile` 走通用 `USER_DETAIL` 端点(别人也能看),
+     那里**没有收藏数** —— 收藏是私密信息,只在 self 端点返回。
+     所以这里直接请求 self 端点。
+  2. self 端点**必须带 ABogus 签名**,裸请求会返回
+     `status_code=8 用户未登录`(即使 cookie 正确)。
 
 注意分母也不是硬指标:原作者删稿、作品被限制后,列表里就再也拉不到,
 差额会永久存在。所以判定采尽要允许缺口(见 planner)。
@@ -18,29 +25,57 @@ from __future__ import annotations
 
 from typing import Any
 
-# scope → profile 字段名。没有对应字段的分类不在此表内。
-TOTAL_FIELDS = {
-    "post": "aweme_count",
-    "like": "favoriting_count",
+SELF_PROFILE_URL = "https://www.douyin.com/aweme/v1/web/user/profile/self/"
+
+# 抖音网页端请求必带的固定参数,少了会被判未登录
+_BASE_PARAMS = {
+    "device_platform": "webapp",
+    "aid": "6383",
+    "channel": "channel_pc_web",
+    "publish_video_strategy_type": "2",
+    "version_code": "170400",
+    "version_name": "17.4.0",
 }
+
+# 收藏计数按内容类型分列,2 = 视频(还有音乐、商品等其它类型)
+_COLLECT_ITEM_TYPE_VIDEO = 2
 
 
 async def fetch() -> dict[str, int]:
     """返回 {scope: 平台总数}。只发一次请求。"""
-    from collector.douyin import _make_handler
-    from config import settings
+    from f2.apps.douyin.crawler import DouyinCrawler
 
-    sec = settings.douyin_sec_user_id.strip()
-    if not sec:
-        raise RuntimeError("需要自己的 sec_user_id。先跑:python backend/cli.py whoami")
+    from collector.douyin import build_kwargs
 
-    profile = await _make_handler().fetch_user_profile(sec)
+    kwargs = build_kwargs()
+    async with DouyinCrawler(kwargs) as crawler:
+        endpoint = crawler.bogus_manager.model_2_endpoint(
+            kwargs["headers"].get("User-Agent"), SELF_PROFILE_URL, dict(_BASE_PARAMS)
+        )
+        data = await crawler._fetch_get_json(endpoint)
+
+    data = data or {}
+    user = data.get("user") or {}
+    if not user:
+        raise RuntimeError(
+            f"self 端点没返回 user(status_code={data.get('status_code')}"
+            f" / {data.get('status_msg')})。cookie 可能已失效,重新 qrlogin 试试。"
+        )
 
     out: dict[str, int] = {}
-    for scope, field in TOTAL_FIELDS.items():
-        v = getattr(profile, field, None)
+    for scope, field in (("post", "aweme_count"), ("like", "favoriting_count")):
+        v = user.get(field)
         if isinstance(v, int) and v >= 0:
             out[scope] = v
+
+    # 收藏数在独立子对象里,且按内容类型分列
+    for row in ((data.get("user_collect_count") or {}).get("collect_count_list") or []):
+        if row.get("item_type") == _COLLECT_ITEM_TYPE_VIDEO:
+            v = row.get("collect_count")
+            if isinstance(v, int) and v >= 0:
+                out["collection"] = v
+            break
+
     return out
 
 
