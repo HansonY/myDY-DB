@@ -205,9 +205,15 @@ main{max-width:1400px;margin:0 auto;padding:14px 20px 64px}
   transition:background .14s var(--ease)}
 .r:hover{background:var(--surface)}
 
+/* 封面方向混杂(实测 63% 竖屏 / 35% 横屏)。统一用 contain 保证画面不被裁,
+   letterbox 用同一张图放大模糊后垫底 —— 盒子尺寸完全一致,又不留死白。
+   若用 cover,横屏封面会被裁掉约六成宽度,只剩中间一条。 */
 .thumb{position:relative;flex:0 0 68px;height:91px;border-radius:6px;
   overflow:hidden;background:var(--surface-2)}
-.thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.thumb img{position:relative;z-index:1;width:100%;height:100%;
+  object-fit:contain;display:block}
+.thumb .bg,.gc .bg{position:absolute;inset:0;width:100%;height:100%;z-index:0;
+  object-fit:cover;filter:blur(14px) saturate(.7) brightness(.55);transform:scale(1.25)}
 .dur{position:absolute;right:3px;bottom:3px;padding:0 4px;border-radius:4px;
   background:rgba(6,8,11,.82);color:#e7ebf0;font-family:var(--mono);font-size:10px}
 .ph{width:100%;height:100%;display:grid;place-items:center;color:var(--dim-2)}
@@ -240,8 +246,9 @@ main{max-width:1400px;margin:0 auto;padding:14px 20px 64px}
   cursor:pointer;transition:border-color .16s var(--ease),transform .16s var(--ease)}
 .g:hover{border-color:var(--line-2);transform:translateY(-2px)}
 .g:active{transform:translateY(0)}
-.gc{position:relative;aspect-ratio:9/13;background:var(--surface-2);overflow:hidden}
-.gc img{width:100%;height:100%;object-fit:cover;display:block}
+.gc{position:relative;aspect-ratio:3/4;background:var(--surface-2);overflow:hidden}
+.gc img{position:relative;z-index:1;width:100%;height:100%;
+  object-fit:contain;display:block}
 /* 网格里底部被标题占了,时长角标必须挪到右上 —— 否则被文字压住只露一半 */
 .gc .dur{top:5px;right:5px;bottom:auto;z-index:3}
 .gc::after{content:"";position:absolute;inset:auto 0 0 0;height:58%;
@@ -288,6 +295,7 @@ main{max-width:1400px;margin:0 auto;padding:14px 20px 64px}
 .sbody{display:flex;gap:16px;padding:16px;overflow-y:auto;flex:1}
 .sbody .pic{flex:0 0 168px}
 .sbody .pic .cover{width:168px;height:224px;flex:none}
+.sbody .pic .cover img{object-fit:contain}
 .sfull{min-width:0;flex:1;white-space:pre-wrap;word-break:break-word;
   font-size:14.5px;line-height:1.72;color:var(--fg-2)}
 .sfull.none{color:var(--dim-2);font-style:italic}
