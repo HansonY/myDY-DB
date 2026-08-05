@@ -42,26 +42,19 @@ Douyin-DB 把这些视频的**文案和内容**抽出来落到本地库里,于�
 
 ## 快速开始
 
-### 方式一:Docker(推荐)
+完整步骤(含 Python 版本要求、每步耗时)见下面
+**[从 clone 到能用](#从-clone-到能用完整步骤)**。最短路径:
 
 ```bash
 git clone git@github.com:HansonY/myDY-DB.git && cd myDY-DB
-cp .env.example .env      # 然后填入 DOUYIN_COOKIE
-docker compose up -d
-```
-
-打开 http://localhost:8000
-
-### 方式二:本地 Python(3.10+)
-
-```bash
-python3 -m venv .venv && .venv/bin/pip install -r backend/requirements.txt
-cp .env.example .env      # 然后填入 DOUYIN_COOKIE
-
-.venv/bin/python backend/cli.py init      # 建库
-.venv/bin/python backend/cli.py probe     # 先拉 3 条核对(不写库)
-.venv/bin/python backend/cli.py favorites # 全量采集收藏
-
+python3.13 -m venv .venv                                   # 必须 3.10–3.13,别用裸 python3
+.venv/bin/pip install -r backend/requirements.txt
+.venv/bin/pip install -r backend/requirements-login.txt && .venv/bin/python -m playwright install chromium
+cp .env.example .env
+.venv/bin/python backend/cli.py init
+.venv/bin/python backend/cli.py qrlogin --keep-session     # 扫码,只能你自己做
+.venv/bin/python backend/cli.py whoami
+.venv/bin/python backend/cli.py smart                      # 开采
 .venv/bin/python -m uvicorn main:app --app-dir backend --port 8000
 ```
 
@@ -70,8 +63,8 @@ cp .env.example .env      # 然后填入 DOUYIN_COOKIE
 **① 扫码登录 — 最省事**
 
 ```bash
-pip install -r backend/requirements-login.txt && playwright install chromium   # 一次性,约 300MB
-python backend/cli.py qrlogin --keep-session
+.venv/bin/pip install -r backend/requirements-login.txt && .venv/bin/python -m playwright install chromium   # 一次性,约 300MB
+.venv/bin/python backend/cli.py qrlogin --keep-session
 ```
 
 弹出真浏览器 → 你自己点「登录」用抖音 App 扫码 → cookie 自动写进 `.env`。
@@ -83,8 +76,8 @@ python backend/cli.py qrlogin --keep-session
 **② 从本机浏览器读 — 零新依赖**
 
 ```bash
-python backend/cli.py login              # 自动探测
-python backend/cli.py login --browser chrome
+.venv/bin/python backend/cli.py login              # 自动探测
+.venv/bin/python backend/cli.py login --browser chrome
 ```
 
 前提是你已在该浏览器登录过抖音。
@@ -248,7 +241,7 @@ claude mcp add douyin-db -- /绝对路径/Douyin-DB/.venv/bin/python /绝对路�
 **日常只需要这一条命令:**
 
 ```bash
-python backend/cli.py smart
+.venv/bin/python backend/cli.py smart
 ```
 
 它会自己判断每个分类该做什么,并处理限流:
@@ -264,8 +257,8 @@ python backend/cli.py smart
 看它打算做什么(不发任何请求):
 
 ```bash
-python backend/cli.py smart --dry-run
-python backend/cli.py state
+.venv/bin/python backend/cli.py smart --dry-run
+.venv/bin/python backend/cli.py state
 ```
 
 ### 这些规则是实测出来的,不是猜的
@@ -302,25 +295,25 @@ Linux / cron:`0 9 * * * cd /path/to/Douyin-DB && .venv/bin/python backend/cli.py
 ## 全部命令
 
 ```bash
-python backend/cli.py init                       # 建库
-python backend/cli.py qrlogin [--keep-session]   # 扫码登录(需 playwright)
-python backend/cli.py login [--browser chrome]   # 从本机浏览器读 cookie
-python backend/cli.py whoami                     # 解析自己的 sec_user_id
-python backend/cli.py probe [--max 3]            # 拉几条核对字段,不写库
+.venv/bin/python backend/cli.py init                       # 建库
+.venv/bin/python backend/cli.py qrlogin [--keep-session]   # 扫码登录(需 playwright)
+.venv/bin/python backend/cli.py login [--browser chrome]   # 从本机浏览器读 cookie
+.venv/bin/python backend/cli.py whoami                     # 解析自己的 sec_user_id
+.venv/bin/python backend/cli.py probe [--max 3]            # 拉几条核对字段,不写库
 
-python backend/cli.py smart [--dry-run]          # 智能采集(推荐)
-python backend/cli.py state                      # 各分类采集状态
-python backend/cli.py sync                       # 只做增量同步
+.venv/bin/python backend/cli.py smart [--dry-run]          # 智能采集(推荐)
+.venv/bin/python backend/cli.py state                      # 各分类采集状态
+.venv/bin/python backend/cli.py sync                       # 只做增量同步
 
-python backend/cli.py favorites [--max N] [--fresh]   # 单独采收藏
-python backend/cli.py likes     [--max N] [--fresh]   # 单独采点赞
-python backend/cli.py posts     [--max N] [--fresh]   # 单独采我的作品
-python backend/cli.py folders                    # 列出收藏夹
-python backend/cli.py folder <collects_id>       # 采集指定收藏夹
+.venv/bin/python backend/cli.py favorites [--max N] [--fresh]   # 单独采收藏
+.venv/bin/python backend/cli.py likes     [--max N] [--fresh]   # 单独采点赞
+.venv/bin/python backend/cli.py posts     [--max N] [--fresh]   # 单独采我的作品
+.venv/bin/python backend/cli.py folders                    # 列出收藏夹
+.venv/bin/python backend/cli.py folder <collects_id>       # 采集指定收藏夹
 
-python backend/cli.py stats                      # 统计 + 最近采集记录
-python backend/cli.py tags [--top 25]            # 重抽 #话题标签
-python backend/cli.py search <关键词>             # 搜索
+.venv/bin/python backend/cli.py stats                      # 统计 + 最近采集记录
+.venv/bin/python backend/cli.py tags [--top 25]            # 重抽 #话题标签
+.venv/bin/python backend/cli.py search <关键词>             # 搜索
 ```
 
 `--fresh` 忽略游标从最新重扫;默认是从断点续采。
