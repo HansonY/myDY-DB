@@ -446,11 +446,19 @@ async function loadPlan(){
         <span class="act${s.action==='skip'?' wait':''}">${act}</span>`;
     }
     const pct = Math.min(100, s.percent);
+    // 缺口分两种,不能都显示成「还差 N」+ 警告色:
+    //   待采(short 且未确认) → 确实有事可做,警告色
+    //   已确认不可达(gap_permanent) → 原作者删稿/私密/注销,补不了,
+    //     显示为中性的「N 条已失效」,否则会一直误导成有事可做
+    const todo = s.short && !s.gap_permanent;
+    const note = s.gap_permanent ? `${n0(s.gap)} 条已失效`
+               : todo            ? `还差 ${n0(s.gap)}`
+               : '已齐';
     return `<span class="lb">${esc(s.label)}</span>
       <span class="cnt">${n0(s.collected)} <s>/ ${n0(s.total)}</s></span>
-      <span class="bar${s.short?' bad':''}"><i style="width:${pct}%"></i></span>
-      <span class="pc${s.short?' bad':''}">${s.percent}%</span>
-      <span class="${s.short?'left':'none'}">${s.short?`还差 ${n0(s.gap)}`:'已齐'}</span>
+      <span class="bar${todo?' bad':''}"><i style="width:${pct}%"></i></span>
+      <span class="pc${todo?' bad':''}">${s.percent}%</span>
+      <span class="${todo?'left':'none'}" ${s.gap_permanent?`title="抖音计数器仍算着这些,但列表接口已不返回 —— 无法采集"`:''}>${note}</span>
       <span class="act${s.action==='skip'?' wait':''}">${act}</span>`;
   }).join('');
 

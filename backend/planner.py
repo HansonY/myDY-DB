@@ -121,10 +121,14 @@ def decide(scope: str) -> dict[str, Any]:
                 "reason": f"标记已采尽但仍缺 {g['gap']} 条,再确认一遍"
                           f"(第 {passes + 1}/{MAX_EXHAUST_PASSES} 次)"}
 
-    tail = ""
-    if g["short"]:
-        tail = f";仍缺 {g['gap']} 条,已确认 {passes} 遍,判定为原作者删稿造成的永久差额"
+    # 走到这里说明:已采尽,且缺口要么在容差内、要么已确认到上限。
+    # 后者是「不可达」而非「待采」—— 必须区分,否则界面会一直显示
+    # 「还差 N 条」+ 警告色,让人以为有事可做,而实际上补不了。
+    permanent = g["short"]
+    tail = (f";仍缺 {g['gap']} 条,已确认 {passes} 遍,"
+            "判定为原作者删稿/私密/注销造成的永久差额") if permanent else ""
     return {**base, "action": "sync", "max_pages": plan["max_pages_per_run"],
+            "gap_permanent": permanent,
             "reason": f"历史已采尽,改为增量同步(发现新增内容){tail}"}
 
 

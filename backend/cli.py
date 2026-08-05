@@ -177,7 +177,9 @@ async def cmd_state(args) -> None:
         src = {"api": "", "manual": "*"}.get(st.get("total_source") or "", "")
         tot_s = (str(total) + src) if total else "—"
         pct = f"{s['percent']}%" if s.get("percent") is not None else "—"
-        print(f"{s['label']:<10}{s['collected']:>7}{tot_s:>8}{pct:>9}  {flag:<8}{s['reason']}")
+        gap = (f"{s['gap']} 条已失效" if s.get("gap_permanent")
+               else f"还差 {s['gap']}" if s.get("short") else "")
+        print(f"{s['label']:<10}{s['collected']:>7}{tot_s:>8}{pct:>9}  {flag:<8}{gap:<14}{s['reason'][:34]}")
         if st.get("last_error"):
             print(f"{'':<10}└ 上次错误:{st['last_error'][:70]}")
     print("\n注:* = 手填的总数(--set SCOPE=N)。三类分母都能自动取,")
