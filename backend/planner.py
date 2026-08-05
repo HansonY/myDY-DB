@@ -72,31 +72,60 @@ def cooldown_left(scope: str) -> timedelta | None:
     return left if left.total_seconds() > 0 else None
 
 
+# 允许的缺口:原作者删稿 / 作品被限制后就再也拉不到,差额会永久存在。
+# 超过这个量才认为「真的还没采完」。
+def _tolerance(total: int) -> int:
+    return max(10, int(total * 0.01))
+
+# 完整走完一遍仍有缺口的确认次数上限。到了就接受现状(判定为删稿造成的永久差额),
+# 否则会为了永远补不上的缺口无限重采,反而招风控。
+MAX_EXHAUST_PASSES = 2
+
+
+def gap_info(scope: str) -> dict[str, Any]:
+    """已采 / 平台总数 / 缺口。没有分母时 total 为 None。"""
+    st = store.get_state(scope)
+    got = store.count_by_source(scope)
+    total = st.get("platform_total")
+    if not isinstance(total, int) or total <= 0:
+        return {"collected": got, "total": None, "gap": None, "short": False}
+    gap = total - got
+    return {
+        "collected": got, "total": total, "gap": gap,
+        "percent": round(got * 100 / total, 1),
+        "short": gap > _tolerance(total),      # 缺口超出容差 = 还没采完
+    }
+
+
 def decide(scope: str) -> dict[str, Any]:
     """决定这个分类现在该做什么。"""
     st = store.get_state(scope)
     plan = PLANS[scope]
+    g = gap_info(scope)
+    base = {"scope": scope, "label": plan["label"], **g}
 
     left = cooldown_left(scope)
     if left:
         mins = int(left.total_seconds() // 60) + 1
-        return {
-            "scope": scope, "label": plan["label"], "action": "skip",
-            "reason": f"被限流冷却中,还需 {mins} 分钟",
-        }
+        return {**base, "action": "skip", "reason": f"被限流冷却中,还需 {mins} 分钟"}
 
-    if st.get("exhausted"):
-        return {
-            "scope": scope, "label": plan["label"], "action": "sync",
-            "reason": "历史已采尽,改为增量同步(发现新增内容)",
-            "max_pages": plan["max_pages_per_run"],
-        }
+    if not st.get("exhausted"):
+        return {**base, "action": "resume", "max_pages": plan["max_pages_per_run"],
+                "reason": "历史未采尽,从断点继续往前采"}
 
-    return {
-        "scope": scope, "label": plan["label"], "action": "resume",
-        "reason": "历史未采尽,从断点继续往前采",
-        "max_pages": plan["max_pages_per_run"],
-    }
+    # 标记为已采尽,但分母显示还差不少 —— 说明「生成器自然结束」判断错了
+    # (实测点赞被 403 打断后就出现过)。再完整走一遍确认。
+    passes = st.get("exhaust_passes") or 0
+    if g["short"] and passes < MAX_EXHAUST_PASSES:
+        return {**base, "action": "resume", "max_pages": plan["max_pages_per_run"],
+                "reason": f"标记已采尽但仍缺 {g['gap']} 条,再确认一遍"
+                          f"(第 {passes + 1}/{MAX_EXHAUST_PASSES} 次)"}
+
+    tail = ""
+    if g["short"]:
+        tail = f";仍缺 {g['gap']} 条,已确认 {passes} 遍,判定为原作者删稿造成的永久差额"
+    return {**base, "action": "sync", "max_pages": plan["max_pages_per_run"],
+            "reason": f"历史已采尽,改为增量同步(发现新增内容){tail}"}
 
 
 def plan_all() -> list[dict[str, Any]]:
@@ -105,11 +134,28 @@ def plan_all() -> list[dict[str, Any]]:
 
 # ── 结果回写 ────────────────────────────────────────────────
 
+def save_totals(totals: dict[str, int]) -> None:
+    """写入平台侧总数(采集完整度的分母)。"""
+    at = _now().isoformat(timespec="seconds")
+    for scope, n in totals.items():
+        if scope in PLANS:
+            store.save_state(scope, platform_total=n, platform_total_at=at)
+
+
 def record_success(scope: str, pages: int, exhausted: bool) -> None:
-    """成功一轮:清掉退避,必要时标记已采尽。"""
+    """成功一轮:清掉退避,必要时标记已采尽。
+
+    如果这一轮完整走完(exhausted)但分母显示仍有缺口,累加确认次数 ——
+    到达上限就不再重试,把缺口当成删稿造成的永久差额。
+    """
     st = store.get_state(scope)
+    passes = st.get("exhaust_passes") or 0
+    if exhausted and gap_info(scope)["short"]:
+        passes += 1
+
     store.save_state(
         scope,
+        exhaust_passes=passes,
         exhausted=1 if (exhausted or st.get("exhausted")) else 0,
         blocked_until=None,
         backoff_level=0,

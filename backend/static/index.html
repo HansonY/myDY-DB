@@ -146,7 +146,10 @@ select:focus{outline:none;border-color:var(--accent-line)}
 .plan{display:flex;gap:16px;flex-wrap:wrap;align-items:center;font-size:11.5px;color:var(--dim-2)}
 .plan .p{display:inline-flex;gap:5px;align-items:center}
 .plan .p svg{width:11px;height:11px;stroke-width:1.6;color:var(--dim)}
-.plan .p b{font-weight:500;color:var(--dim)}
+.plan .p b{font-weight:500;color:var(--fg-2)}
+.plan .p em{font-style:normal;color:var(--dim-2);opacity:.85}
+.plan .pc{color:var(--dim-2)}
+.plan .pc.bad{color:var(--warn)}   /* 缺口超出容差 = 还没采完 */
 .plan .p.wait svg,.plan .p.wait b{color:var(--warn)}
 
 /* ══ 提示条 ════════════════════════════════════════════════ */
@@ -410,12 +413,23 @@ async function loadStats(){
 const PLAN_ICON = {resume:'i-resume', sync:'i-sync', skip:'i-pause'};
 async function loadPlan(){
   const d = await api('/api/collect/plan');
-  $('#plan').innerHTML = '<span style="opacity:.75">下次采集计划</span>' + d.steps.map(s => {
-    const st = s.action==='skip' ? `限流中,冷却 ${s.cooldown_minutes} 分钟`
-             : s.exhausted ? '增量同步(只找新增)' : `续采历史(上限 ${s.max_pages} 页)`;
+  $('#plan').innerHTML = d.steps.map(s => {
+    // 完整度:已采 / 平台总数。没有分母就只显示已采条数。
+    // 收藏没有官方计数字段,所以那一项永远没有分母。
+    const prog = s.total
+      ? `<b class="num">${s.collected}/${s.total}</b><span class="pc${s.short?' bad':''}">${s.percent}%</span>`
+      : `<b class="num">${s.collected}</b><span class="pc">—</span>`;
+    const act = s.action==='skip' ? `冷却 ${s.cooldown_minutes} 分钟`
+              : s.action==='sync' ? '增量' : '续采';
     return `<span class="p ${s.action==='skip'?'wait':''}" title="${esc(s.reason)}">
-      ${ico(PLAN_ICON[s.action])}${esc(s.label)} <b>${esc(st)}</b></span>`;
-  }).join('');
+      ${ico(PLAN_ICON[s.action])}${esc(s.label)} ${prog}<em>${act}</em></span>`;
+  }).join('') + `<button class="link" id="p-refresh" title="向抖音取一次平台总数">刷新平台计数</button>`;
+
+  $('#p-refresh').onclick = async () => {
+    const b=$('#p-refresh'); b.disabled=true; b.textContent='取数中…';
+    try{ await api('/api/collect/totals/refresh',{method:'POST'}); await loadPlan(); }
+    catch(e){ warn(esc(e.message)); b.disabled=false; b.textContent='刷新平台计数'; }
+  };
 }
 
 async function loadTags(){

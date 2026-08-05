@@ -155,6 +155,15 @@ async def smart_collect(
 
     store.init_db()
     guard_single_run()      # 先整体拦一次,别等到逐类跑时才发现
+
+    # 先取一次平台侧总数(1 个请求)。它是完整度的分母,也是纠正
+    # 「生成器自然结束就算采尽」这个错误推断的唯一依据。
+    try:
+        from collector import totals
+        planner.save_totals(await totals.fetch())
+    except Exception:
+        pass    # 拿不到分母不影响采集,只是没法判断完整度
+
     results: list[dict[str, Any]] = []
 
     for step in planner.plan_all():

@@ -145,20 +145,32 @@ async def cmd_smart(args) -> None:
     cmd_stats(args)
 
 
-def cmd_state(_args) -> None:
-    """看各分类的采集状态。"""
+async def cmd_state(args) -> None:
+    """看各分类的采集进度:已采 / 平台总数 / 完成度。"""
     import planner
 
-    print(f"{'分类':<10}{'状态':<12}{'累计页':<8}{'最近':<22}说明")
+    if args.refresh:
+        from collector import totals
+        try:
+            t = await totals.fetch()
+            planner.save_totals(t)
+            print("已刷新平台计数:", t, "\n")
+        except Exception as e:
+            print(f"取平台计数失败({type(e).__name__}),用上次的值\n")
+
+    print(f"{'分类':<10}{'已采':>7}{'平台':>8}{'完成度':>9}  {'状态':<8}说明")
     for s in planner.plan_all():
         st = store.get_state(s["scope"])
-        flag = ("已采尽" if st.get("exhausted") else "未采尽")
-        if planner.cooldown_left(s["scope"]):
-            flag = "冷却中"
-        print(f"{s['label']:<10}{flag:<12}{st.get('total_pages') or 0:<8}"
-              f"{(st.get('last_run_at') or '—')[:19]:<22}{s['reason']}")
+        flag = "冷却中" if planner.cooldown_left(s["scope"]) else (
+            "已采尽" if st.get("exhausted") else "未采尽")
+        total = s.get("total")
+        tot_s = str(total) if total else "—"
+        pct = f"{s['percent']}%" if s.get("percent") is not None else "—"
+        print(f"{s['label']:<10}{s['collected']:>7}{tot_s:>8}{pct:>9}  {flag:<8}{s['reason']}")
         if st.get("last_error"):
-            print(f"           └ 上次错误:{st['last_error'][:80]}")
+            print(f"{'':<10}└ 上次错误:{st['last_error'][:70]}")
+    print("\n注:收藏没有官方计数字段,平台数只能靠抖音 App 里人工核对。")
+    print("   缺口也可能是原作者删稿造成的永久差额。")
 
 
 async def cmd_sync(args) -> None:
@@ -318,7 +330,8 @@ def main() -> None:
     sp = sub.add_parser("smart", help="智能采集(推荐:自己判断+自己退避,适合挂定时)")
     sp.add_argument("--dry-run", action="store_true", help="只打印计划,不执行")
 
-    sub.add_parser("state", help="看各分类的采集状态")
+    sp = sub.add_parser("state", help="看采集进度:已采/平台总数/完成度")
+    sp.add_argument("--refresh", action="store_true", help="重新向抖音取一次平台计数")
 
     sp = sub.add_parser("sync", help="增量同步(只发现新增,不续采历史)")
     sp.add_argument("--skip-posts", action="store_true", help="不同步我的作品")

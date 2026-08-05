@@ -46,6 +46,11 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
             "heartbeat_at": "TEXT",
             "progress": "TEXT",
         },
+        "collect_state": {
+            "platform_total": "INTEGER",
+            "platform_total_at": "TEXT",
+            "exhaust_passes": "INTEGER DEFAULT 0",
+        },
     }
     for table, cols in wanted.items():
         have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
@@ -277,6 +282,15 @@ def count_videos(
         sql += " WHERE " + " AND ".join(where)
     with connect() as conn:
         return conn.execute(sql, params).fetchone()["n"]
+
+
+def count_by_source(scope: str) -> int:
+    """某一类已采到的条数(分母对照用)。"""
+    with connect() as conn:
+        return conn.execute(
+            "SELECT COUNT(DISTINCT aweme_id) AS n FROM video_sources WHERE source = ?",
+            (scope,),
+        ).fetchone()["n"]
 
 
 def top_authors(limit: int = 30) -> list[dict[str, Any]]:
@@ -518,6 +532,7 @@ def get_state(scope: str) -> dict[str, Any]:
         "scope": scope, "exhausted": 0, "blocked_until": None,
         "backoff_level": 0, "consecutive_403": 0, "last_status": None,
         "last_error": None, "last_run_at": None, "total_pages": 0,
+        "platform_total": None, "platform_total_at": None, "exhaust_passes": 0,
     }
 
 
@@ -534,7 +549,7 @@ def save_state(scope: str, **fields: Any) -> None:
     cols = [
         "scope", "exhausted", "blocked_until", "backoff_level",
         "consecutive_403", "last_status", "last_error", "last_run_at",
-        "total_pages",
+        "total_pages", "platform_total", "platform_total_at", "exhaust_passes",
     ]
     row = {c: cur.get(c) for c in cols}
     updates = ",".join(f"{c}=excluded.{c}" for c in cols if c != "scope")

@@ -128,7 +128,15 @@ CREATE TABLE IF NOT EXISTS collect_state (
     last_status      TEXT,               -- done | failed | throttled | skipped
     last_error       TEXT,
     last_run_at      TEXT,
-    total_pages      INTEGER DEFAULT 0   -- 累计翻过的页数
+    total_pages      INTEGER DEFAULT 0,  -- 累计翻过的页数
+    -- 平台侧总数(分母)。没有它就只能靠「生成器自然结束」推断采尽,
+    -- 而这个推断实测会出错:点赞被 403 打断后续采,生成器自然结束了,
+    -- 但抖音说有 1876 条、我们只有 1457 —— 少了 419 条却被标成已采尽。
+    platform_total   INTEGER,
+    platform_total_at TEXT,
+    -- 完整走完一遍且仍有缺口的次数。缺口可能是原作者删稿导致的永久差额,
+    -- 所以不能无限重试 —— 连续确认两遍就接受现状。
+    exhaust_passes   INTEGER DEFAULT 0
 );
 
 -- ── 收藏夹 ──────────────────────────────────────────────────

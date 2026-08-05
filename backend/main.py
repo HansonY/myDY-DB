@@ -236,6 +236,25 @@ async def collect_plan() -> dict[str, Any]:
     return {"steps": [enrich(s) for s in steps]}
 
 
+@app.post("/api/collect/totals/refresh")
+async def refresh_totals() -> dict[str, Any]:
+    """向抖音取一次平台侧总数(完整度的分母)。只发一个请求。
+
+    不放在 /plan 里自动做 —— 那样每次刷页面都会打抖音一次。
+    smart_collect 每轮开始时会自动刷新。
+    """
+    _require_cookie()
+    import planner
+    from collector import totals
+
+    try:
+        t = await totals.fetch()
+    except Exception as e:
+        raise HTTPException(502, f"取平台计数失败:{type(e).__name__}: {e}") from e
+    await asyncio.to_thread(planner.save_totals, t)
+    return {"totals": t}
+
+
 @app.post("/api/collect/smart")
 async def collect_smart(bg: BackgroundTasks) -> dict[str, Any]:
     """智能采集:每类自己判断续采/增量/跳过,自己处理限流退避。"""
