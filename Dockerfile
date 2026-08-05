@@ -1,3 +1,5 @@
+# 必须 3.10–3.13:pydantic-core 依赖的 PyO3 目前最高支持 3.13,
+# 换成 3.14 镜像会在构建时倒在 Rust 编译错误上。
 FROM python:3.13-slim
 
 # ffmpeg 供 Phase 2 抽音轨/关键帧使用

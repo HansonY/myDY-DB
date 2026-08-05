@@ -112,45 +112,81 @@ macOS 上读 Safari 需要给终端「系统设置 → 隐私与安全性 → **
 | **命令行** | `.venv/bin/python backend/cli.py <命令>` | 日常采集、挂定时任务 |
 | **MCP** | `.venv/bin/python backend/mcp_server.py` | 在 Cursor / Claude Code 里用自然语言问库、驱动采集 |
 
-### 完整启动步骤(首次)
+### 从 clone 到能用:完整步骤
+
+> ⚠️ **Python 必须是 3.10–3.13。**
+> 不能用 3.14 —— pydantic-core 依赖的 PyO3 目前最高支持 3.13,
+> 用 3.14 装依赖会倒在一大片 Rust 编译错误上,而报错信息完全看不出根因。
+> 程序有版本守卫会提前拦住并给出修复命令,但建好 venv 前它拦不住 pip,
+> 所以**建 venv 时就要指定版本**。
 
 ```bash
-# 1. 装依赖
-python3 -m venv .venv
+# ── 0. 拿代码 ─────────────────────────────────────────
+git clone git@github.com:HansonY/myDY-DB.git && cd myDY-DB
+
+# ── 1. 建虚拟环境(注意显式指定 3.13,别用裸 python3)──
+python3.13 -m venv .venv          # macOS 没有的话:brew install python@3.13
 .venv/bin/pip install -r backend/requirements.txt
-.venv/bin/pip install -r backend/requirements-login.txt   # 扫码登录用,可选
+
+# ── 2. 扫码登录所需(可选但强烈建议,约 300MB)────────
+.venv/bin/pip install -r backend/requirements-login.txt
 .venv/bin/python -m playwright install chromium
 
-# 2. 配置
-cp .env.example .env
+# ── 3. 配置文件 ───────────────────────────────────────
+cp .env.example .env              # 先不用改,登录步骤会自动写入
 
-# 3. 建库
+# ── 4. 建库 ───────────────────────────────────────────
 .venv/bin/python backend/cli.py init
 
-# 4. 登录(要真人扫码,只能在本机终端跑)
+# ── 5. 登录(必须你本人操作:会弹浏览器,用抖音 App 扫码)──
 .venv/bin/python backend/cli.py qrlogin --keep-session
 
-# 5. 解析自己的 sec_user_id(采点赞/作品需要)
+# ── 6. 解析自己的 sec_user_id(采点赞/我的作品需要)────
 .venv/bin/python backend/cli.py whoami
 
-# 6. 核对字段(只拉 3 条不写库)
+# ── 7. 先探 3 条核对字段(不写库,零风险)─────────────
 .venv/bin/python backend/cli.py probe
 
-# 7. 开采
+# ── 8. 开始采集 ───────────────────────────────────────
 .venv/bin/python backend/cli.py smart
 
-# 8. 起网页
+# ── 9. 打开网页看 ─────────────────────────────────────
 .venv/bin/python -m uvicorn main:app --app-dir backend --port 8000
+#    → http://localhost:8000
 ```
 
-**日常只需要两条**:
+**每一步大概花多久**
+
+| 步骤 | 耗时 | 说明 |
+|---|---|---|
+| 1 装依赖 | 1–3 分钟 | |
+| 2 Playwright | 2–5 分钟 | 下 Chromium,约 300MB |
+| 5 扫码 | 半分钟 | **只能你自己做**,AI 代不了 |
+| 8 首次采集 | **可能要几轮** | 抖音风控:一轮采一部分,403 就自动退避,过后再跑 |
+
+首次采集不会一次采完是**正常的**。抖音对往历史深处翻有限制,程序会主动收手、
+403 时指数退避。隔一段时间重跑 `smart` 就会接着采,已采的一条都不会丢。
+
+### 之后日常只有两条命令
 
 ```bash
-.venv/bin/python backend/cli.py smart                                    # 采集
-.venv/bin/python -m uvicorn main:app --app-dir backend --port 8000       # 看
+.venv/bin/python backend/cli.py smart                                # 采(几秒到几分钟)
+.venv/bin/python -m uvicorn main:app --app-dir backend --port 8000   # 看
 ```
 
-不确定缺什么就问:`.venv/bin/python backend/cli.py state`,或在 AI 里调 `auth_status`。
+不确定当前状态就跑 `.venv/bin/python backend/cli.py state`,
+它会告诉你每类采了多少 / 平台共多少 / 缺什么该做什么。
+
+### 用 Docker 的话
+
+```bash
+git clone git@github.com:HansonY/myDY-DB.git && cd myDY-DB
+cp .env.example .env
+docker compose up -d          # → http://localhost:8000
+```
+
+但**扫码登录仍要在宿主机做**(容器里没有可交互的浏览器)。
+先在宿主机按上面第 1、2、5、6 步拿到 cookie 写进 `.env`,再起容器。
 
 ---
 

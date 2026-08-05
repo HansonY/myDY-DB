@@ -14,20 +14,29 @@
     .venv/bin/python backend/mcp_server.py
 接进 Claude Code / Cursor 的配置见 README 的 MCP 一节。
 
-注:本文件针对 mcp SDK 2.x 的 MCPServer API(1.x 的 @server.list_tools()
-    装饰器写法已不存在)。
+注:本文件针对 mcp SDK **1.x**。为什么不用 2.x ——
+    2.x 会把 pydantic 升到 2.13,而 f2 钉死 pydantic==2.9.*,
+    等于发布一套已知冲突的依赖。1.x 与 f2 的钉子完全兼容,`pip check` 干净。
+    (踩过:requirements 写 `mcp>=1.2` 时,我的环境解析到 2.0、干净克隆解析到
+     1.12.4,同一份代码一边能跑一边 ModuleNotFoundError。所以必须钉 <2。)
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from pathlib import Path
 from typing import Any, Literal
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from mcp.server.mcpserver import MCPServer
+import _pyversion
+_pyversion.check()   # Python 版本不对就早失败,别让人撞 Rust 编译错误
+
+from mcp.server import Server
+from mcp.server.stdio import stdio_server
+from mcp.types import TextContent, Tool
 
 import planner
 import service
@@ -36,15 +45,14 @@ from db import store
 Scope = Literal["collection", "like", "post"]
 SRC_LABEL = {"collection": "收藏", "like": "点赞", "post": "我的作品", "collects": "收藏夹"}
 
-app = MCPServer(
-    "douyin-db",
-    instructions=(
+SERVER_INSTRUCTIONS = (
         "我的抖音收藏知识库(本地 SQLite)。可检索收藏/点赞/我发布的作品,"
         "按关键词、话题标签、作者、来源筛选;也能查看采集完整度并触发采集。\n"
         "回答「我收藏过的关于X」这类问题时用 search_videos。\n"
-        "采集有抖音风控约束:同一时刻只允许一个采集任务,403 会自动指数退避。"
-    ),
+    "采集有抖音风控约束:同一时刻只允许一个采集任务,403 会自动指数退避。"
 )
+
+app = Server("douyin-db", instructions=SERVER_INSTRUCTIONS)
 
 
 def _slim(v: dict[str, Any]) -> dict[str, Any]:
@@ -63,7 +71,6 @@ def _slim(v: dict[str, Any]) -> dict[str, Any]:
 
 # ── 检索 ────────────────────────────────────────────────────
 
-@app.tool()
 async def search_videos(
     query: str | None = None,
     source: Scope | None = None,
@@ -91,7 +98,6 @@ async def search_videos(
     return {"matched": total, "returned": len(rows), "items": [_slim(r) for r in rows]}
 
 
-@app.tool()
 async def library_stats(top_tags: int = 20) -> dict[str, Any]:
     """知识库概览:总条数、各来源分布、有文案数、作者数,以及热门话题标签。
 
@@ -111,7 +117,6 @@ async def library_stats(top_tags: int = 20) -> dict[str, Any]:
 
 # ── 采集 ────────────────────────────────────────────────────
 
-@app.tool()
 async def collect_status() -> dict[str, Any]:
     """采集进度与下一步计划。
 
@@ -140,7 +145,6 @@ async def collect_status() -> dict[str, Any]:
     }
 
 
-@app.tool()
 async def collect_smart(wait: bool = False) -> dict[str, Any]:
     """触发智能采集(日常唯一需要的采集动作)。
 
@@ -173,7 +177,6 @@ async def collect_smart(wait: bool = False) -> dict[str, Any]:
             "hint": "已在后台开始,用 collect_status 查进度"}
 
 
-@app.tool()
 async def collect_scope(
     scope: Scope,
     mode: Literal["resume", "sync", "fresh"] = "sync",
@@ -210,7 +213,6 @@ async def collect_scope(
                 "note": "已采部分与游标都保留了,可以再试。403 表示被风控限流。"}
 
 
-@app.tool()
 async def refresh_totals(
     manual_scope: Scope | None = None,
     manual_total: int | None = None,
@@ -245,7 +247,6 @@ async def refresh_totals(
     return out
 
 
-@app.tool()
 async def rebuild_tags() -> dict[str, Any]:
     """从所有作品文案里重抽 #话题标签,重建标签索引。
 
@@ -258,7 +259,6 @@ async def rebuild_tags() -> dict[str, Any]:
 
 # ── 环境诊断 ────────────────────────────────────────────────
 
-@app.tool()
 async def auth_status() -> dict[str, Any]:
     """登录与环境状态,以及缺什么该跑哪条命令。
 
@@ -307,6 +307,131 @@ async def _background_collect() -> None:
         pass    # 失败原因已写入 collect_runs,collect_status 里能看到
 
 
-if __name__ == "__main__":
+# ── MCP 外壳:把上面的纯函数暴露成工具 ────────────────────────
+# 1.x 需要手写 schema(2.x 才有类型注解自动生成)。
+_TOOLS: list[Tool] = [
+    Tool(
+        name="search_videos",
+        description=(
+            "在我的抖音知识库里检索作品。回答「我收藏过的关于X的内容」这类问题的主入口。"
+            "可按关键词(匹配文案/作者/音乐名)、来源、话题标签、作者组合筛选。"
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "关键词,匹配文案/作者/音乐名"},
+                "source": {"type": "string", "enum": ["collection", "like", "post"],
+                           "description": "collection=收藏, like=点赞, post=我发布的"},
+                "tag": {"type": "string", "description": "话题标签(不带#),大小写不敏感"},
+                "author": {"type": "string", "description": "作者昵称,需完全匹配"},
+                "sort": {"type": "string", "enum": ["collected", "published", "duration", "author"],
+                         "default": "collected"},
+                "limit": {"type": "integer", "default": 20, "maximum": 100},
+            },
+        },
+    ),
+    Tool(
+        name="library_stats",
+        description="知识库概览:总条数、各来源分布、有文案数、作者数,以及热门话题标签。",
+        inputSchema={"type": "object", "properties": {
+            "top_tags": {"type": "integer", "default": 20, "maximum": 100}}},
+    ),
+    Tool(
+        name="collect_status",
+        description=(
+            "采集进度与下一步计划:每类「已采 / 抖音平台总数 / 完成度」,"
+            "以及当前是否有采集在跑(可能来自命令行或网页)。"
+            "缺口不一定是漏采 —— 原作者删稿后抖音列表就拉不到,但计数器还算着。"
+        ),
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    Tool(
+        name="collect_smart",
+        description=(
+            "触发智能采集(日常唯一需要的采集动作)。每类自动判断续采/增量/跳过,"
+            "403 自动指数退避。同一时刻只允许一个采集,命令行或网页在采时会被拒。"
+        ),
+        inputSchema={"type": "object", "properties": {
+            "wait": {"type": "boolean", "default": False,
+                     "description": "true=等跑完(可能几分钟);false=立刻返回,之后用 collect_status 查"}}},
+    ),
+    Tool(
+        name="collect_scope",
+        description=(
+            "只采某一类。日常请用 collect_smart。"
+            "mode: sync=从最新只找新增(不动深挖游标);resume=从断点往历史采;"
+            "fresh=清游标完整重采(慎用)。"
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "scope": {"type": "string", "enum": ["collection", "like", "post"]},
+                "mode": {"type": "string", "enum": ["resume", "sync", "fresh"], "default": "sync"},
+                "max_items": {"type": "integer"},
+            },
+            "required": ["scope"],
+        },
+    ),
+    Tool(
+        name="refresh_totals",
+        description=(
+            "刷新「平台总数」(完整度的分母),从抖音 self 端点取作品/点赞/收藏三个官方计数。"
+            "也可用 manual_scope + manual_total 手填覆盖。"
+        ),
+        inputSchema={"type": "object", "properties": {
+            "manual_scope": {"type": "string", "enum": ["collection", "like", "post"]},
+            "manual_total": {"type": "integer"}}},
+    ),
+    Tool(
+        name="rebuild_tags",
+        description="从作品文案重抽 #话题标签。纯本地计算,不发网络请求。",
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    Tool(
+        name="auth_status",
+        description=(
+            "登录与环境状态,以及缺什么该跑哪条命令。"
+            "扫码登录无法由 AI 代跑(需真人扫码),这里只做诊断。"
+        ),
+        inputSchema={"type": "object", "properties": {}},
+    ),
+]
+
+_HANDLERS = {
+    "search_videos": lambda a: search_videos(**a),
+    "library_stats": lambda a: library_stats(**a),
+    "collect_status": lambda a: collect_status(),
+    "collect_smart": lambda a: collect_smart(**a),
+    "collect_scope": lambda a: collect_scope(**a),
+    "refresh_totals": lambda a: refresh_totals(**a),
+    "rebuild_tags": lambda a: rebuild_tags(),
+    "auth_status": lambda a: auth_status(),
+}
+
+
+@app.list_tools()
+async def _list_tools() -> list[Tool]:
+    return _TOOLS
+
+
+@app.call_tool()
+async def _call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextContent]:
+    fn = _HANDLERS.get(name)
+    if not fn:
+        payload: Any = {"error": f"未知工具:{name}"}
+    else:
+        try:
+            payload = await fn(arguments or {})
+        except TypeError as e:      # 参数不匹配,报清楚而不是栈
+            payload = {"error": f"参数错误:{e}"}
+    return [TextContent(type="text", text=json.dumps(payload, ensure_ascii=False, indent=2))]
+
+
+async def _main() -> None:
     service.ORIGIN = "mcp"      # 采集记录里能区分是 AI 触发的
-    asyncio.run(app.run_stdio_async())
+    async with stdio_server() as (read, write):
+        await app.run(read, write, app.create_initialization_options())
+
+
+if __name__ == "__main__":
+    asyncio.run(_main())

@@ -18,6 +18,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import _pyversion
+_pyversion.check()   # Python 版本不对就早失败,别让人撞 Rust 编译错误
+
 from config import settings  # noqa: E402
 from db import store  # noqa: E402
 

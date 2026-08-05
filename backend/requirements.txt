@@ -13,8 +13,12 @@ pydantic-settings>=2.7
 python-dotenv>=1.0
 
 # MCP 服务(让 AI 直接查库 / 触发采集)
-# ⚠️ 装它会把 pydantic 升到 2.13,而 f2 钉的是 pydantic==2.9.*,
-#    `pip check` 会报冲突。已实测 f2 在 2.13 下功能正常(pydantic 模型
-#    model_dump、ABogus 签名、真实采集全部通过),所以这条警告可以忽略。
-#    若将来 f2 真的挂了,把 mcp 拆到独立 venv 用子进程调即可。
-mcp>=1.2
+# 上界必须钉死。f2 要求 pydantic==2.9.*,而:
+#   mcp 2.x   → 需要 pydantic>=2.12
+#   mcp 1.13+ → 需要 pydantic>=2.11
+# 都和 f2 冲突。只有 mcp 1.12.x 能与 pydantic 2.9 共存,`pip check` 才干净。
+# 踩过两次坑:
+#   ① 只写 `mcp>=1.2`:我的环境解析到 2.0、干净克隆解析到 1.12.4,
+#      同一份代码一边能跑一边 ModuleNotFoundError(2.x API 完全不同)。
+#   ② 放宽到 `<2`:又会解析到 1.29,再次和 f2 的 pydantic 钉子冲突。
+mcp>=1.9,<1.13

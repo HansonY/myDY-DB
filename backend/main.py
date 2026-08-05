@@ -14,6 +14,9 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import _pyversion
+_pyversion.check()   # Python 版本不对就早失败,别让人撞 Rust 编译错误
+
 import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
