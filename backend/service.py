@@ -58,6 +58,7 @@ async def _run(
     on_progress: Callable[[dict], None] | None = None,
     stop_after_known_pages: int = 0,
     max_pages: int = 0,
+    persist_cursor: bool = True,
 ) -> dict[str, Any]:
     """通用采集循环。page_iter_factory(start_cursor) → 异步页生成器。
 
@@ -71,9 +72,16 @@ async def _run(
     store.init_db()
     guard_single_run()      # 无论从命令行还是网页进来,都先看库里有没有别人在跑
 
-    if not resume:
-        store.clear_cursor(scope)
-    start_cursor = store.load_cursor(scope) if resume else 0
+    # 游标记录的是「历史翻到哪了」,只属于 resume 模式。
+    # sync 从最新开始扫,绝不能碰它 —— 否则会把深挖进度覆盖成「最新往下几页」,
+    # 之后 resume 就一直在重走已知区域。实测踩过:收藏游标被 sync 重置到
+    # 2026-01,而库里最早的收藏在 2020 年,续采抓了 470 条零新增。
+    if resume:
+        start_cursor = store.load_cursor(scope)
+    else:
+        start_cursor = 0
+        if persist_cursor:          # 只有显式 --fresh 才真的清掉深挖进度
+            store.clear_cursor(scope)
 
     run_id = store.start_run(scope, origin=ORIGIN)
     fetched = inserted = pages = 0
@@ -92,7 +100,7 @@ async def _run(
             # 增量同步:这一页没带来新条目就累计,连续多页如此说明追上了。
             # 空页也算 —— 它同样代表「没有新东西」。
             known_streak = known_streak + 1 if new_here == 0 else 0
-            if max_cursor:
+            if max_cursor and persist_cursor:
                 await asyncio.to_thread(store.save_cursor, scope, max_cursor)
 
             info = {
@@ -228,9 +236,15 @@ async def _refresh_tags(inserted: int) -> None:
 SYNC_KNOWN_PAGES = 3
 
 
-def _sync_args(sync: bool, resume: bool) -> tuple[bool, int]:
-    """sync 模式必须从最新开始扫(resume=False),否则只会越翻越旧。"""
-    return (False, SYNC_KNOWN_PAGES) if sync else (resume, 0)
+def _sync_args(sync: bool, resume: bool) -> tuple[bool, int, bool]:
+    """返回 (resume, stop_after_known_pages, persist_cursor)。
+
+    sync 必须从最新开始扫(resume=False),否则只会越翻越旧;
+    并且**不能持久化游标** —— 游标是 resume 的深挖进度,被 sync 覆盖就丢了。
+    """
+    if sync:
+        return (False, SYNC_KNOWN_PAGES, False)
+    return (resume, 0, True)
 
 
 async def collect_favorites(
@@ -241,7 +255,7 @@ async def collect_favorites(
     max_pages: int = 0,
 ) -> dict[str, Any]:
     limit = max_items if max_items is not None else settings.max_items
-    resume, stop = _sync_args(sync, resume)
+    resume, stop, keep = _sync_args(sync, resume)
     return await _run(
         "collection",
         lambda cur: douyin.collect_favorites(max_items=limit, start_cursor=cur),
@@ -249,6 +263,7 @@ async def collect_favorites(
         on_progress,
         stop,
         max_pages,
+        keep,
     )
 
 
@@ -287,7 +302,7 @@ async def collect_likes(
 ) -> dict[str, Any]:
     sec_user_id = await own_sec_user_id()
     limit = max_items if max_items is not None else settings.max_items
-    resume, stop = _sync_args(sync, resume)
+    resume, stop, keep = _sync_args(sync, resume)
     return await _run(
         "like",
         lambda cur: douyin.collect_likes(
@@ -297,6 +312,7 @@ async def collect_likes(
         on_progress,
         stop,
         max_pages,
+        keep,
     )
 
 
@@ -309,7 +325,7 @@ async def collect_posts(
 ) -> dict[str, Any]:
     sec_user_id = await own_sec_user_id()
     limit = max_items if max_items is not None else settings.max_items
-    resume, stop = _sync_args(sync, resume)
+    resume, stop, keep = _sync_args(sync, resume)
     return await _run(
         "post",
         lambda cur: douyin.collect_posts(
@@ -319,6 +335,7 @@ async def collect_posts(
         on_progress,
         stop,
         max_pages,
+        keep,
     )
 
 
