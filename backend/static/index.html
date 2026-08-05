@@ -131,6 +131,17 @@ select:focus{outline:none;border-color:var(--accent-line)}
 .link:hover{text-decoration:underline}
 .vsep{width:1px;align-self:stretch;background:var(--line);margin:0 3px}
 
+/* 当前筛选:必须存在。作者/标签的可点入口只列 Top N,一旦筛的对象不在其中,
+   下拉会显示空白、标签也不会高亮 —— 用户就看不出正在按什么筛。 */
+.act-f{display:inline-flex;align-items:center;gap:6px;padding:3px 6px 3px 10px;
+  border-radius:7px;font-size:12px;background:var(--accent-dim);
+  border:1px solid var(--accent-line);color:#a9cdec}
+.act-f i{font-style:normal;opacity:.62;margin-right:1px}
+.act-f button{background:none;border:none;color:inherit;cursor:pointer;
+  padding:0 2px;line-height:1;opacity:.65;font-size:14px}
+.act-f button:hover{opacity:1}
+.act-lbl{font-size:11.5px;color:var(--dim-2);margin-right:2px}
+
 /* 采集计划:说明文字,非控件 —— 刻意做轻 */
 .plan{display:flex;gap:16px;flex-wrap:wrap;align-items:center;font-size:11.5px;color:var(--dim-2)}
 .plan .p{display:inline-flex;gap:5px;align-items:center}
@@ -220,7 +231,10 @@ main{max-width:1400px;margin:0 auto;padding:14px 20px 64px}
 .empty{text-align:center;padding:72px 20px;color:var(--dim)}
 .empty svg{width:26px;height:26px;stroke-width:1.3;margin:0 auto 12px;color:var(--dim-2)}
 .empty code{font-family:var(--mono);background:var(--surface-2);padding:2px 6px;border-radius:5px;color:var(--fg)}
-footer{max-width:1400px;margin:0 auto;padding:20px;display:flex;gap:8px;justify-content:center;align-items:center}
+/* 页尾:给一条上边线,明确「本页到此结束」,避免网格末行的空白被误读成内容断了 */
+footer{max-width:1400px;margin:18px auto 0;padding:16px 20px 8px;
+  display:flex;gap:10px;justify-content:center;align-items:center;flex-wrap:wrap;
+  border-top:1px solid var(--line)}
 .pg{padding:7px 13px;border-radius:8px;border:1px solid var(--line-2);background:var(--surface);
   color:var(--fg-2);cursor:pointer;font-size:12.5px}
 .pg:hover:not(:disabled){border-color:#39414e;color:var(--fg)}
@@ -294,6 +308,12 @@ footer{max-width:1400px;margin:0 auto;padding:20px;display:flex;gap:8px;justify-
           <option value="author">作者</option>
         </select>
         <select id="author"><option value="">全部作者</option></select>
+        <select id="psize" title="每页显示条数">
+          <option value="50">每页 50</option>
+          <option value="100">每页 100</option>
+          <option value="200">每页 200</option>
+          <option value="500">每页 500</option>
+        </select>
         <div class="seg" style="margin-left:auto">
           <button id="v-list" class="on">列表</button>
           <button id="v-grid">网格</button>
@@ -301,6 +321,7 @@ footer{max-width:1400px;margin:0 auto;padding:20px;display:flex;gap:8px;justify-
         <button class="chip" id="b-reset">重置</button>
       </div>
       <div class="row" id="tags" style="gap:6px"></div>
+      <div class="row" id="active" style="gap:6px"></div>
     </div>
   </div>
 
@@ -337,7 +358,9 @@ const ACTS = [
    hint:'只列出收藏夹清单,不采里面的内容(采内容用命令行 cli.py folder <id>)'},
 ];
 
-let offset=0, limit=50, total=0;
+let offset=0, total=0;
+// 每页条数记住选择:2485 条按 50/页 要翻 50 页,默认给 100
+let limit = +(localStorage.getItem('dydb.limit') || 100);
 let q='', source='', sort='collected', author='', tag='';
 let view = localStorage.getItem('dydb.view') || 'list';
 let tagsOpen=false, polling=null;
@@ -376,7 +399,7 @@ async function loadStats(){
     `<span class="chip${source?'':' on'}" data-s="">全部<span class="n">${s.total}</span></span>` +
     es.map(([k,v]) => `<span class="chip${source===k?' on':''}" data-s="${k}">${SRC[k]||k}<span class="n">${v}</span></span>`).join('');
   $('#srcs').querySelectorAll('.chip').forEach(el => el.onclick = () => {
-    source=el.dataset.s; offset=0; loadStats(); loadList();
+    source=el.dataset.s; offset=0; loadStats(); loadActive(); loadList();
   });
 
   const box=$('#notices'); box.querySelector('.ck')?.remove();
@@ -403,9 +426,30 @@ async function loadTags(){
       `<span class="chip${tag===t.tag?' on':''}" data-t="${esc(t.tag)}">#${esc(t.tag)}<span class="n">${t.n}</span></span>`).join('')
     + (d.items.length>16 ? `<button class="link" id="t-more">${tagsOpen?'收起':`+${d.items.length-16} 个标签`}</button>` : '');
   $('#tags').querySelectorAll('.chip').forEach(el => el.onclick = () => {
-    tag = tag===el.dataset.t ? '' : el.dataset.t; offset=0; loadTags(); loadList();
+    tag = tag===el.dataset.t ? '' : el.dataset.t; offset=0; loadTags(); loadActive(); loadList();
   });
   const m=$('#t-more'); if(m) m.onclick=()=>{ tagsOpen=!tagsOpen; loadTags(); };
+}
+
+/* 把当前生效的筛选全部显示出来,每个可单独撤销 */
+function loadActive(){
+  const fs = [
+    q      && {k:'搜索', v:q,             clear:()=>{ q=''; $('#q').value=''; }},
+    source && {k:'来源', v:SRC[source]||source, clear:()=>{ source=''; }},
+    author && {k:'作者', v:author,        clear:()=>{ author=''; $('#author').value=''; }},
+    tag    && {k:'标签', v:'#'+tag,       clear:()=>{ tag=''; }},
+  ].filter(Boolean);
+
+  if(!fs.length){ $('#active').innerHTML=''; return; }
+  $('#active').innerHTML = '<span class="act-lbl">当前筛选</span>' +
+    fs.map((f,i)=>`<span class="act-f"><i>${f.k}</i>${esc(f.v)}<button data-i="${i}" title="移除">×</button></span>`).join('') +
+    `<button class="link" id="f-clear">全部清空</button>`;
+
+  $('#active').querySelectorAll('.act-f button').forEach(b => b.onclick = () => {
+    fs[+b.dataset.i].clear(); offset=0;
+    loadStats(); loadTags(); loadActive(); loadList();
+  });
+  $('#f-clear').onclick = resetAll;
 }
 
 async function loadAuthors(){
@@ -475,22 +519,26 @@ async function loadList(){
     ? `<div class="grid">${d.items.map(gridCell).join('')}</div>`
     : `<div class="rows">${d.items.map(listRow).join('')}</div>`;
 
+  // 页尾要说清楚「本页到这里为止」。网格最后一行必然有余数
+  // (列数随窗口宽度变),不明说的话那片空白会被当成内容断了。
   const pages=Math.ceil(total/limit), cur=Math.floor(offset/limit)+1;
-  $('#pager').innerHTML = pages>1
-    ? `<button class="pg" ${offset?'':'disabled'} onclick="go(-1)">← 上一页</button>
-       <span class="pg i">${cur} / ${pages} · 共 ${total.toLocaleString()} 条</span>
-       <button class="pg" ${cur>=pages?'disabled':''} onclick="go(1)">下一页 →</button>`
-    : `<span class="pg i">共 ${total.toLocaleString()} 条</span>`;
+  const from=offset+1, to=offset+d.items.length;
+  $('#pager').innerHTML = `
+    <span class="pg i">本页 ${d.items.length} 条已全部显示 · 第 ${from.toLocaleString()}–${to.toLocaleString()} 条 / 共 ${total.toLocaleString()} 条</span>
+    ${pages>1 ? `
+      <button class="pg" ${offset?'':'disabled'} onclick="go(-1)">← 上一页</button>
+      <span class="pg i">${cur} / ${pages}</span>
+      <button class="pg" ${cur>=pages?'disabled':''} onclick="go(1)">下一页 →</button>` : ''}`;
 }
 
 window.go = d => { offset=Math.max(0,offset+d*limit); loadList(); scrollTo({top:0,behavior:'smooth'}); };
 window.tg = b => { const e=b.previousElementSibling; e.classList.toggle('open');
   b.textContent = e.classList.contains('open')?'收起':'展开全文'; };
-window.byAuthor = n => { author = author===n?'':n; $('#author').value=author; offset=0; loadList(); };
-window.byTag = t => { tag = tag===t?'':t; offset=0; loadTags(); loadList(); };
+window.byAuthor = n => { author = author===n?'':n; $('#author').value=author; offset=0; loadActive(); loadList(); };
+window.byTag = t => { tag = tag===t?'':t; offset=0; loadTags(); loadActive(); loadList(); };
 window.resetAll = () => { q=source=author=tag=''; sort='collected'; offset=0;
   $('#q').value=''; $('#author').value=''; $('#sort').value='collected';
-  loadStats(); loadTags(); loadList(); };
+  loadStats(); loadTags(); loadActive(); loadList(); };
 
 function setView(v){ view=v; localStorage.setItem('dydb.view',v);
   $('#v-list').classList.toggle('on',v==='list'); $('#v-grid').classList.toggle('on',v==='grid'); loadList(); }
@@ -543,13 +591,20 @@ $('#b-reset').onclick = resetAll;
 $('#v-list').onclick  = () => setView('list');
 $('#v-grid').onclick  = () => setView('grid');
 $('#sort').onchange   = e => { sort=e.target.value; offset=0; loadList(); };
-$('#author').onchange = e => { author=e.target.value; offset=0; loadList(); };
+$('#author').onchange = e => { author=e.target.value; offset=0; loadActive(); loadList(); };
+$('#psize').onchange  = e => {
+  limit = +e.target.value;
+  localStorage.setItem('dydb.limit', limit);
+  offset = 0;                     // 换页大小后页码必须归零,否则可能落到不存在的页
+  loadList(); scrollTo({top:0,behavior:'smooth'});
+};
 let dt; $('#q').oninput = e => { clearTimeout(dt);
-  dt=setTimeout(()=>{ q=e.target.value.trim(); offset=0; loadList(); },250); };
+  dt=setTimeout(()=>{ q=e.target.value.trim(); offset=0; loadActive(); loadList(); },250); };
 
 (async()=>{
   renderActs(); setView(view);
-  await loadStats(); await loadAuthors(); await loadTags(); await loadPlan();
+  $('#psize').value = limit;
+  await loadStats(); await loadAuthors(); await loadTags(); await loadPlan(); loadActive();
   await loadList(); await pollRuns();
 })();
 </script>

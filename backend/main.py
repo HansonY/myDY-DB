@@ -82,7 +82,8 @@ async def get_videos(
     nickname: str | None = None,
     tag: str | None = None,
     sort: str = "collected",
-    limit: int = Query(50, ge=1, le=200),
+    # 上限放宽到 500:网格视图下每页 50 条要翻 50 页,太碎
+    limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ) -> dict[str, Any]:
     items = await asyncio.to_thread(
