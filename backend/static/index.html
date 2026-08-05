@@ -37,6 +37,9 @@
   --ease:cubic-bezier(.16,1,.3,1);
 }
 *{box-sizing:border-box}
+/* hidden 属性靠浏览器默认样式的 display:none 生效,任何作者写的 display
+   (比如 .prog{display:grid})都会盖掉它 —— 必须显式提权,否则折叠失效。 */
+[hidden]{display:none !important}
 html{-webkit-text-size-adjust:100%}
 body{
   margin:0;
@@ -166,6 +169,20 @@ select:focus{outline:none;border-color:var(--accent-line)}
 .prog .hd{grid-column:1/-1;color:var(--dim-2);opacity:.8;margin-bottom:1px;
   display:flex;gap:8px;align-items:center}
 
+/* 渐进披露:2500+ 条的界面里,采集进度是「偶尔要看」的信息,
+   默认折叠成一行摘要,别占掉浏览区的垂直空间。 */
+.disc{display:inline-flex;align-items:center;gap:8px;padding:4px 9px;
+  border-radius:7px;border:1px solid transparent;background:none;cursor:pointer;
+  color:var(--dim);font-size:11.5px;font-family:inherit;text-align:left;
+  transition:background .14s var(--ease),color .14s var(--ease)}
+.disc:hover{background:var(--surface);color:var(--fg-2)}
+.disc b{font-family:var(--mono);color:var(--fg-2);font-weight:500}
+/* 必须显式限尺寸:.btn svg 那条规则不覆盖 .disc,不限的话 SVG 会撑满整行 */
+.disc svg{width:12px;height:12px;stroke-width:1.7}
+.disc .caret{transition:transform .18s var(--ease);opacity:.6}
+.disc[aria-expanded="true"] .caret{transform:rotate(180deg)}
+.disc .warn-dot{width:5px;height:5px;border-radius:50%;background:var(--warn)}
+
 /* ══ 提示条 ════════════════════════════════════════════════ */
 main{max-width:1400px;margin:0 auto;padding:14px 20px 64px}
 .notice{display:flex;gap:9px;align-items:flex-start;padding:10px 13px;border-radius:9px;
@@ -242,6 +259,47 @@ main{max-width:1400px;margin:0 auto;padding:14px 20px 64px}
 .gf .a{font-size:11.5px;color:var(--fg-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gf .d{font-family:var(--mono);font-size:10.5px;color:var(--dim-2)}
 
+/* ══ 详情弹层 ══════════════════════════════════════════════
+   知识库的核心动作是「读内容」。网格里文案被截断,列表里也只显示 5 行 ——
+   所以需要一个能看全文的地方,而不是每次都跳去抖音。
+   模态是少数正当的 z-index 层(系统层),这里只用 transform/opacity 动画。 */
+.mask{position:fixed;inset:0;z-index:60;display:grid;place-items:center;padding:22px;
+  /* 不用 backdrop-filter:它会另建合成层,部分环境(含无头截图)渲染不可靠。
+     遮罩本身 88% 不透明已经足够压住背景,毛玻璃属于可有可无。 */
+  background:rgba(6,8,11,.88);
+  animation:fade .16s var(--ease)}
+@keyframes fade{from{opacity:0}}
+.sheet{position:relative;z-index:1;
+  width:min(760px,100%);max-height:min(84vh,760px);display:flex;flex-direction:column;
+  background:var(--surface);border:1px solid var(--line-2);border-radius:14px;
+  box-shadow:0 24px 64px -20px rgba(0,0,0,.8), inset 0 1px 0 rgba(255,255,255,.04);
+  animation:rise .2s var(--ease)}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}}
+.sheet header{display:flex;gap:12px;align-items:flex-start;padding:15px 16px;
+  border-bottom:1px solid var(--line);position:static;background:none;backdrop-filter:none}
+.sheet .st{min-width:0;flex:1}
+.sheet .sa{font-size:14px;font-weight:560;color:var(--fg);cursor:pointer}
+.sheet .sa:hover{color:var(--accent)}
+.sheet .sm{display:flex;gap:9px;flex-wrap:wrap;margin-top:3px;
+  font-size:11.5px;color:var(--dim-2);font-family:var(--mono)}
+.sheet .x{background:none;border:none;color:var(--dim);cursor:pointer;
+  font-size:20px;line-height:1;padding:0 4px;flex:0 0 auto}
+.sheet .x:hover{color:var(--fg)}
+.sbody{display:flex;gap:16px;padding:16px;overflow-y:auto;flex:1}
+.sbody .pic{flex:0 0 168px}
+.sbody .pic .cover{width:168px;height:224px;flex:none}
+.sfull{min-width:0;flex:1;white-space:pre-wrap;word-break:break-word;
+  font-size:14.5px;line-height:1.72;color:var(--fg-2)}
+.sfull.none{color:var(--dim-2);font-style:italic}
+.sheet footer{display:flex;gap:7px;flex-wrap:wrap;align-items:center;
+  padding:12px 16px;border-top:1px solid var(--line)}
+.sheet footer .go{margin-left:auto}
+@media(max-width:640px){
+  .mask{padding:10px}
+  .sbody{flex-direction:column}
+  .sbody .pic{flex:none;align-self:flex-start}
+}
+
 /* ══ 骨架 / 空态 / 分页 ════════════════════════════════════ */
 .sk{height:92px;border-bottom:1px solid var(--line);
   background:linear-gradient(90deg,var(--surface) 25%,var(--surface-2) 50%,var(--surface) 75%);
@@ -289,6 +347,7 @@ footer{max-width:1400px;margin:18px auto 0;padding:16px 20px 8px;
   <g id="i-img"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M4 17l5-4.5 4 3.5 3-2.5 4 3.5"/></g>
   <g id="i-key"><circle cx="8" cy="14" r="4"/><path d="M11 11l8-8"/><path d="M16 3h4v4"/></g>
   <g id="i-warn"><path d="M12 4.5L21 19.5H3z"/><path d="M12 10v4"/><path d="M12 17h.01"/></g>
+  <g id="i-caret"><path d="M6 9.5l6 6 6-6"/></g>
   <g id="i-check"><path d="M4.5 12.5l5 5 10-11"/></g>
   <g id="i-inbox"><path d="M3.5 12.5h4l1.5 3h6l1.5-3h4"/><path d="M5.5 5.5h13l2 7v6a1.5 1.5 0 0 1-1.5 1.5h-14A1.5 1.5 0 0 1 3.5 18.5v-6z"/></g>
 </defs></svg>
@@ -306,7 +365,8 @@ footer{max-width:1400px;margin:18px auto 0;padding:16px 20px 8px;
     <div class="ztag"><em>01</em>采集</div>
     <div class="zbody">
       <div class="row" id="acts"></div>
-      <div class="prog" id="plan"></div>
+      <button class="disc" id="prog-toggle" aria-expanded="false" aria-controls="plan"></button>
+      <div class="prog" id="plan" hidden></div>
     </div>
   </div>
 
@@ -384,6 +444,7 @@ let limit = +(localStorage.getItem('dydb.limit') || 100);
 let q='', source='', sort='collected', author='', tag='';
 let view = localStorage.getItem('dydb.view') || 'list';
 let tagsOpen=false, polling=null;
+let shown = new Map();          // 当前页 aweme_id → 作品,详情弹层用
 
 /* 时长跨三个量级:30 秒短视频、8 分钟长视频、24 小时直播回放 */
 function dur(ms){
@@ -466,6 +527,21 @@ async function loadPlan(){
     `<div class="hd"><span>采集进度(已采 / 平台总数)</span>
        <button class="set" id="p-refresh" title="向抖音取一次官方计数">刷新计数</button></div>` + rows;
 
+  // 折叠态的一行摘要:只说结论 —— 总进度、是否有待采、是否在冷却
+  const got = d.steps.reduce((n,x)=>n+x.collected, 0);
+  const tot = d.steps.reduce((n,x)=>n+(x.total||0), 0);
+  const todo = d.steps.filter(x=>x.short && !x.gap_permanent);
+  const cool = d.steps.filter(x=>x.action==='skip');
+  const bits = [];
+  if(todo.length) bits.push(`${todo.map(x=>esc(x.label)).join('、')}待采 ${n0(todo.reduce((n,x)=>n+x.gap,0))}`);
+  if(cool.length) bits.push(`${cool.map(x=>esc(x.label)).join('、')}冷却中`);
+  if(!bits.length) bits.push('均已同步至最新');
+
+  $('#prog-toggle').innerHTML =
+    `${ico('i-caret','caret')}采集进度 <b>${n0(got)}${tot?` / ${n0(tot)}`:''}</b>` +
+    `<span style="opacity:.8">· ${bits.join(' · ')}</span>` +
+    ((todo.length||cool.length) ? '<span class="warn-dot"></span>' : '');
+
   $('#p-refresh').onclick = async () => {
     const b=$('#p-refresh'); b.disabled=true; b.textContent='取数中…';
     try{ await api('/api/collect/totals/refresh',{method:'POST'}); await loadPlan(); }
@@ -547,7 +623,7 @@ function listRow(v){
   const fold=(v.folders||'').split(',').filter(Boolean);
   const hs=(v.tags||'').split(',').filter(Boolean).slice(0,6);
   return `<div class="r">
-    ${cover(v,'thumb')}
+    <span style="cursor:zoom-in" onclick="detail('${esc(v.aweme_id)}')">${cover(v,'thumb')}</span>
     <div class="rb">
       <div class="rm">
         <span class="who" onclick="byAuthor('${jsq(v.nickname)}')">${esc(v.nickname)||'未知作者'}</span>
@@ -556,6 +632,7 @@ function listRow(v){
       </div>
       <div class="txt${t?'':' none'}">${t?esc(t):'（无文案）'}</div>
       ${long?`<button class="link" onclick="tg(this)">展开全文</button>`:''}
+      <button class="link" style="align-self:flex-start" onclick="detail('${esc(v.aweme_id)}')">详情</button>
       <div class="pills">
         ${srcs.map(s=>`<span class="pill src">${SRC[s]||s}</span>`).join('')}
         ${fold.map(f=>`<span class="pill">${esc(f)}</span>`).join('')}
@@ -567,7 +644,8 @@ function listRow(v){
 
 function gridCell(v){
   const t=(v.description||'').trim();
-  return `<div class="g" onclick="window.open('${esc(v.share_url)}','_blank')">
+  // 点卡片开详情而不是直接跳抖音 —— 网格里文案被截断,先给个能读全文的地方
+  return `<div class="g" onclick="detail('${esc(v.aweme_id)}')">
     <div style="position:relative">${cover(v,'gc')}${t?`<div class="gt">${esc(t)}</div>`:''}</div>
     <div class="gf"><span class="a">${esc(v.nickname)||'未知作者'}</span>
       <span class="d">${esc(day(v.create_time))}</span></div></div>`;
@@ -577,6 +655,7 @@ async function loadList(){
   if(!$('#out').innerHTML) $('#out').innerHTML = `<div class="rows">${'<div class="sk"></div>'.repeat(6)}</div>`;
   const d = await api('/api/videos?'+qs());
   total = d.total;
+  shown = new Map(d.items.map(v => [String(v.aweme_id), v]));   // 详情弹层直接取,不再多请求
 
   if(!d.items.length){
     $('#out').innerHTML = (q||source||author||tag)
@@ -600,6 +679,59 @@ async function loadList(){
       <span class="pg i">${cur} / ${pages}</span>
       <button class="pg" ${cur>=pages?'disabled':''} onclick="go(1)">下一页 →</button>` : ''}`;
 }
+
+/* ── 详情弹层:能读全文的地方 ───────────────────────────── */
+window.detail = async id => {
+  let v = shown.get(String(id));
+  if(!v){                                   // 兜底:比如从别处跳进来
+    try { v = await api('/api/videos/'+encodeURIComponent(id)); }
+    catch(e){ return warn(esc(e.message)); }
+  }
+  const t = (v.description || '').trim();
+  const srcs = (v.sources || '').split(',').filter(Boolean);
+  const hs = (v.tags || '').split(',').filter(Boolean);
+
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="mask" id="sheet">
+      <div class="sheet" role="dialog" aria-modal="true" onclick="event.stopPropagation()">
+        <header>
+          <div class="st">
+            <div class="sa" onclick="byAuthor('${jsq(v.nickname)}');closeSheet()"
+                 title="只看这个作者">${esc(v.nickname) || '未知作者'}</div>
+            <div class="sm">
+              <span>${esc((v.create_time||'').slice(0,10))}</span>
+              ${v.video_duration?`<span>${dur(v.video_duration)}</span>`:''}
+              <span>${esc(v.aweme_id)}</span>
+            </div>
+          </div>
+          <button class="x" onclick="closeSheet()" title="关闭(Esc)">×</button>
+        </header>
+        <div class="sbody">
+          <div class="pic">${cover(v,'cover')}</div>
+          <div class="sfull${t?'':' none'}">${t?esc(t):'（这条作品没有文案 —— 需要视觉理解才能补全内容）'}</div>
+        </div>
+        <footer>
+          ${srcs.map(x=>`<span class="pill src">${SRC[x]||x}</span>`).join('')}
+          ${hs.map(x=>`<span class="pill h" onclick="byTag('${jsq(x)}');closeSheet()">#${esc(x)}</span>`).join('')}
+          ${v.music_title?`<span class="pill">${esc(v.music_title)}</span>`:''}
+          <a class="btn primary go" href="${esc(v.share_url)}" target="_blank"
+             rel="noreferrer">${ico('i-ext')}在抖音打开</a>
+        </footer>
+      </div>
+    </div>`);
+
+  const mask = $('#sheet');
+  mask.onclick = closeSheet;                       // 点遮罩关闭
+  document.addEventListener('keydown', _esc);
+  document.body.style.overflow = 'hidden';         // 防背景滚动
+};
+
+function _esc(e){ if(e.key === 'Escape') closeSheet(); }
+window.closeSheet = () => {
+  $('#sheet')?.remove();
+  document.removeEventListener('keydown', _esc);
+  document.body.style.overflow = '';
+};
 
 window.go = d => { offset=Math.max(0,offset+d*limit); loadList(); scrollTo({top:0,behavior:'smooth'}); };
 window.tg = b => { const e=b.previousElementSibling; e.classList.toggle('open');
@@ -690,6 +822,15 @@ async function doFolders(){
   busy(false);
 }
 
+// 采集进度默认折叠(渐进披露),状态记住
+function setProgOpen(open){
+  localStorage.setItem('dydb.progOpen', open ? '1' : '0');
+  $('#plan').hidden = !open;
+  $('#prog-toggle').setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+$('#prog-toggle').onclick = () =>
+  setProgOpen($('#prog-toggle').getAttribute('aria-expanded') !== 'true');
+
 $('#b-reset').onclick = resetAll;
 $('#v-list').onclick  = () => setView('list');
 $('#v-grid').onclick  = () => setView('grid');
@@ -707,6 +848,7 @@ let dt; $('#q').oninput = e => { clearTimeout(dt);
 (async()=>{
   renderActs(); setView(view);
   $('#psize').value = limit;
+  setProgOpen(localStorage.getItem('dydb.progOpen') === '1');
   await loadStats(); await loadAuthors(); await loadTags(); await loadPlan(); loadActive();
   await loadList(); await pollRuns();
 })();
