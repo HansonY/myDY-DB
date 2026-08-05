@@ -1,6 +1,10 @@
 -- Douyin-DB schema
 -- 设计原则:
---   1. raw_json 全量留档 —— 以后要补字段不必重新采集(重采才是风控风险)
+--   1. **「存什么」和「用什么」是两回事**。
+--      存:raw_z 里是完整响应,一个字段都不丢 —— 重采要冒 403,媒体地址还带
+--          x-expires 会过期,丢了就真拿不回来。体积用压缩解决,不用删字段解决。
+--      用:下面那些提升出来的列只是「这一轮要用的」,以后想加字段直接从 raw
+--          解析再补列,不必重采。
 --   2. 文本层与作品层分离 —— 同一作品可有 文案/字幕/ASR/视觉理解 多个来源
 --   3. 游标独立存表 —— 支持断点续跑
 
@@ -24,10 +28,12 @@ CREATE TABLE IF NOT EXISTS videos (
     share_url       TEXT,                      -- 可直接点开的作品链接
     is_prohibited   INTEGER DEFAULT 0,
     author_deleted  INTEGER DEFAULT 0,
-    -- ⚠️ raw_json 曾经只存 f2 提取后的 31 个字段,而抖音真实响应有 787 个 ——
-    -- 等于每条丢掉 750+ 字段(互动数据、视频地址、雪碧图、结构化话题…)。
-    -- 现在存**真实响应原文**,以后要新字段直接从这里解析,不必重采。
-    raw_json        TEXT,
+    -- ⚠️ 完整响应原文,zlib 压缩后存。
+    -- 早期这里叫 raw_json 且只存 f2 提取后的 31 个字段,而抖音真实响应有 787 个 ——
+    -- 等于每条丢掉 750+ 字段(互动数据、视频地址、结构化话题…)。
+    -- 现在一个字段都不删:明文 84 KB/条 → 压缩后 17 KB/条(实测 4.9×),
+    -- 全库 209 MB → 43 MB。读写都在 store.py 里透明处理,见 store.get_raw()。
+    raw_z           BLOB,
 
     -- ── 从 raw 提升出来的可查询字段 ────────────────────────
     -- 互动数据:判断「我收藏的这条到底好不好」的唯一客观信号
@@ -41,13 +47,20 @@ CREATE TABLE IF NOT EXISTS videos (
     -- 媒体地址(都带 x-expires,会过期 —— 想用就得尽快取)
     play_url        TEXT,                      -- 视频地址
     music_url       TEXT,                      -- 原声音轨,可直接做 ASR
-    sprite_url      TEXT,                      -- 抖音自带雪碧图(逐秒关键帧)
-    sprite_frames   INTEGER,
     -- 其它维度
     poi_name        TEXT,                      -- 拍摄地点
     mix_name        TEXT,                      -- 所属合集/连载
     is_subtitled    INTEGER DEFAULT 0,         -- 平台标记该视频有字幕
     is_deleted      INTEGER DEFAULT 0,         -- 作品已被删除
+    -- 抖音官方三级分类(如 人文社科 > 人文艺术 > 历史),实测 100% 覆盖。
+    -- 比从文案抠的 #标签 权威,可直接当类目主轴。
+    cat1            TEXT,
+    cat2            TEXT,
+    cat3            TEXT,
+    -- 抖音**自己生成的 AI 内容总结**存在 transcripts(kind='summary'),
+    -- 章节大纲存在 extractions。这里只记有没有,便于筛选。
+    has_ai_summary  INTEGER DEFAULT 0,
+
     collected_at    TEXT    NOT NULL,          -- 本地入库时间
     updated_at      TEXT    NOT NULL
 );
@@ -56,6 +69,10 @@ CREATE INDEX IF NOT EXISTS idx_videos_source      ON videos(source);
 CREATE INDEX IF NOT EXISTS idx_videos_collects    ON videos(collects_id);
 CREATE INDEX IF NOT EXISTS idx_videos_collected   ON videos(collected_at DESC);
 CREATE INDEX IF NOT EXISTS idx_videos_nickname    ON videos(nickname);
+-- 新维度的筛选/排序入口
+CREATE INDEX IF NOT EXISTS idx_videos_cat1        ON videos(cat1);
+CREATE INDEX IF NOT EXISTS idx_videos_digg        ON videos(digg_count DESC);
+CREATE INDEX IF NOT EXISTS idx_videos_summary     ON videos(has_ai_summary);
 
 -- ── 作品 ↔ 来源(多对多)──────────────────────────────────────
 -- 同一作品可能同时出现在「收藏」「点赞」和某个收藏夹里。
@@ -74,10 +91,13 @@ CREATE TABLE IF NOT EXISTS video_sources (
 CREATE INDEX IF NOT EXISTS idx_vs_source   ON video_sources(source);
 CREATE INDEX IF NOT EXISTS idx_vs_collects ON video_sources(collects_id);
 
--- ── 文本层(文案 / 字幕 / ASR / 视觉理解)──────────────────────
+-- ── 文本层(文案 / 平台AI总结 / 字幕 / ASR / 视觉理解)─────────
+-- summary 是**抖音自己生成的视频内容总结**(recommend_chapter_info.
+-- chapter_abstract),零成本零风险,实测 20% 的作品有。这才是「视频讲了什么」;
+-- desc 只是作者写的标题。
 CREATE TABLE IF NOT EXISTS transcripts (
     aweme_id    TEXT NOT NULL,
-    kind        TEXT NOT NULL,   -- desc | subtitle | asr | vision
+    kind        TEXT NOT NULL,   -- desc | summary | subtitle | asr | vision
     content     TEXT NOT NULL,
     meta        TEXT,            -- JSON:模型名/耗时/成本等
     created_at  TEXT NOT NULL,

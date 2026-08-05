@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -17,21 +18,79 @@ from config import settings
 
 SCHEMA_FILE = Path(__file__).with_name("schema.sql")
 
-# videos 表里允许写入的列(白名单,避免采集端字段变动直接打到 SQL)
+# videos 表里允许写入的列(白名单,避免采集端字段变动直接打到 SQL)。
+# 注意 raw 不在这里 —— 它要压缩,单独处理,见 _pack_raw / get_raw。
 _VIDEO_COLUMNS = (
     "aweme_id", "source", "collects_id", "collects_name", "aweme_type",
     "description", "nickname", "sec_user_id", "uid", "create_time",
     "video_duration", "cover", "music_title", "share_url",
-    "is_prohibited", "author_deleted", "raw_json",
+    "is_prohibited", "author_deleted",
     "digg_count", "comment_count", "share_count", "collect_count",
     "video_width", "video_height", "play_url", "music_url",
-    "sprite_url", "sprite_frames", "poi_name", "mix_name",
+    "poi_name", "mix_name",
     "is_subtitled", "is_deleted",
+    "cat1", "cat2", "cat3", "has_ai_summary",
 )
+
+# 列表/详情查询用的列。**不能用 `v.*`** —— 那会把 raw_z 也捞出来:
+# 一是 17 KB × 100 条 = 1.7 MB 白传给浏览器,二是 bytes 过不了 JSON 序列化。
+_SELECT_COLS = ", ".join(f"v.{c}" for c in _VIDEO_COLUMNS) + \
+               ", v.collected_at, v.updated_at, v.rowid AS rowid"
+
+# 压缩等级 9。实测 200 条真实数据:84 KB → 17.3 KB(4.9×)。
+# 这里的取舍很清楚:CPU 便宜,而丢掉的字段永远拿不回来。
+_RAW_LEVEL = 9
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+# ── raw 压缩层(对上层透明)──────────────────────────────────
+
+def _pack_raw(text: Any) -> bytes | None:
+    if not text:
+        return None
+    if not isinstance(text, str):
+        text = json.dumps(text, ensure_ascii=False, default=str)
+    return zlib.compress(text.encode("utf-8"), _RAW_LEVEL)
+
+
+def _unpack_raw(blob: Any) -> str | None:
+    if blob is None:
+        return None
+    if isinstance(blob, str):      # 迁移期:老库里还是明文 raw_json
+        return blob
+    try:
+        return zlib.decompress(blob).decode("utf-8")
+    except (zlib.error, UnicodeDecodeError):
+        return None
+
+
+def get_raw(aweme_id: str) -> dict[str, Any] | None:
+    """取一条作品的**完整原始响应**(787 个字段)。
+
+    统一出口:优先 raw_z,老库没迁移完就回退明文 raw_json。
+    想用新字段先从这里看,不必重采。
+    """
+    with connect() as conn:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(videos)")}
+        picks = [c for c in ("raw_z", "raw_json") if c in cols]
+        if not picks:
+            return None
+        row = conn.execute(
+            f"SELECT {','.join(picks)} FROM videos WHERE aweme_id = ?", (aweme_id,)
+        ).fetchone()
+    if not row:
+        return None
+    for c in picks:
+        text = _unpack_raw(row[c])
+        if text:
+            try:
+                return json.loads(text)
+            except ValueError:
+                return None
+    return None
 
 
 def connect() -> sqlite3.Connection:
@@ -51,13 +110,15 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
             "progress": "TEXT",
         },
         "videos": {
+            "raw_z": "BLOB",
             "digg_count": "INTEGER", "comment_count": "INTEGER",
             "share_count": "INTEGER", "collect_count": "INTEGER",
             "video_width": "INTEGER", "video_height": "INTEGER",
             "play_url": "TEXT", "music_url": "TEXT",
-            "sprite_url": "TEXT", "sprite_frames": "INTEGER",
             "poi_name": "TEXT", "mix_name": "TEXT",
             "is_subtitled": "INTEGER DEFAULT 0", "is_deleted": "INTEGER DEFAULT 0",
+            "cat1": "TEXT", "cat2": "TEXT", "cat3": "TEXT",
+            "has_ai_summary": "INTEGER DEFAULT 0",
         },
         "collect_state": {
             "platform_total": "INTEGER",
@@ -124,17 +185,26 @@ def upsert_videos(items: Iterable[dict[str, Any]]) -> tuple[int, int]:
                 elif isinstance(v, bool):
                     v = int(v)
                 row[k] = v
+            # 完整响应压缩后入库。采集端仍然给字符串 raw_json,压缩是存储层的事。
+            row["raw_z"] = _pack_raw(it.get("raw_json"))
             row["collected_at"] = now
             row["updated_at"] = now
             rows.append(row)
 
-        cols = list(_VIDEO_COLUMNS) + ["collected_at", "updated_at"]
+        cols = list(_VIDEO_COLUMNS) + ["raw_z", "collected_at", "updated_at"]
         placeholders = ",".join(f":{c}" for c in cols)
         # 这几列排除在 UPDATE 之外:
         #   collected_at / source / collects_* —— videos 表保留「首次发现」的信息,
         #   完整的归属关系由 video_sources 承担。否则采完点赞会把收藏的 source 冲掉。
         _keep = {"aweme_id", "collected_at", "source", "collects_id", "collects_name"}
-        updates = ",".join(f"{c}=excluded.{c}" for c in cols if c not in _keep)
+        updates = ",".join(
+            # raw 只补不覆盖:某些路径拿不到真实响应(只有 f2 那 31 个字段),
+            # 直接 excluded.raw_z 会把已经存好的完整响应清成 NULL —— 而它重采
+            # 才能拿回来,媒体地址还可能已经过期。宁可保旧。
+            "raw_z=COALESCE(excluded.raw_z, videos.raw_z)" if c == "raw_z"
+            else f"{c}=excluded.{c}"
+            for c in cols if c not in _keep
+        )
         conn.executemany(
             f"INSERT INTO videos ({','.join(cols)}) VALUES ({placeholders}) "
             f"ON CONFLICT(aweme_id) DO UPDATE SET {updates}",
@@ -160,6 +230,41 @@ def upsert_videos(items: Iterable[dict[str, Any]]) -> tuple[int, int]:
         )
 
     return len(items), len(items) - len(existing)
+
+
+def update_derived(aweme_id: str, fields: dict[str, Any]) -> None:
+    """只更新「从 raw 推导出来的」那些列,不碰采集来源与首次入库时间。
+
+    这是「存完整 raw」真正的回报:新加一个维度不用重采,遍历本地 raw
+    重新投影一遍就行 —— 零网络请求、零 403 风险。见 scripts/reproject.py。
+    """
+    cols = [c for c in fields if c in _VIDEO_COLUMNS and c != "aweme_id"]
+    if not cols:
+        return
+    row = {c: fields[c] for c in cols}
+    row["aweme_id"] = aweme_id
+    row["updated_at"] = _now()
+    sets = ",".join(f"{c}=:{c}" for c in cols)
+    with connect() as conn:
+        conn.execute(
+            f"UPDATE videos SET {sets}, updated_at=:updated_at WHERE aweme_id=:aweme_id",
+            row,
+        )
+
+
+def iter_raw(only_full: bool = False) -> Iterable[tuple[str, dict[str, Any]]]:
+    """遍历全库的完整响应。only_full=True 时跳过早期只有 31 个字段的旧数据。"""
+    with connect() as conn:
+        ids = [r["aweme_id"] for r in conn.execute(
+            "SELECT aweme_id FROM videos WHERE raw_z IS NOT NULL ORDER BY rowid"
+        )]
+    for aid in ids:
+        raw = get_raw(aid)
+        if not raw:
+            continue
+        if only_full and len(raw) <= 100:   # f2 的 31 字段结构,推不出新维度
+            continue
+        yield aid, raw
 
 
 def rebuild_tags() -> tuple[int, int]:
@@ -226,14 +331,25 @@ def _filters(
     collects_id: str | None,
     nickname: str | None,
     tag: str | None = None,
+    cat1: str | None = None,
+    has_summary: bool | None = None,
 ) -> tuple[list[str], list[Any]]:
     where: list[str] = []
     params: list[Any] = []
     if q:
+        # 也搜平台 AI 总结 —— 那是视频真正讲了什么,比作者文案有用得多
         where.append(
-            "(v.description LIKE ? OR v.nickname LIKE ? OR v.music_title LIKE ?)"
+            "(v.description LIKE ? OR v.nickname LIKE ? OR v.music_title LIKE ? "
+            " OR EXISTS (SELECT 1 FROM transcripts t WHERE t.aweme_id = v.aweme_id "
+            "            AND t.kind = 'summary' AND t.content LIKE ?))"
         )
-        params += [f"%{q}%"] * 3
+        params += [f"%{q}%"] * 4
+    if cat1:
+        where.append("v.cat1 = ?")
+        params.append(cat1)
+    if has_summary is not None:
+        where.append("COALESCE(v.has_ai_summary, 0) = ?")
+        params.append(1 if has_summary else 0)
     if nickname:
         where.append("v.nickname = ?")
         params.append(nickname)
@@ -260,12 +376,17 @@ def _filters(
     return where, params
 
 
-# 排序白名单:直接拼列名进 SQL,必须限定取值
+# 排序白名单:直接拼列名进 SQL,必须限定取值。
+# digg/collect 这几项是「我收藏的这条到底好不好」的唯一客观依据 ——
+# 一千多条散装收藏,靠人翻是翻不出优质内容的。
 _SORTS = {
     "collected": "v.collected_at DESC, v.rowid DESC",   # 我什么时候存的
     "published": "v.create_time DESC",                  # 作品什么时候发的
     "duration": "v.video_duration DESC",
     "author": "v.nickname ASC, v.create_time DESC",
+    "digg": "COALESCE(v.digg_count, -1) DESC, v.rowid DESC",
+    "collect": "COALESCE(v.collect_count, -1) DESC, v.rowid DESC",
+    "comment": "COALESCE(v.comment_count, -1) DESC, v.rowid DESC",
 }
 
 
@@ -278,16 +399,20 @@ def list_videos(
     nickname: str | None = None,
     sort: str = "collected",
     tag: str | None = None,
+    cat1: str | None = None,
+    has_summary: bool | None = None,
 ) -> list[dict[str, Any]]:
-    """列表 + 关键词搜索 + 来源/收藏夹/作者/标签筛选 + 排序。
+    """列表 + 关键词搜索 + 来源/收藏夹/作者/标签/分类筛选 + 排序。
 
     关键词用 LIKE:几千条数据下瞬时返回,不值得引入 FTS5。
     语义检索留给后续的向量库。
     """
-    where, params = _filters(q, source, collects_id, nickname, tag)
+    where, params = _filters(q, source, collects_id, nickname, tag, cat1, has_summary)
 
     sql = (
-        "SELECT v.*, "
+        f"SELECT {_SELECT_COLS}, "
+        "  (SELECT content FROM transcripts t WHERE t.aweme_id = v.aweme_id "
+        "    AND t.kind = 'summary') AS ai_summary, "
         "  (SELECT GROUP_CONCAT(DISTINCT s.source) FROM video_sources s "
         "    WHERE s.aweme_id = v.aweme_id) AS sources, "
         "  (SELECT GROUP_CONCAT(DISTINCT s.collects_name) FROM video_sources s "
@@ -311,8 +436,10 @@ def count_videos(
     collects_id: str | None = None,
     nickname: str | None = None,
     tag: str | None = None,
+    cat1: str | None = None,
+    has_summary: bool | None = None,
 ) -> int:
-    where, params = _filters(q, source, collects_id, nickname, tag)
+    where, params = _filters(q, source, collects_id, nickname, tag, cat1, has_summary)
     sql = "SELECT COUNT(*) AS n FROM videos v"
     if where:
         sql += " WHERE " + " AND ".join(where)
@@ -343,12 +470,105 @@ def top_authors(limit: int = 30) -> list[dict[str, Any]]:
         ]
 
 
-def get_video(aweme_id: str) -> dict[str, Any] | None:
+def get_cover_url(aweme_id: str) -> str | None:
+    """只取封面地址。封面代理每页要被调 100 次,不该顺带跑 get_video 那几条
+    关联查询(标签/来源/章节)—— 那是详情页才需要的。"""
     with connect() as conn:
         row = conn.execute(
-            "SELECT * FROM videos WHERE aweme_id = ?", (aweme_id,)
+            "SELECT cover FROM videos WHERE aweme_id = ?", (aweme_id,)
         ).fetchone()
-        return dict(row) if row else None
+    return row["cover"] if row else None
+
+
+def get_video(aweme_id: str) -> dict[str, Any] | None:
+    """作品详情。带上平台 AI 总结与章节大纲 —— 详情页要看的就是「视频讲了什么」。
+
+    不含 raw:那是 17 KB 的压缩块,要看走 get_raw()。
+    """
+    with connect() as conn:
+        row = conn.execute(
+            f"SELECT {_SELECT_COLS} FROM videos v WHERE v.aweme_id = ?", (aweme_id,)
+        ).fetchone()
+        if not row:
+            return None
+        out = dict(row)
+        out["ai_summary"] = None
+        for r in conn.execute(
+            "SELECT kind, content FROM transcripts WHERE aweme_id = ?", (aweme_id,)
+        ):
+            if r["kind"] == "summary":
+                out["ai_summary"] = r["content"]
+        ex = conn.execute(
+            "SELECT fields_json FROM extractions "
+            "WHERE aweme_id = ? AND category = 'chapters'", (aweme_id,)
+        ).fetchone()
+        out["chapters"] = None
+        if ex and ex["fields_json"]:
+            try:
+                out["chapters"] = json.loads(ex["fields_json"])
+            except ValueError:
+                pass
+        out["tags"] = [
+            r["tag"] for r in conn.execute(
+                "SELECT tag FROM tags WHERE aweme_id = ? ORDER BY tag", (aweme_id,)
+            )
+        ]
+        out["sources"] = [
+            r["source"] for r in conn.execute(
+                "SELECT DISTINCT source FROM video_sources WHERE aweme_id = ?",
+                (aweme_id,),
+            )
+        ]
+        return out
+
+
+def top_categories(limit: int = 30) -> list[dict[str, Any]]:
+    """抖音官方一级分类。100% 覆盖、平台自己打的,比从文案抠的 #标签 权威,
+    可以直接当类目主轴用。"""
+    with connect() as conn:
+        return [
+            dict(r)
+            for r in conn.execute(
+                "SELECT cat1 AS cat, COUNT(*) AS n FROM videos "
+                "WHERE cat1 IS NOT NULL AND TRIM(cat1) <> '' "
+                "GROUP BY cat1 ORDER BY n DESC, cat1 LIMIT ?",
+                (limit,),
+            )
+        ]
+
+
+def coverage() -> dict[str, Any]:
+    """各字段的实际覆盖率 —— 「数据到底全不全」得能一眼看到,不能靠猜。
+
+    此前两次把「采尽」判断错,就是因为没有可对照的分母。
+    """
+    with connect() as conn:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(videos)")}
+        total = conn.execute("SELECT COUNT(*) AS n FROM videos").fetchone()["n"]
+
+        def n(sql: str) -> int:
+            return conn.execute(f"SELECT COUNT(*) AS n FROM videos WHERE {sql}").fetchone()["n"]
+
+        out = {
+            "total": total,
+            "full_raw": n("raw_z IS NOT NULL") if "raw_z" in cols else 0,
+            # 还没迁移的明文老数据,迁移脚本跑完应为 0
+            "legacy_raw": n("raw_json IS NOT NULL") if "raw_json" in cols else 0,
+            "digg_count": n("digg_count IS NOT NULL"),
+            "cat1": n("cat1 IS NOT NULL AND TRIM(cat1) <> ''"),
+            "music_url": n("music_url IS NOT NULL AND TRIM(music_url) <> ''"),
+            "ai_summary": conn.execute(
+                "SELECT COUNT(*) AS n FROM transcripts WHERE kind='summary'"
+            ).fetchone()["n"],
+            "chapters": conn.execute(
+                "SELECT COUNT(*) AS n FROM extractions WHERE category='chapters'"
+            ).fetchone()["n"],
+        }
+    try:
+        out["db_bytes"] = Path(settings.db_file).stat().st_size
+    except OSError:
+        out["db_bytes"] = None
+    return out
 
 
 def stats() -> dict[str, Any]:
@@ -369,10 +589,15 @@ def stats() -> dict[str, Any]:
         authors = conn.execute(
             "SELECT COUNT(DISTINCT nickname) AS n FROM videos"
         ).fetchone()["n"]
+        with_summary = conn.execute(
+            "SELECT COUNT(*) AS n FROM transcripts WHERE kind='summary'"
+        ).fetchone()["n"]
     return {
         "total": total,
         "by_source": by_source,
         "with_description": with_desc,
+        # 平台 AI 总结的条数 —— 这是目前唯一「视频内容」来源
+        "with_ai_summary": with_summary,
         "authors": authors,
     }
 
@@ -419,6 +644,26 @@ def save_transcript(
             "ON CONFLICT(aweme_id, kind) DO UPDATE SET "
             "content=excluded.content, meta=excluded.meta, created_at=excluded.created_at",
             (aweme_id, kind, content, json.dumps(meta, ensure_ascii=False) if meta else None, _now()),
+        )
+
+
+def save_extraction(aweme_id: str, category: str, fields: Any,
+                    model: str, tier: int = 0,
+                    title: str | None = None, summary: str | None = None) -> None:
+    """写入结构化提取结果。tier=0 表示平台直接给的(零成本),
+    1=文案、2=关键帧+视觉、3=整段视频。"""
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO extractions "
+            "(aweme_id, category, title, summary, fields_json, model, tier, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(aweme_id) DO UPDATE SET "
+            "category=excluded.category, title=excluded.title, summary=excluded.summary, "
+            "fields_json=excluded.fields_json, model=excluded.model, tier=excluded.tier, "
+            "created_at=excluded.created_at",
+            (aweme_id, category, title, summary,
+             json.dumps(fields, ensure_ascii=False, default=str),
+             model, tier, _now()),
         )
 
 

@@ -311,12 +311,32 @@ Linux / cron:`0 9 * * * cd /path/to/Douyin-DB && .venv/bin/python backend/cli.py
 .venv/bin/python backend/cli.py folders                    # 列出收藏夹
 .venv/bin/python backend/cli.py folder <collects_id>       # 采集指定收藏夹
 
-.venv/bin/python backend/cli.py stats                      # 统计 + 最近采集记录
+.venv/bin/python backend/cli.py refill                     # 回补旧数据的完整字段
+.venv/bin/python backend/cli.py stats                      # 统计 + 字段覆盖率 + 官方分类
 .venv/bin/python backend/cli.py tags [--top 25]            # 重抽 #话题标签
-.venv/bin/python backend/cli.py search <关键词>             # 搜索
+.venv/bin/python backend/cli.py search <关键词> [--sort digg] [--cat 科技] [--summary]
+.venv/bin/python backend/cli.py raw <aweme_id> [--keys]    # 看完整原始响应
 ```
 
 `--fresh` 忽略游标从最新重扫;默认是从断点续采。
+
+`refill` 用**自己的一套游标**(`cursors` 表里的 `refill:<scope>`),和续采的深挖
+进度互不干扰:被 403 打断后再跑一次接着往深处走,走完全程自动清零、下轮从最新
+重来(顺带刷新赞/藏数)。点赞接口尤其容易被限流 —— 实测同一天内收藏能连走 74 页,
+点赞 6 页就 403,所以这一类要分多轮、隔开时间跑。
+`search --summary` 只看有平台 AI 总结的(那才是「视频讲了什么」);
+`--sort digg` 按赞数排,用来从上千条散装收藏里挑真正优质的。
+
+### 维护脚本
+
+```bash
+.venv/bin/python scripts/compress_raw.py      # raw 明文 → zlib 压缩 + 回收空间(一次性)
+.venv/bin/python scripts/reproject.py         # 从本地 raw 重算派生字段,零网络请求
+.venv/bin/python scripts/precache_covers.py   # 抢救封面(URL 带 x-expires 会过期)
+```
+
+`reproject.py` 是「存全量 raw」的兑现方式:新加一个维度不用重采,
+遍历本地完整响应重投影一遍就行。
 
 ---
 
@@ -345,7 +365,9 @@ Linux / cron:`0 9 * * * cd /path/to/Douyin-DB && .venv/bin/python backend/cli.py
 
 **为什么逐页落库而不是全拉完再存**
 中途被风控掐断或断网时,已采的不丢;游标随页推进,下次从断点续采。
-**重采才是风控风险**,所以原始条目全量存进 `raw_json` —— 以后要补字段不必重新采集。
+**重采才是风控风险**,所以完整响应(787 个字段)一个不丢地存进 `raw_z`(zlib 压缩,
+84 KB → 17 KB)。「存什么」和「用什么」是两件事:存全量,用哪些字段可以慢慢演进 ——
+想加维度跑 `scripts/reproject.py` 从本地 raw 重投影,不必重新采集。
 
 **为什么只读,绝不写操作**
 不发评论、不点赞、不关注。批量写操作是账号被封的主要诱因。

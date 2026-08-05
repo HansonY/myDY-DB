@@ -47,8 +47,13 @@ SRC_LABEL = {"collection": "收藏", "like": "点赞", "post": "我的作品", "
 
 SERVER_INSTRUCTIONS = (
         "我的抖音收藏知识库(本地 SQLite)。可检索收藏/点赞/我发布的作品,"
-        "按关键词、话题标签、作者、来源筛选;也能查看采集完整度并触发采集。\n"
+        "按关键词、话题标签、作者、来源、抖音官方分类筛选,按互动数据排序;"
+        "也能查看采集完整度并触发采集。\n"
         "回答「我收藏过的关于X」这类问题时用 search_videos。\n"
+        "注意区分两种文本:text 是作者写的文案/标题,content 是抖音自己生成的"
+        "视频内容总结(实测约 17% 的作品有,多为长视频/知识类)—— "
+        "问「视频里讲了什么」只有 content 算。\n"
+        "库里存了每条作品的完整响应(787 字段),常用字段之外的用 video_raw 取。\n"
     "采集有抖音风控约束:同一时刻只允许一个采集任务,403 会自动指数退避。"
 )
 
@@ -56,17 +61,34 @@ app = Server("douyin-db", instructions=SERVER_INSTRUCTIONS)
 
 
 def _slim(v: dict[str, Any]) -> dict[str, Any]:
-    """给 AI 的精简视图:去掉 raw_json 等噪音,保留可推理字段。"""
-    return {
+    """给 AI 的精简视图:不带 17 KB 的压缩 raw,只留可推理字段。
+
+    要看完整响应(787 个字段)用 video_raw 工具。
+    """
+    cats = [v.get("cat1"), v.get("cat2"), v.get("cat3")]
+
+    def as_list(x: Any) -> list[str]:
+        # list_videos 用 GROUP_CONCAT 给逗号串,get_video 给真列表 —— 都兜住
+        if isinstance(x, list):
+            return [s for s in x if s]
+        return [s for s in (x or "").split(",") if s]
+
+    out = {
         "id": v["aweme_id"],
         "author": v.get("nickname"),
+        # text 是作者写的文案/标题;content 才是视频讲了什么
         "text": v.get("description"),
+        "content": v.get("ai_summary"),
+        "category": " > ".join(c for c in cats if c) or None,
         "published": (v.get("create_time") or "")[:10],
         "duration_sec": round((v.get("video_duration") or 0) / 1000) or None,
-        "sources": [SRC_LABEL.get(s, s) for s in (v.get("sources") or "").split(",") if s],
-        "tags": [t for t in (v.get("tags") or "").split(",") if t],
+        "likes": v.get("digg_count"),
+        "collects": v.get("collect_count"),
+        "sources": [SRC_LABEL.get(s, s) for s in as_list(v.get("sources"))],
+        "tags": as_list(v.get("tags")),
         "url": v.get("share_url"),
     }
+    return {k: val for k, val in out.items() if val not in (None, [], "")}
 
 
 # ── 检索 ────────────────────────────────────────────────────
@@ -76,42 +98,100 @@ async def search_videos(
     source: Scope | None = None,
     tag: str | None = None,
     author: str | None = None,
-    sort: Literal["collected", "published", "duration", "author"] = "collected",
+    category: str | None = None,
+    only_with_content: bool = False,
+    sort: Literal["collected", "published", "duration", "author",
+                  "digg", "collect", "comment"] = "collected",
     limit: int = 20,
 ) -> dict[str, Any]:
     """在我的抖音知识库里检索作品。
 
     这是回答「我收藏过的关于 X 的内容」这类问题的主入口。
 
-    query:  关键词,匹配文案 / 作者 / 音乐名
-    source: collection=收藏, like=点赞, post=我发布的
-    tag:    话题标签(不带 #),大小写不敏感
-    author: 作者昵称,需完全匹配
-    sort:   collected=按存入时间(默认), published=按发布时间
+    query:    关键词,匹配文案 / 作者 / 音乐名 / 平台 AI 总结
+    source:   collection=收藏, like=点赞, post=我发布的
+    tag:      话题标签(不带 #),大小写不敏感
+    author:   作者昵称,需完全匹配
+    category: 抖音官方一级分类(如 科技、人文社科),用 library_stats 看有哪些
+    only_with_content: 只要有 content(平台 AI 总结)的。想读「视频讲了什么」
+              而不是作者写的标题时打开它 —— 实测约 17% 的作品有。
+    sort:     collected=按存入时间(默认) · published=按发布时间 ·
+              digg/collect/comment=按互动数据,用来挑真正优质的内容
     """
     store.init_db()
     limit = max(1, min(limit, 100))
+    has_summary = True if only_with_content else None
     rows = await asyncio.to_thread(
-        store.list_videos, query, source, limit, 0, None, author, sort, tag
+        store.list_videos, query, source, limit, 0, None, author, sort, tag,
+        category, has_summary,
     )
-    total = await asyncio.to_thread(store.count_videos, query, source, None, author, tag)
+    total = await asyncio.to_thread(
+        store.count_videos, query, source, None, author, tag, category, has_summary
+    )
     return {"matched": total, "returned": len(rows), "items": [_slim(r) for r in rows]}
 
 
-async def library_stats(top_tags: int = 20) -> dict[str, Any]:
-    """知识库概览:总条数、各来源分布、有文案数、作者数,以及热门话题标签。
+async def video_raw(aweme_id: str, path: str | None = None) -> dict[str, Any]:
+    """看一条作品的**完整原始响应**(抖音给的全部 787 个字段)。
 
-    话题标签是从作品文案里的 #hashtag 抽出来的,零 AI 成本,可直接当类目用。
+    检索结果只给「这一轮提升出来的」字段。库里存的是完整响应且一个字段都没删,
+    所以想看别的维度(评论配置、多码率地址、活动信息、锚点…)直接来这里,
+    不需要重新采集。
+
+    aweme_id: 作品 id
+    path:     可选,点号路径(如 `statistics` 或 `video.play_addr`),
+              只取这一小块。不给就只返回顶层字段名清单(避免一次灌几十 KB)。
+    """
+    store.init_db()
+    raw = await asyncio.to_thread(store.get_raw, aweme_id)
+    if raw is None:
+        return {"error": "没有完整响应(早期数据只有 31 个字段,需要 refill 重采)"}
+    if path:
+        node: Any = raw
+        for k in path.split("."):
+            if isinstance(node, list):
+                node = node[0] if node else None
+            if not isinstance(node, dict):
+                return {"error": f"路径 {path} 在 {k} 处断了"}
+            node = node.get(k)
+        return {"aweme_id": aweme_id, "path": path, "value": node}
+    return {
+        "aweme_id": aweme_id,
+        "field_count": len(raw),
+        "top_level_keys": sorted(raw.keys()),
+        "hint": "用 path 参数取具体子树,例如 path='statistics'",
+    }
+
+
+async def library_stats(top_tags: int = 20) -> dict[str, Any]:
+    """知识库概览:总条数、各来源分布、作者数、官方分类、热门话题标签,
+    以及各字段的实际覆盖率。
+
+    categories 是抖音官方打的一级分类,可直接作为 search_videos 的 category 取值。
+    coverage 说明哪些维度还不全 —— 比如 with_content 就是有平台 AI 总结的条数,
+    只有这些能回答「视频里讲了什么」;其余只有作者写的文案。
     """
     store.init_db()
     s = await asyncio.to_thread(store.stats)
     tags = await asyncio.to_thread(store.top_tags, max(1, min(top_tags, 100)))
+    cats = await asyncio.to_thread(store.top_categories, 20)
+    cov = await asyncio.to_thread(store.coverage)
     return {
         "total": s["total"],
         "with_text": s["with_description"],
+        "with_content": s["with_ai_summary"],
         "authors": s["authors"],
         "by_source": {SRC_LABEL.get(k, k): v for k, v in (s["by_source"] or {}).items()},
+        "categories": [{"category": c["cat"], "count": c["n"]} for c in cats],
         "top_tags": [{"tag": t["tag"], "count": t["n"]} for t in tags],
+        "coverage": {
+            "full_raw": cov["full_raw"],
+            "engagement": cov["digg_count"],
+            "official_category": cov["cat1"],
+            "ai_summary": cov["ai_summary"],
+            # 早期采集只存了 f2 暴露的 31 个字段,这些条目推不出上面的维度
+            "legacy_rows_need_refill": cov["total"] - cov["digg_count"],
+        },
     }
 
 
@@ -344,27 +424,61 @@ _TOOLS: list[Tool] = [
         name="search_videos",
         description=(
             "在我的抖音知识库里检索作品。回答「我收藏过的关于X的内容」这类问题的主入口。"
-            "可按关键词(匹配文案/作者/音乐名)、来源、话题标签、作者组合筛选。"
+            "可按关键词(文案/作者/音乐名/平台AI总结)、来源、话题标签、作者、"
+            "抖音官方分类组合筛选,并按互动数据排序挑优质内容。"
+            "返回的 text 是作者写的文案,content 才是视频讲了什么。"
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "关键词,匹配文案/作者/音乐名"},
+                "query": {"type": "string",
+                          "description": "关键词,匹配文案/作者/音乐名/平台AI总结"},
                 "source": {"type": "string", "enum": ["collection", "like", "post"],
                            "description": "collection=收藏, like=点赞, post=我发布的"},
                 "tag": {"type": "string", "description": "话题标签(不带#),大小写不敏感"},
                 "author": {"type": "string", "description": "作者昵称,需完全匹配"},
-                "sort": {"type": "string", "enum": ["collected", "published", "duration", "author"],
-                         "default": "collected"},
+                "category": {"type": "string",
+                             "description": "抖音官方一级分类(如 科技、人文社科)。"
+                                            "取值见 library_stats 的 categories"},
+                "only_with_content": {
+                    "type": "boolean", "default": False,
+                    "description": "只要有 content(平台 AI 总结)的 —— 想读「视频讲了什么」"
+                                   "而不是作者标题时打开。实测约 17% 的作品有"},
+                "sort": {"type": "string",
+                         "enum": ["collected", "published", "duration", "author",
+                                  "digg", "collect", "comment"],
+                         "default": "collected",
+                         "description": "digg/collect/comment=按互动数据排,用来挑优质内容"},
                 "limit": {"type": "integer", "default": 20, "maximum": 100},
             },
         },
     ),
     Tool(
         name="library_stats",
-        description="知识库概览:总条数、各来源分布、有文案数、作者数,以及热门话题标签。",
+        description=(
+            "知识库概览:总条数、来源分布、作者数、抖音官方分类、热门话题标签,"
+            "以及各字段覆盖率(哪些维度还不全)。"
+        ),
         inputSchema={"type": "object", "properties": {
             "top_tags": {"type": "integer", "default": 20, "maximum": 100}}},
+    ),
+    Tool(
+        name="video_raw",
+        description=(
+            "看一条作品的完整原始响应(抖音给的全部 787 个字段)。"
+            "检索结果只给常用字段;库里存的是完整响应、一个字段都没删,"
+            "所以想看别的维度直接用这个,不需要重新采集。"
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "aweme_id": {"type": "string"},
+                "path": {"type": "string",
+                         "description": "点号路径(如 statistics 或 video.play_addr),"
+                                        "只取这一小块;不给则返回顶层字段名清单"},
+            },
+            "required": ["aweme_id"],
+        },
     ),
     Tool(
         name="collect_status",
@@ -442,6 +556,7 @@ _TOOLS: list[Tool] = [
 _HANDLERS = {
     "search_videos": lambda a: search_videos(**a),
     "library_stats": lambda a: library_stats(**a),
+    "video_raw": lambda a: video_raw(**a),
     "collect_status": lambda a: collect_status(),
     "collect_smart": lambda a: collect_smart(**a),
     "collect_scope": lambda a: collect_scope(**a),

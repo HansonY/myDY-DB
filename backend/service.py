@@ -54,6 +54,20 @@ def _persist_page(rows: list[dict[str, Any]]) -> tuple[int, int]:
         # 平台给的结构化话题比从文案正则抠更准(不会粘上标点)
         if r.get("hashtags"):
             store.save_hashtags(r["aweme_id"], r["hashtags"])
+
+        # 抖音自己生成的 AI 内容总结 —— 这才是「视频内容」,不是作者写的文案
+        ai = r.get("_ai") or {}
+        if ai.get("summary"):
+            store.save_transcript(
+                r["aweme_id"], "summary", ai["summary"],
+                {"source": "douyin_chapter_abstract", "tier": 0},
+            )
+        if ai.get("chapters"):
+            store.save_extraction(
+                r["aweme_id"], category="chapters",
+                fields=ai["chapters"], model="douyin_recommend_chapter",
+                tier=0, summary=ai.get("summary") or None,
+            )
     return fetched, inserted
 
 
@@ -65,15 +79,19 @@ async def _run(
     stop_after_known_pages: int = 0,
     max_pages: int = 0,
     persist_cursor: bool = True,
+    cursor_key: str | None = None,
 ) -> dict[str, Any]:
     """通用采集循环。page_iter_factory(start_cursor) → 异步页生成器。
 
-    两种模式:
+    三种模式:
       * resume=True  —— 从游标继续,**往历史深处翻**。用于首次全量采集被
         风控中断后接着采。
       * resume=False —— 从最新开始扫。这是发现「新增收藏」的唯一方式,因为
         游标分页只会越翻越旧。配合 stop_after_known_pages 做增量同步:
         连续 N 页全是已知条目就停,不必扫完几千条。
+      * cursor_key   —— 回补模式:用一套**独立游标**,既不从 resume 的深挖
+        进度出发,也不覆盖它。没有它的话回补每轮都从最新重走 —— 被 403 打断
+        后第二轮只会把同样的前几十页再刷一遍,永远走不到更深处。
     """
     store.init_db()
     guard_single_run()      # 无论从命令行还是网页进来,都先看库里有没有别人在跑
@@ -82,7 +100,9 @@ async def _run(
     # sync 从最新开始扫,绝不能碰它 —— 否则会把深挖进度覆盖成「最新往下几页」,
     # 之后 resume 就一直在重走已知区域。实测踩过:收藏游标被 sync 重置到
     # 2026-01,而库里最早的收藏在 2020 年,续采抓了 470 条零新增。
-    if resume:
+    if cursor_key:
+        start_cursor = store.load_cursor(cursor_key)
+    elif resume:
         start_cursor = store.load_cursor(scope)
     else:
         start_cursor = 0
@@ -106,8 +126,11 @@ async def _run(
             # 增量同步:这一页没带来新条目就累计,连续多页如此说明追上了。
             # 空页也算 —— 它同样代表「没有新东西」。
             known_streak = known_streak + 1 if new_here == 0 else 0
-            if max_cursor and persist_cursor:
-                await asyncio.to_thread(store.save_cursor, scope, max_cursor)
+            if max_cursor:
+                if cursor_key:      # 回补自己的进度,和深挖游标互不干扰
+                    await asyncio.to_thread(store.save_cursor, cursor_key, max_cursor)
+                elif persist_cursor:
+                    await asyncio.to_thread(store.save_cursor, scope, max_cursor)
 
             info = {
                 "scope": scope,
@@ -129,6 +152,11 @@ async def _run(
             if max_pages and pages >= max_pages:
                 hit_cap = True
                 break
+
+        # 回补走完了全程 → 清掉回补游标,下一轮重新从最新开始。
+        # (顺带把互动数据刷新一遍 —— 赞/藏数是会变的。)
+        if cursor_key and not stopped_early and not hit_cap:
+            await asyncio.to_thread(store.clear_cursor, cursor_key)
 
         store.finish_run(run_id, "done", fetched, inserted)
         await _refresh_tags(inserted)
@@ -250,7 +278,7 @@ async def refill_scope(
     """回补:重走列表,把已有作品补上完整字段。
 
     为什么需要:早期采集时 raw_json 只存了 f2 提取的 31 个字段,而抖音真实
-    响应有 787 个 —— 互动数据、视频/音轨/雪碧图地址、结构化话题、尺寸全丢了。
+    响应有 787 个 —— 互动数据、视频/音轨地址、结构化话题、尺寸全丢了。
     这些只能重新请求才能拿到(媒体地址还带 x-expires,越晚越可能失效)。
 
     与其它模式的区别:
@@ -284,9 +312,13 @@ async def collect_favorites(
 ) -> dict[str, Any]:
     limit = max_items if max_items is not None else settings.max_items
     resume, stop, keep = _sync_args(sync, resume)
+    scope_name = "collection"
+    ckey = None
     if refill:
-        # 回补:从最新走全程,不提前停,且绝不动深挖游标
+        # 回补:走全程、不提前停、绝不动深挖游标,并用自己的游标记进度 ——
+        # 点赞接口实测 6 页就 403,没有独立游标的话每轮都在重刷同样那几页。
         resume, stop, keep = False, 0, False
+        ckey = f"refill:{scope_name}"
     return await _run(
         "collection",
         lambda cur: douyin.collect_favorites(max_items=limit, start_cursor=cur),
@@ -295,6 +327,7 @@ async def collect_favorites(
         stop,
         max_pages,
         keep,
+        ckey,
     )
 
 
@@ -335,9 +368,13 @@ async def collect_likes(
     sec_user_id = await own_sec_user_id()
     limit = max_items if max_items is not None else settings.max_items
     resume, stop, keep = _sync_args(sync, resume)
+    scope_name = "like"
+    ckey = None
     if refill:
-        # 回补:从最新走全程,不提前停,且绝不动深挖游标
+        # 回补:走全程、不提前停、绝不动深挖游标,并用自己的游标记进度 ——
+        # 点赞接口实测 6 页就 403,没有独立游标的话每轮都在重刷同样那几页。
         resume, stop, keep = False, 0, False
+        ckey = f"refill:{scope_name}"
     return await _run(
         "like",
         lambda cur: douyin.collect_likes(
@@ -348,6 +385,7 @@ async def collect_likes(
         stop,
         max_pages,
         keep,
+        ckey,
     )
 
 
@@ -362,9 +400,13 @@ async def collect_posts(
     sec_user_id = await own_sec_user_id()
     limit = max_items if max_items is not None else settings.max_items
     resume, stop, keep = _sync_args(sync, resume)
+    scope_name = "post"
+    ckey = None
     if refill:
-        # 回补:从最新走全程,不提前停,且绝不动深挖游标
+        # 回补:走全程、不提前停、绝不动深挖游标,并用自己的游标记进度 ——
+        # 点赞接口实测 6 页就 403,没有独立游标的话每轮都在重刷同样那几页。
         resume, stop, keep = False, 0, False
+        ckey = f"refill:{scope_name}"
     return await _run(
         "post",
         lambda cur: douyin.collect_posts(
@@ -375,6 +417,7 @@ async def collect_posts(
         stop,
         max_pages,
         keep,
+        ckey,
     )
 
 

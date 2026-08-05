@@ -239,11 +239,11 @@ async def cmd_probe(args) -> None:
             break
 
         raw = json.loads(rows[0]["raw_json"])
-        print("── f2 返回的原始字段 ──")
+        print(f"── 抖音真实响应的顶层字段({len(raw)} 个,全部会压缩存进 raw_z)──")
         print("  " + ", ".join(sorted(raw.keys())))
-        print("\n── 归一化后的首条 ──")
+        print("\n── 归一化后的首条(这一轮提升为列的字段)──")
         for k, v in rows[0].items():
-            if k == "raw_json":
+            if k in ("raw_json", "_ai"):     # 一个太长、一个是落库中间态
                 continue
             s = str(v)
             print(f"  {k:<16} {s[:90]}{'…' if len(s) > 90 else ''}")
@@ -300,8 +300,30 @@ def cmd_stats(_args) -> None:
     s = store.stats()
     print(f"作品总数      {s['total']}")
     print(f"有文案的      {s['with_description']}")
+    print(f"有AI总结的    {s['with_ai_summary']}  ← 抖音自己生成的视频内容总结")
     print(f"涉及作者      {s['authors']}")
     print(f"按来源        {s['by_source'] or '—'}")
+
+    # 覆盖率:「数据到底全不全」必须能一眼看到 —— 此前两次靠推断判断采尽都错了
+    c = store.coverage()
+    t = c["total"] or 1
+    print("\n字段覆盖:")
+    for key, label in (
+        ("full_raw", "完整原始响应"), ("digg_count", "互动数据"),
+        ("cat1", "官方分类"), ("music_url", "音轨地址"),
+        ("ai_summary", "平台AI总结"), ("chapters", "章节大纲"),
+    ):
+        print(f"  {label:<12} {c[key]:>5}/{c['total']}  {c[key] * 100 / t:.0f}%")
+    if c["legacy_raw"]:
+        print(f"  ⚠️ 还有 {c['legacy_raw']} 条未压缩,跑 scripts/compress_raw.py")
+    if c["db_bytes"]:
+        print(f"  库文件       {c['db_bytes'] / 1024 / 1024:.1f} MB")
+
+    cats = store.top_categories(8)
+    if cats:
+        print("\n官方分类 Top:")
+        for x in cats:
+            print(f"  {x['n']:>4}  {x['cat']}")
     runs = store.latest_runs(5)
     if runs:
         print("\n最近采集:")
@@ -322,13 +344,46 @@ def cmd_tags(args) -> None:
 
 
 def cmd_search(args) -> None:
-    rows = store.list_videos(q=args.keyword, limit=args.limit)
-    total = store.count_videos(q=args.keyword)
+    rows = store.list_videos(
+        q=args.keyword, limit=args.limit, sort=args.sort,
+        cat1=args.cat, has_summary=True if args.summary else None,
+    )
+    total = store.count_videos(
+        q=args.keyword, cat1=args.cat, has_summary=True if args.summary else None,
+    )
     print(f"命中 {total} 条,显示前 {len(rows)}:\n")
     for r in rows:
         desc = (r["description"] or "").replace("\n", " ")
+        meta = " · ".join(
+            x for x in (
+                r.get("cat1"),
+                f"赞 {r['digg_count']}" if r.get("digg_count") is not None else None,
+            ) if x
+        )
         print(f"  [{r['nickname']}] {desc[:70]}")
+        if meta:
+            print(f"    {meta}")
+        # 平台 AI 总结才是「视频讲了什么」,比作者文案有用
+        if r.get("ai_summary"):
+            print(f"    内容:{r['ai_summary'][:100].replace(chr(10), ' ')}…")
         print(f"    {r['share_url']}")
+
+
+def cmd_raw(args) -> None:
+    """打印一条作品的完整原始响应。
+
+    「存什么」和「用什么」是两回事 —— 库里存了全部 787 个字段,
+    想加新维度先来这里看有什么可用,不用重采。
+    """
+    raw = store.get_raw(args.aweme_id)
+    if raw is None:
+        print("没有这条,或它还没有完整响应(旧数据需要 refill)。")
+        return
+    if args.keys:
+        print(f"顶层 {len(raw)} 个字段:")
+        print("  " + ", ".join(sorted(raw.keys())))
+        return
+    print(json.dumps(raw, ensure_ascii=False, indent=2)[: args.chars])
 
 
 # ── 入口 ────────────────────────────────────────────────────
@@ -395,9 +450,20 @@ def main() -> None:
     sp = sub.add_parser("tags", help="从文案重抽 #话题标签(零成本)")
     sp.add_argument("--top", type=int, default=25)
 
-    sp = sub.add_parser("search", help="关键词搜索")
+    sp = sub.add_parser("search", help="关键词搜索(也搜平台 AI 总结)")
     sp.add_argument("keyword")
     sp.add_argument("--limit", type=int, default=20)
+    sp.add_argument("--sort", default="collected",
+                    choices=["collected", "published", "duration", "author",
+                             "digg", "collect", "comment"],
+                    help="digg/collect/comment = 按互动数据排,挑优质内容用")
+    sp.add_argument("--cat", help="按抖音官方一级分类筛选")
+    sp.add_argument("--summary", action="store_true", help="只看有平台 AI 总结的")
+
+    sp = sub.add_parser("raw", help="看一条作品的完整原始响应(787 个字段都在库里)")
+    sp.add_argument("aweme_id")
+    sp.add_argument("--keys", action="store_true", help="只列顶层字段名")
+    sp.add_argument("--chars", type=int, default=4000, help="最多打印多少字符")
 
     args = p.parse_args()
 
@@ -419,6 +485,7 @@ def main() -> None:
         "stats": cmd_stats,
         "tags": cmd_tags,
         "search": cmd_search,
+        "raw": cmd_raw,
     }
     fn = handlers[args.cmd]
 

@@ -59,7 +59,7 @@ erDiagram
         TEXT create_time
         INTEGER video_duration
         TEXT cover
-        TEXT raw_json "全量留档:补字段不必重采"
+        BLOB raw_z "完整响应压缩留档:787字段一个不丢"
         TEXT collected_at "首次入库,重采不覆盖"
     }
     video_sources {
@@ -140,7 +140,9 @@ sequenceDiagram
 ### 2. 中断必须无损
 
 逐页落库 + 逐页存游标,而不是全拉完再存。403、断网、Ctrl+C 都不丢数据。
-`raw_json` 全量留档,以后要补字段**不必重采** —— 重采才是风控风险。
+`raw_z` 存**完整响应**(787 个字段,zlib 压缩),以后要补字段**不必重采** ——
+重采才是风控风险。这一点已经兑现过一次:官方分类 / AI 总结 / 章节大纲三个提取器
+是后来才写的,靠 `scripts/reproject.py` 遍历本地 raw 就补齐了 1400 条,零网络请求。
 
 ### 3. 宁可少采,不撞 403
 

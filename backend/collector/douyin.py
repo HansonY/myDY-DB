@@ -118,13 +118,14 @@ def _from_raw(aw: dict[str, Any]) -> dict[str, Any]:
     """从**真实响应**里提取 f2 没暴露的高价值字段。
 
     f2 的 _to_list() 只给 31 个字段,而抖音一条作品有 787 个 —— 互动数据、
-    视频地址、雪碧图、结构化话题、尺寸全在被丢掉的那 750+ 里。
+    视频地址、结构化话题、尺寸全在被丢掉的那 750+ 里。
     这些只能在采集当时拿到(媒体地址还带 x-expires 会过期),
     所以必须当场提取,不能指望以后回补。
+
+    这里只提「这一轮要用的」。没提的字段并没有丢 —— 完整响应压缩存在
+    videos.raw_z,以后想用哪个直接 store.get_raw() 解析再补列,不必重采。
     """
     st = aw.get("statistics") or {}
-    sprite = (aw.get("video") or {}).get("big_thumbs") or []
-    sprite = sprite[0] if isinstance(sprite, list) and sprite else (sprite or {})
     status = aw.get("status") or {}
 
     return {
@@ -136,12 +137,46 @@ def _from_raw(aw: dict[str, Any]) -> dict[str, Any]:
         "video_height": _dig(aw, "video.height"),
         "play_url": _first_url(aw, "video.play_addr.url_list"),
         "music_url": _first_url(aw, "music.play_url.url_list"),
-        "sprite_url": sprite.get("img_url") if isinstance(sprite, dict) else None,
-        "sprite_frames": sprite.get("img_num") if isinstance(sprite, dict) else None,
         "poi_name": _dig(aw, "poi_info.poi_name"),
         "mix_name": _dig(aw, "mix_info.mix_name"),
         "is_subtitled": 1 if aw.get("is_subtitled") else 0,
         "is_deleted": 1 if status.get("is_delete") else 0,
+    }
+
+
+def _ai_content_from_raw(aw: dict[str, Any]) -> dict[str, Any]:
+    """抖音**自己生成的 AI 内容总结**,以及官方分类。
+
+    这是拿「视频内容」最划算的来源 —— 平台已经算好了,直接在响应里给,
+    不用发评论 @AI(那要批量写操作,是封号主因)、不用下视频做 ASR、
+    也不用调视觉模型。实测 17% 的作品有(1400 条完整数据里 241 条 ——
+    抖音只给长视频/知识类生成,有总结的平均 291 秒 vs 无总结的 158 秒),
+    官方分类覆盖 98%(1375/1400)。
+
+    返回 summary(整段总结)、chapters(带时间戳的章节大纲)、cat1/2/3。
+    """
+    ci = aw.get("recommend_chapter_info") or {}
+    summary = (ci.get("chapter_abstract") or "").strip()
+    chapters = [
+        {
+            # timestamp 是**毫秒**(实测:3384000 对应 56 分,该视频总长 3424370ms)。
+            # 当成秒会把 56 分算成 940 小时,前端显示 LIVE。
+            "t": ch.get("timestamp"),
+            "desc": ch.get("desc"),
+            "detail": ch.get("detail") or "",
+            "points": [p.get("desc") for p in (ch.get("points") or []) if p.get("desc")],
+        }
+        for ch in (ci.get("recommend_chapter_list") or [])
+        if isinstance(ch, dict) and ch.get("desc")
+    ]
+    cats = [t.get("tag_name") for t in (aw.get("video_tag") or [])
+            if isinstance(t, dict) and t.get("tag_name")]
+    return {
+        "summary": summary,
+        "chapters": chapters,
+        "cat1": cats[0] if len(cats) > 0 else None,
+        "cat2": cats[1] if len(cats) > 1 else None,
+        "cat3": cats[2] if len(cats) > 2 else None,
     }
 
 
@@ -186,6 +221,10 @@ def _normalize(
     if raw:
         row.update(_from_raw(raw))
         row["hashtags"] = _hashtags_from_raw(raw)      # 供落库时写 tags 表
+        ai = _ai_content_from_raw(raw)
+        row["cat1"], row["cat2"], row["cat3"] = ai["cat1"], ai["cat2"], ai["cat3"]
+        row["has_ai_summary"] = 1 if ai["summary"] else 0
+        row["_ai"] = ai                                # 供落库时写 transcripts / extractions
         row["raw_json"] = json.dumps(raw, ensure_ascii=False, default=str)
     else:
         row["raw_json"] = json.dumps(item, ensure_ascii=False, default=str)
@@ -196,11 +235,31 @@ def _normalize(
     return row
 
 
+async def _end_on_empty(agen):
+    """把 f2 在空页上抛的 UnboundLocalError 当成「翻到底了」。
+
+    f2 的 filter 假设响应里一定有 aweme_list,拿到空响应就会在构造
+    `nickname_raw` 这类字段时炸 `UnboundLocalError`。正常从头翻时不会遇到
+    (最后一页还有内容,再下一页 has_more=false 就停了),但**从一个正好指向
+    列表末尾的游标起步时,第一页就是空的** —— 回补被中断后续跑恰好会这样。
+    对我们来说那就是没有更多了,不是错误。
+    """
+    it = agen.__aiter__()
+    while True:
+        try:
+            page = await it.__anext__()
+        except StopAsyncIteration:
+            return
+        except UnboundLocalError:
+            return          # f2 撞上空响应 —— 到底了
+        yield page
+
+
 async def _iter_pages(
     agen, source: str, collects_id: str | None = None, collects_name: str | None = None
 ) -> AsyncIterator[tuple[list[dict[str, Any]], Any]]:
     """把 f2 的 filter 异步生成器转成 (归一化条目列表, max_cursor)。"""
-    async for page in agen:
+    async for page in _end_on_empty(agen):
         try:
             raw_items = page._to_list() or []
         except Exception:

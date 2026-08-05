@@ -85,16 +85,20 @@ async def get_videos(
     collects_id: str | None = None,
     nickname: str | None = None,
     tag: str | None = None,
+    cat1: str | None = None,
+    # 只看有平台 AI 总结的 —— 那是目前唯一的「视频内容」来源
+    has_summary: bool | None = None,
     sort: str = "collected",
     # 上限放宽到 500:网格视图下每页 50 条要翻 50 页,太碎
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ) -> dict[str, Any]:
     items = await asyncio.to_thread(
-        store.list_videos, q, source, limit, offset, collects_id, nickname, sort, tag
+        store.list_videos, q, source, limit, offset, collects_id, nickname,
+        sort, tag, cat1, has_summary,
     )
     total = await asyncio.to_thread(
-        store.count_videos, q, source, collects_id, nickname, tag
+        store.count_videos, q, source, collects_id, nickname, tag, cat1, has_summary
     )
     return {"total": total, "limit": limit, "offset": offset, "items": items}
 
@@ -107,6 +111,19 @@ async def get_authors(limit: int = Query(30, ge=1, le=200)) -> dict[str, Any]:
 @app.get("/api/tags")
 async def get_tags(limit: int = Query(40, ge=1, le=300)) -> dict[str, Any]:
     return {"items": await asyncio.to_thread(store.top_tags, limit)}
+
+
+@app.get("/api/categories")
+async def get_categories(limit: int = Query(30, ge=1, le=200)) -> dict[str, Any]:
+    """抖音官方一级分类 —— 平台自己打的,比从文案抠的 #标签 权威。"""
+    return {"items": await asyncio.to_thread(store.top_categories, limit)}
+
+
+@app.get("/api/coverage")
+async def get_coverage() -> dict[str, Any]:
+    """各字段覆盖率。「数据到底全不全」要能一眼看到,不能靠推断 ——
+    此前两次把「已采尽」判断错就是因为没有分母。"""
+    return await asyncio.to_thread(store.coverage)
 
 
 @app.post("/api/tags/rebuild")
@@ -135,14 +152,14 @@ async def get_cover(aweme_id: str):
     if path.exists():
         return FileResponse(path, media_type="image/jpeg")
 
-    row = await asyncio.to_thread(store.get_video, safe_id)
-    if not row or not row.get("cover"):
+    url = await asyncio.to_thread(store.get_cover_url, safe_id)
+    if not url:
         raise HTTPException(404, "没有封面")
 
     try:
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as cli:
             r = await cli.get(
-                row["cover"],
+                url,
                 headers={
                     "Referer": "https://www.douyin.com/",
                     "User-Agent": (
@@ -169,6 +186,19 @@ async def get_video(aweme_id: str) -> dict[str, Any]:
     if not row:
         raise HTTPException(404, "作品不存在")
     return row
+
+
+@app.get("/api/videos/{aweme_id}/raw")
+async def get_video_raw(aweme_id: str) -> dict[str, Any]:
+    """完整原始响应(787 个字段)。
+
+    列表和详情都只给「这一轮要用的」字段;想加新维度先来这里看有什么可用。
+    存的时候一个字段都没丢,所以永远不必为了看某个字段而重采。
+    """
+    raw = await asyncio.to_thread(store.get_raw, aweme_id)
+    if raw is None:
+        raise HTTPException(404, "没有完整响应(旧数据需要 refill 重采)")
+    return {"aweme_id": aweme_id, "fields": len(raw), "raw": raw}
 
 
 @app.get("/api/folders")

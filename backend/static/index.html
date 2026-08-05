@@ -208,11 +208,18 @@ main{max-width:1400px;margin:0 auto;padding:14px 20px 64px}
 /* 封面方向混杂(实测 63% 竖屏 / 35% 横屏)。统一用 contain 保证画面不被裁,
    letterbox 用同一张图放大模糊后垫底 —— 盒子尺寸完全一致,又不留死白。
    若用 cover,横屏封面会被裁掉约六成宽度,只剩中间一条。 */
-.thumb{position:relative;flex:0 0 68px;height:91px;border-radius:6px;
+/* 三个尺寸共用同一套规则(列表缩略图 / 网格 / 详情大图)。
+   img 必须显式 100% + display:block —— 少了它就按原始像素(640×360)撑出盒子,
+   在详情弹层里会盖住整栏文字。 */
+.thumb,.cover{position:relative;border-radius:6px;
   overflow:hidden;background:var(--surface-2)}
-.thumb img{position:relative;z-index:1;width:100%;height:100%;
+/* 用 width 而不是只写 flex-basis:缩略图外面套了一层 span,它才是
+   .r 的 flex 项 —— .thumb 自己不是,flex-basis 一点用都没有,
+   结果盒子跟着图片比例走(实测竖屏 51px / 横屏 162px,一行一个宽度)。 */
+.thumb{width:68px;height:91px;flex:0 0 68px}
+.thumb img,.cover img{position:relative;z-index:1;width:100%;height:100%;
   object-fit:contain;display:block}
-.thumb .bg,.gc .bg{position:absolute;inset:0;width:100%;height:100%;z-index:0;
+.thumb .bg,.gc .bg,.cover .bg{position:absolute;inset:0;width:100%;height:100%;z-index:0;
   object-fit:cover;filter:blur(14px) saturate(.7) brightness(.55);transform:scale(1.25)}
 .dur{position:absolute;right:3px;bottom:3px;padding:0 4px;border-radius:4px;
   background:rgba(6,8,11,.82);color:#e7ebf0;font-family:var(--mono);font-size:10px}
@@ -239,6 +246,23 @@ main{max-width:1400px;margin:0 auto;padding:14px 20px 64px}
 .pill.src{background:var(--accent-dim);color:#8fb8dc}
 .pill.h{cursor:pointer}
 .pill.h:hover{background:rgba(91,157,217,.16);color:#a9cdec}
+/* 官方分类:平台自己打的,权威度高于文案里抠的话题 —— 用描边区分开 */
+.pill.c{cursor:pointer;background:none;border:1px solid var(--line-2);color:var(--fg-2)}
+.pill.c:hover{border-color:var(--accent-line);color:#a9cdec}
+
+/* 互动数据。等宽 + tabular-nums,竖着扫一列时数字对齐才好比大小 */
+.mx{display:inline-flex;gap:9px;font-family:var(--mono);font-size:11.5px;
+  color:var(--fg-2);font-variant-numeric:tabular-nums}
+.mx i{font-style:normal;color:var(--dim-2);margin-right:2px}
+
+/* 平台 AI 总结:这是「视频讲了什么」,和作者文案不是一回事,
+   所以要在视觉上分开 —— 左侧一道细线,不做成卡片(列表密度已经很高) */
+.sum{margin-top:6px;padding-left:9px;border-left:2px solid var(--accent-line);
+  font-size:13px;line-height:1.65;color:var(--fg-2);
+  max-height:calc(1.65em * 3);overflow:hidden;
+  -webkit-mask-image:linear-gradient(180deg,#000 calc(100% - 12px),transparent);
+  mask-image:linear-gradient(180deg,#000 calc(100% - 12px),transparent)}
+.sum b{font-weight:500;color:var(--dim-2);font-size:11px;margin-right:6px}
 
 /* ══ 网格:封面即内容,此处卡片是功能性的 ═════════════════ */
 .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(158px,1fr))}
@@ -265,6 +289,9 @@ main{max-width:1400px;margin:0 auto;padding:14px 20px 64px}
 .gf{padding:7px 9px 8px;display:flex;flex-direction:column;gap:3px}
 .gf .a{font-size:11.5px;color:var(--fg-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gf .d{font-family:var(--mono);font-size:10.5px;color:var(--dim-2)}
+/* 「有内容总结」角标。时长在右上,所以它走左上 */
+.gm{position:absolute;top:5px;left:5px;z-index:3;padding:1px 5px;border-radius:4px;
+  font-size:10px;background:rgba(6,8,11,.82);border:1px solid var(--accent-line);color:#a9cdec}
 
 /* ══ 详情弹层 ══════════════════════════════════════════════
    知识库的核心动作是「读内容」。网格里文案被截断,列表里也只显示 5 行 ——
@@ -295,9 +322,28 @@ main{max-width:1400px;margin:0 auto;padding:14px 20px 64px}
 .sbody{display:flex;gap:16px;padding:16px;overflow-y:auto;flex:1}
 .sbody .pic{flex:0 0 168px}
 .sbody .pic .cover{width:168px;height:224px;flex:none}
-.sbody .pic .cover img{object-fit:contain}
-.sfull{min-width:0;flex:1;white-space:pre-wrap;word-break:break-word;
+.sfull{min-width:0;white-space:pre-wrap;word-break:break-word;
   font-size:14.5px;line-height:1.72;color:var(--fg-2)}
+
+/* 详情右栏:内容总结 → 章节 → 作者文案。顺序就是重要性顺序 ——
+   「视频讲了什么」在最上面,作者写的营销话术在最下面。 */
+.scol{min-width:0;flex:1;display:flex;flex-direction:column;gap:18px}
+.sec h4{font-size:11px;font-weight:600;letter-spacing:.04em;color:var(--dim);
+  margin:0 0 7px;display:flex;gap:7px;align-items:baseline}
+.sec h4 em{font-style:normal;font-weight:400;font-size:10.5px;color:var(--dim-2);
+  font-family:var(--mono)}
+.sec.hintbox{font-size:12.5px;line-height:1.65;color:var(--dim);
+  padding-left:9px;border-left:2px solid var(--line-2)}
+
+/* 章节大纲:带时间戳,是抖音自己切的。序号交给时间戳,不用列表编号。 */
+.chs{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:11px}
+.chs li{display:flex;gap:10px}
+.chs .ts{flex:0 0 auto;font-family:var(--mono);font-size:11px;color:var(--accent);
+  padding-top:2px;min-width:42px}
+.chs b{font-weight:550;font-size:13.5px;color:var(--fg);line-height:1.5}
+.chs p{margin:3px 0 0;font-size:12.5px;line-height:1.6;color:var(--fg-2)}
+.chs ul{margin:4px 0 0;padding-left:16px}
+.chs ul li{display:list-item;font-size:12px;line-height:1.6;color:var(--dim);margin-top:2px}
 .sfull.none{color:var(--dim-2);font-style:italic}
 .sheet footer{display:flex;gap:7px;flex-wrap:wrap;align-items:center;
   padding:12px 16px;border-top:1px solid var(--line)}
@@ -333,7 +379,7 @@ footer{max-width:1400px;margin:18px auto 0;padding:16px 20px 8px;
   .ztag{flex:none;padding-top:0}
   .ident .kpis{gap:13px;width:100%;margin-left:0;order:3}
   .ident .sub{display:none}
-  .thumb{flex-basis:56px;height:75px}
+  .thumb{width:56px;flex-basis:56px;height:75px}
   .grid{grid-template-columns:repeat(auto-fill,minmax(126px,1fr));gap:9px}
 }
 </style>
@@ -385,16 +431,20 @@ footer{max-width:1400px;margin:18px auto 0;padding:16px 20px 8px;
       <div class="row">
         <label class="search">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#i-search"/></svg>
-          <input type="search" id="q" placeholder="搜文案、作者、音乐名…">
+          <input type="search" id="q" placeholder="搜文案、内容总结、作者…">
         </label>
         <span id="srcs" class="row" style="gap:6px"></span>
         <span class="vsep"></span>
         <select id="sort">
           <option value="collected">存入时间</option>
           <option value="published">发布时间</option>
+          <option value="digg">赞数</option>
+          <option value="collect">被收藏数</option>
+          <option value="comment">评论数</option>
           <option value="duration">时长</option>
           <option value="author">作者</option>
         </select>
+        <select id="cat" title="抖音官方分类"><option value="">全部分类</option></select>
         <select id="author"><option value="">全部作者</option></select>
         <select id="psize" title="每页显示条数">
           <option value="50">每页 50</option>
@@ -407,6 +457,12 @@ footer{max-width:1400px;margin:18px auto 0;padding:16px 20px 8px;
           <button id="v-grid">网格</button>
         </div>
         <button class="chip" id="b-reset">重置</button>
+      </div>
+      <!-- 「有内容总结」是抖音自己给的视频内容摘要 —— 库里唯一能回答
+           「视频讲了什么」的东西(文案只是作者写的标题),所以给它一个显眼入口 -->
+      <div class="row" style="gap:6px">
+        <span class="chip" id="b-sum" title="只看抖音生成了内容总结的作品">
+          有内容总结<span class="n" id="n-sum"></span></span>
       </div>
       <div class="row" id="tags" style="gap:6px"></div>
       <div class="row" id="active" style="gap:6px"></div>
@@ -449,7 +505,7 @@ const ACTS = [
 let offset=0, total=0;
 // 每页条数记住选择:2485 条按 50/页 要翻 50 页,默认给 100
 let limit = +(localStorage.getItem('dydb.limit') || 100);
-let q='', source='', sort='collected', author='', tag='';
+let q='', source='', sort='collected', author='', tag='', cat='', onlySum=false;
 let view = localStorage.getItem('dydb.view') || 'list';
 let tagsOpen=false, polling=null;
 let shown = new Map();          // 当前页 aweme_id → 作品,详情弹层用
@@ -468,8 +524,12 @@ const qs = () => {
   const p=new URLSearchParams({limit,offset,sort});
   if(q) p.set('q',q); if(source) p.set('source',source);
   if(author) p.set('nickname',author); if(tag) p.set('tag',tag);
+  if(cat) p.set('cat1',cat); if(onlySum) p.set('has_summary','true');
   return p.toString();
 };
+/* 大数要好读:61.6万 比 616071 快得多 */
+const num = n => n==null ? '' :
+  n>=100000 ? (n/10000).toFixed(1).replace(/\.0$/,'')+'万' : n.toLocaleString();
 
 function renderActs(){
   $('#acts').innerHTML = ACTS.map(a =>
@@ -480,8 +540,12 @@ function renderActs(){
 
 async function loadStats(){
   const [s,h] = await Promise.all([api('/api/stats'), api('/api/health')]);
-  $('#kpis').innerHTML = [['作品',s.total],['有文案',s.with_description],['作者',s.authors]]
+  // 「有内容」和「有文案」分开列 —— 前者是视频讲了什么,后者只是作者写的标题
+  $('#kpis').innerHTML = [['作品',s.total],['有文案',s.with_description],
+                          ['有内容',s.with_ai_summary],['作者',s.authors]]
     .map(([k,v]) => `<span class="kpi"><b>${v.toLocaleString()}</b><i>${k}</i></span>`).join('');
+  $('#n-sum').textContent = s.with_ai_summary;
+  $('#b-sum').classList.toggle('on', onlySum);
 
   const es = Object.entries(s.by_source||{});
   $('#srcs').innerHTML =
@@ -592,6 +656,8 @@ function loadActive(){
     source && {k:'来源', v:SRC[source]||source, clear:()=>{ source=''; }},
     author && {k:'作者', v:author,        clear:()=>{ author=''; $('#author').value=''; }},
     tag    && {k:'标签', v:'#'+tag,       clear:()=>{ tag=''; }},
+    cat    && {k:'分类', v:cat,           clear:()=>{ cat=''; $('#cat').value=''; }},
+    onlySum&& {k:'限定', v:'有内容总结',   clear:()=>{ onlySum=false; }},
   ].filter(Boolean);
 
   if(!fs.length){ $('#active').innerHTML=''; return; }
@@ -606,6 +672,14 @@ function loadActive(){
   $('#f-clear').onclick = resetAll;
 }
 
+/* 抖音官方分类:平台自己打的三级类目,100% 覆盖,比从文案抠的 #标签 权威 */
+async function loadCategories(){
+  const d = await api('/api/categories?limit=40');
+  $('#cat').innerHTML = '<option value="">全部分类</option>' +
+    d.items.map(c=>`<option value="${esc(c.cat)}">${esc(c.cat)} · ${c.n}</option>`).join('');
+  $('#cat').value = cat;
+}
+
 async function loadAuthors(){
   const d = await api('/api/authors?limit=60');
   $('#author').innerHTML = '<option value="">全部作者</option>' +
@@ -614,14 +688,37 @@ async function loadAuthors(){
 }
 
 /* 封面走 /api/cover 代理:抖音 CDN 防盗链,且 URL 带 x-expires 会过期 */
+/* 封面取不到(签名过期/已删稿)就换占位图。模糊垫底那层也要一起去掉,
+   否则会剩一块看不出是什么的色斑。 */
 window.coverFail = img => { const b=img.parentNode; img.remove();
+  b.querySelector('img.bg')?.remove();
   b.insertAdjacentHTML('afterbegin', `<div class="ph">${ico('i-img')}</div>`); };
 
 function cover(v, cls){
   const d = v.video_duration ? `<span class="dur">${dur(v.video_duration)}</span>` : '';
-  return v.cover
-    ? `<div class="${cls}"><img src="/api/cover/${encodeURIComponent(v.aweme_id)}" loading="lazy" alt="" onerror="coverFail(this)">${d}</div>`
-    : `<div class="${cls}"><div class="ph">${ico('i-img')}</div>${d}</div>`;
+  if(!v.cover) return `<div class="${cls}"><div class="ph">${ico('i-img')}</div>${d}</div>`;
+  const src = `/api/cover/${encodeURIComponent(v.aweme_id)}`;
+  // 两层同一张图:底层 cover+模糊填满盒子,上层 contain 保证画面不被裁。
+  // 封面方向混杂(63% 竖屏 / 35% 横屏),统一盒子尺寸就必然留边 ——
+  // 用模糊的自己垫底,比留一片死黑好看,也不会误导画面比例。
+  return `<div class="${cls}">
+    <img class="bg" src="${src}" loading="lazy" alt="" aria-hidden="true">
+    <img src="${src}" loading="lazy" alt="" onerror="coverFail(this)">${d}</div>`;
+}
+
+/* 互动数据:一千多条散装收藏,靠人翻是翻不出优质内容的,
+   得让「多少人赞过」直接摆在脸上。数字用等宽字体,方便竖着比。 */
+function metrics(v){
+  const ms = [['赞', v.digg_count], ['藏', v.collect_count], ['评', v.comment_count]]
+    .filter(([,n]) => n!=null && n>0);
+  if(!ms.length) return '';
+  return `<span class="mx">${ms.map(([k,n])=>`<i>${k}</i>${num(n)}`).join('')}</span>`;
+}
+
+function catPill(v){
+  const c = [v.cat1,v.cat2,v.cat3].filter(Boolean);
+  return c.length ? `<span class="pill c" onclick="byCat('${jsq(v.cat1)}')"
+    title="抖音官方分类">${esc(c.join(' › '))}</span>` : '';
 }
 
 function listRow(v){
@@ -630,19 +727,23 @@ function listRow(v){
   const srcs=(v.sources||'').split(',').filter(Boolean);
   const fold=(v.folders||'').split(',').filter(Boolean);
   const hs=(v.tags||'').split(',').filter(Boolean).slice(0,6);
+  const sum=(v.ai_summary||'').trim();
   return `<div class="r">
     <span style="cursor:zoom-in" onclick="detail('${esc(v.aweme_id)}')">${cover(v,'thumb')}</span>
     <div class="rb">
       <div class="rm">
         <span class="who" onclick="byAuthor('${jsq(v.nickname)}')">${esc(v.nickname)||'未知作者'}</span>
         <span class="t">${esc(day(v.create_time))}</span>
+        ${metrics(v)}
         <a class="out" href="${esc(v.share_url)}" target="_blank" rel="noreferrer">抖音打开${ico('i-ext')}</a>
       </div>
       <div class="txt${t?'':' none'}">${t?esc(t):'（无文案）'}</div>
       ${long?`<button class="link" onclick="tg(this)">展开全文</button>`:''}
+      ${sum?`<div class="sum"><b>内容</b>${esc(sum)}</div>`:''}
       <button class="link" style="align-self:flex-start" onclick="detail('${esc(v.aweme_id)}')">详情</button>
       <div class="pills">
         ${srcs.map(s=>`<span class="pill src">${SRC[s]||s}</span>`).join('')}
+        ${catPill(v)}
         ${fold.map(f=>`<span class="pill">${esc(f)}</span>`).join('')}
         ${hs.map(x=>`<span class="pill h" onclick="byTag('${jsq(x)}')">#${esc(x)}</span>`).join('')}
         ${v.music_title?`<span class="pill">${esc(v.music_title)}</span>`:''}
@@ -653,10 +754,12 @@ function listRow(v){
 function gridCell(v){
   const t=(v.description||'').trim();
   // 点卡片开详情而不是直接跳抖音 —— 网格里文案被截断,先给个能读全文的地方
+  // 网格里放不下总结全文,但要能一眼看出「这条有内容可读」
+  const mark = v.has_ai_summary ? `<span class="gm" title="有内容总结">内容</span>` : '';
   return `<div class="g" onclick="detail('${esc(v.aweme_id)}')">
-    <div style="position:relative">${cover(v,'gc')}${t?`<div class="gt">${esc(t)}</div>`:''}</div>
+    <div style="position:relative">${cover(v,'gc')}${mark}${t?`<div class="gt">${esc(t)}</div>`:''}</div>
     <div class="gf"><span class="a">${esc(v.nickname)||'未知作者'}</span>
-      <span class="d">${esc(day(v.create_time))}</span></div></div>`;
+      <span class="d">${v.digg_count!=null?num(v.digg_count)+' 赞':esc(day(v.create_time))}</span></div></div>`;
 }
 
 async function loadList(){
@@ -690,14 +793,19 @@ async function loadList(){
 
 /* ── 详情弹层:能读全文的地方 ───────────────────────────── */
 window.detail = async id => {
+  // 详情走接口:章节大纲只在这里给(列表不带,免得每条多驮一份 JSON)。
+  // 本地 SQLite,一次查询是毫秒级的。
   let v = shown.get(String(id));
-  if(!v){                                   // 兜底:比如从别处跳进来
-    try { v = await api('/api/videos/'+encodeURIComponent(id)); }
-    catch(e){ return warn(esc(e.message)); }
-  }
+  try { v = await api('/api/videos/'+encodeURIComponent(id)); }
+  catch(e){ if(!v) return warn(esc(e.message)); }
+
   const t = (v.description || '').trim();
-  const srcs = (v.sources || '').split(',').filter(Boolean);
-  const hs = (v.tags || '').split(',').filter(Boolean);
+  const arr = x => Array.isArray(x) ? x.filter(Boolean) : (x||'').split(',').filter(Boolean);
+  const srcs = arr(v.sources);
+  const hs = arr(v.tags);
+  const sum = (v.ai_summary || '').trim();
+  const chs = Array.isArray(v.chapters) ? v.chapters : [];
+  const cats = [v.cat1,v.cat2,v.cat3].filter(Boolean);
 
   document.body.insertAdjacentHTML('beforeend', `
     <div class="mask" id="sheet">
@@ -709,6 +817,7 @@ window.detail = async id => {
             <div class="sm">
               <span>${esc((v.create_time||'').slice(0,10))}</span>
               ${v.video_duration?`<span>${dur(v.video_duration)}</span>`:''}
+              ${metrics(v)}
               <span>${esc(v.aweme_id)}</span>
             </div>
           </div>
@@ -716,10 +825,25 @@ window.detail = async id => {
         </header>
         <div class="sbody">
           <div class="pic">${cover(v,'cover')}</div>
-          <div class="sfull${t?'':' none'}">${t?esc(t):'（这条作品没有文案 —— 需要视觉理解才能补全内容）'}</div>
+          <div class="scol">
+          ${sum ? `<div class="sec"><h4>内容总结<em>抖音生成</em></h4>
+                     <div class="sfull">${esc(sum)}</div></div>` : ''}
+          ${chs.length ? `<div class="sec"><h4>章节<em>${chs.length} 段</em></h4>
+            <ol class="chs">${chs.map(c=>`<li>
+              ${c.t?`<span class="ts">${dur(c.t)}</span>`:'<span class="ts">0:00</span>'}
+              <div><b>${esc(c.desc||'')}</b>
+              ${c.detail?`<p>${esc(c.detail)}</p>`:''}
+              ${(c.points||[]).length?`<ul>${c.points.map(p=>`<li>${esc(p)}</li>`).join('')}</ul>`:''}
+              </div></li>`).join('')}</ol></div>` : ''}
+          <div class="sec"><h4>作者文案${sum?'<em>不是视频内容</em>':''}</h4>
+            <div class="sfull${t?'':' none'}">${t?esc(t):'（这条作品没有文案）'}</div></div>
+          ${!sum ? `<div class="sec hintbox">抖音没为这条生成内容总结（只有约 20% 的作品有，
+            多是长视频/知识类）。要拿到它讲了什么，得走 ASR —— 下一步的事。</div>` : ''}
+          </div>
         </div>
         <footer>
           ${srcs.map(x=>`<span class="pill src">${SRC[x]||x}</span>`).join('')}
+          ${cats.length?`<span class="pill c">${esc(cats.join(' › '))}</span>`:''}
           ${hs.map(x=>`<span class="pill h" onclick="byTag('${jsq(x)}');closeSheet()">#${esc(x)}</span>`).join('')}
           ${v.music_title?`<span class="pill">${esc(v.music_title)}</span>`:''}
           <a class="btn primary go" href="${esc(v.share_url)}" target="_blank"
@@ -746,8 +870,10 @@ window.tg = b => { const e=b.previousElementSibling; e.classList.toggle('open');
   b.textContent = e.classList.contains('open')?'收起':'展开全文'; };
 window.byAuthor = n => { author = author===n?'':n; $('#author').value=author; offset=0; loadActive(); loadList(); };
 window.byTag = t => { tag = tag===t?'':t; offset=0; loadTags(); loadActive(); loadList(); };
-window.resetAll = () => { q=source=author=tag=''; sort='collected'; offset=0;
-  $('#q').value=''; $('#author').value=''; $('#sort').value='collected';
+window.byCat = c => { cat = cat===c?'':c; $('#cat').value=cat; offset=0;
+  closeSheet(); loadActive(); loadList(); };
+window.resetAll = () => { q=source=author=tag=cat=''; onlySum=false; sort='collected'; offset=0;
+  $('#q').value=''; $('#author').value=''; $('#cat').value=''; $('#sort').value='collected';
   loadStats(); loadTags(); loadActive(); loadList(); };
 
 function setView(v){ view=v; localStorage.setItem('dydb.view',v);
@@ -844,6 +970,9 @@ $('#v-list').onclick  = () => setView('list');
 $('#v-grid').onclick  = () => setView('grid');
 $('#sort').onchange   = e => { sort=e.target.value; offset=0; loadList(); };
 $('#author').onchange = e => { author=e.target.value; offset=0; loadActive(); loadList(); };
+$('#cat').onchange    = e => { cat=e.target.value; offset=0; loadActive(); loadList(); };
+$('#b-sum').onclick   = () => { onlySum=!onlySum; offset=0;
+  $('#b-sum').classList.toggle('on', onlySum); loadActive(); loadList(); };
 $('#psize').onchange  = e => {
   limit = +e.target.value;
   localStorage.setItem('dydb.limit', limit);
@@ -857,7 +986,8 @@ let dt; $('#q').oninput = e => { clearTimeout(dt);
   renderActs(); setView(view);
   $('#psize').value = limit;
   setProgOpen(localStorage.getItem('dydb.progOpen') === '1');
-  await loadStats(); await loadAuthors(); await loadTags(); await loadPlan(); loadActive();
+  await loadStats(); await loadAuthors(); await loadCategories();
+  await loadTags(); await loadPlan(); loadActive();
   await loadList(); await pollRuns();
 })();
 </script>
