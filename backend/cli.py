@@ -149,6 +149,13 @@ async def cmd_state(args) -> None:
     """看各分类的采集进度:已采 / 平台总数 / 完成度。"""
     import planner
 
+    if args.set:
+        for pair in args.set:
+            scope, _, val = pair.partition("=")
+            planner.set_manual_total(scope.strip(), int(val) if val.strip() else None)
+            print(f"已设置 {scope.strip()} 的平台总数 = {val.strip() or '(清除)'}")
+        print()
+
     if args.refresh:
         from collector import totals
         try:
@@ -164,12 +171,14 @@ async def cmd_state(args) -> None:
         flag = "冷却中" if planner.cooldown_left(s["scope"]) else (
             "已采尽" if st.get("exhausted") else "未采尽")
         total = s.get("total")
-        tot_s = str(total) if total else "—"
+        src = {"api": "", "manual": "*"}.get(st.get("total_source") or "", "")
+        tot_s = (str(total) + src) if total else "—"
         pct = f"{s['percent']}%" if s.get("percent") is not None else "—"
         print(f"{s['label']:<10}{s['collected']:>7}{tot_s:>8}{pct:>9}  {flag:<8}{s['reason']}")
         if st.get("last_error"):
             print(f"{'':<10}└ 上次错误:{st['last_error'][:70]}")
-    print("\n注:收藏没有官方计数字段,平台数只能靠抖音 App 里人工核对。")
+    print("\n注:* = 手填的总数。收藏没有官方计数字段(抖音不提供「我收藏了多少条」),")
+    print("   在 App 里看到数字后用 --set collection=N 填进来即可。")
     print("   缺口也可能是原作者删稿造成的永久差额。")
 
 
@@ -332,6 +341,8 @@ def main() -> None:
 
     sp = sub.add_parser("state", help="看采集进度:已采/平台总数/完成度")
     sp.add_argument("--refresh", action="store_true", help="重新向抖音取一次平台计数")
+    sp.add_argument("--set", action="append", metavar="SCOPE=N",
+                    help="手填总数,如 collection=1300(收藏只能手填,抖音不给这个数)")
 
     sp = sub.add_parser("sync", help="增量同步(只发现新增,不续采历史)")
     sp.add_argument("--skip-posts", action="store_true", help="不同步我的作品")

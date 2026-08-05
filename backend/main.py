@@ -236,6 +236,23 @@ async def collect_plan() -> dict[str, Any]:
     return {"steps": [enrich(s) for s in steps]}
 
 
+@app.post("/api/collect/totals/manual")
+async def set_manual_total(scope: str, total: int | None = None) -> dict[str, Any]:
+    """手填某一类的平台总数。
+
+    收藏只能走这条路 —— 抖音资料接口不提供「我收藏了多少条」
+    (127 个字段里只有 aweme_count 作品数与 favoriting_count 点赞数,
+     收藏是私密的,没有计数器)。用户在 App 里看到数字后填进来即可。
+    """
+    import planner
+
+    try:
+        await asyncio.to_thread(planner.set_manual_total, scope, total)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return {"scope": scope, "total": total}
+
+
 @app.post("/api/collect/totals/refresh")
 async def refresh_totals() -> dict[str, Any]:
     """向抖音取一次平台侧总数(完整度的分母)。只发一个请求。

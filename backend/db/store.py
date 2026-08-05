@@ -50,6 +50,7 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
             "platform_total": "INTEGER",
             "platform_total_at": "TEXT",
             "exhaust_passes": "INTEGER DEFAULT 0",
+            "total_source": "TEXT",
         },
     }
     for table, cols in wanted.items():
@@ -533,6 +534,7 @@ def get_state(scope: str) -> dict[str, Any]:
         "backoff_level": 0, "consecutive_403": 0, "last_status": None,
         "last_error": None, "last_run_at": None, "total_pages": 0,
         "platform_total": None, "platform_total_at": None, "exhaust_passes": 0,
+        "total_source": None,
     }
 
 
@@ -550,6 +552,7 @@ def save_state(scope: str, **fields: Any) -> None:
         "scope", "exhausted", "blocked_until", "backoff_level",
         "consecutive_403", "last_status", "last_error", "last_run_at",
         "total_pages", "platform_total", "platform_total_at", "exhaust_passes",
+        "total_source",
     ]
     row = {c: cur.get(c) for c in cols}
     updates = ",".join(f"{c}=excluded.{c}" for c in cols if c != "scope")

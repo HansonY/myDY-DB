@@ -134,6 +134,10 @@ CREATE TABLE IF NOT EXISTS collect_state (
     -- 但抖音说有 1876 条、我们只有 1457 —— 少了 419 条却被标成已采尽。
     platform_total   INTEGER,
     platform_total_at TEXT,
+    -- 分母从哪来:api = 抖音资料接口给的;manual = 用户在 App 里看到后手填。
+    -- 收藏必须手填 —— 抖音不提供「我收藏了多少条」这个字段(收藏是私密的,
+    -- 资料接口 127 个字段里只有作品数 aweme_count 和点赞数 favoriting_count)。
+    total_source     TEXT,
     -- 完整走完一遍且仍有缺口的次数。缺口可能是原作者删稿导致的永久差额,
     -- 所以不能无限重试 —— 连续确认两遍就接受现状。
     exhaust_passes   INTEGER DEFAULT 0

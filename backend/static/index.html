@@ -142,15 +142,29 @@ select:focus{outline:none;border-color:var(--accent-line)}
 .act-f button:hover{opacity:1}
 .act-lbl{font-size:11.5px;color:var(--dim-2);margin-right:2px}
 
-/* 采集计划:说明文字,非控件 —— 刻意做轻 */
-.plan{display:flex;gap:16px;flex-wrap:wrap;align-items:center;font-size:11.5px;color:var(--dim-2)}
-.plan .p{display:inline-flex;gap:5px;align-items:center}
-.plan .p svg{width:11px;height:11px;stroke-width:1.6;color:var(--dim)}
-.plan .p b{font-weight:500;color:var(--fg-2)}
-.plan .p em{font-style:normal;color:var(--dim-2);opacity:.85}
-.plan .pc{color:var(--dim-2)}
-.plan .pc.bad{color:var(--warn)}   /* 缺口超出容差 = 还没采完 */
-.plan .p.wait svg,.plan .p.wait b{color:var(--warn)}
+/* 采集进度表:已采 / 平台总数 + 完成度条 + 还差多少。
+   这是「信息」不是控件,所以不用 chip 那种可点外观,但要能一眼看出比例。 */
+.prog{display:grid;grid-template-columns:auto auto 1fr auto auto auto;
+  gap:3px 10px;align-items:center;font-size:11.5px;color:var(--dim)}
+.prog .lb{color:var(--fg-2)}
+.prog .cnt{font-family:var(--mono);color:var(--fg-2);white-space:nowrap}
+.prog .cnt s{text-decoration:none;color:var(--dim-2)}
+.prog .bar{height:4px;border-radius:3px;background:var(--surface-2);
+  overflow:hidden;min-width:70px;max-width:220px}
+.prog .bar i{display:block;height:100%;border-radius:3px;background:var(--accent);
+  transition:width .4s var(--ease)}
+.prog .bar.bad i{background:var(--warn)}
+.prog .pc{font-family:var(--mono);min-width:44px;text-align:right}
+.prog .pc.bad{color:var(--warn)}
+.prog .left{color:var(--warn);white-space:nowrap}
+.prog .act{color:var(--dim-2);white-space:nowrap}
+.prog .act.wait{color:var(--warn)}
+.prog .none{color:var(--dim-2)}
+.prog .set{background:none;border:none;color:var(--accent);cursor:pointer;
+  font-size:11px;padding:0 3px;font-family:inherit}
+.prog .set:hover{text-decoration:underline}
+.prog .hd{grid-column:1/-1;color:var(--dim-2);opacity:.8;margin-bottom:1px;
+  display:flex;gap:8px;align-items:center}
 
 /* ══ 提示条 ════════════════════════════════════════════════ */
 main{max-width:1400px;margin:0 auto;padding:14px 20px 64px}
@@ -289,7 +303,7 @@ footer{max-width:1400px;margin:18px auto 0;padding:16px 20px 8px;
     <div class="ztag"><em>01</em>采集</div>
     <div class="zbody">
       <div class="row" id="acts"></div>
-      <div class="plan" id="plan"></div>
+      <div class="prog" id="plan"></div>
     </div>
   </div>
 
@@ -411,25 +425,56 @@ async function loadStats(){
 }
 
 const PLAN_ICON = {resume:'i-resume', sync:'i-sync', skip:'i-pause'};
+const n0 = v => (v??0).toLocaleString();
+
 async function loadPlan(){
   const d = await api('/api/collect/plan');
-  $('#plan').innerHTML = d.steps.map(s => {
-    // 完整度:已采 / 平台总数。没有分母就只显示已采条数。
-    // 收藏没有官方计数字段,所以那一项永远没有分母。
-    const prog = s.total
-      ? `<b class="num">${s.collected}/${s.total}</b><span class="pc${s.short?' bad':''}">${s.percent}%</span>`
-      : `<b class="num">${s.collected}</b><span class="pc">—</span>`;
+
+  const rows = d.steps.map(s => {
     const act = s.action==='skip' ? `冷却 ${s.cooldown_minutes} 分钟`
-              : s.action==='sync' ? '增量' : '续采';
-    return `<span class="p ${s.action==='skip'?'wait':''}" title="${esc(s.reason)}">
-      ${ico(PLAN_ICON[s.action])}${esc(s.label)} ${prog}<em>${act}</em></span>`;
-  }).join('') + `<button class="link" id="p-refresh" title="向抖音取一次平台总数">刷新平台计数</button>`;
+              : s.action==='sync' ? '增量同步' : '续采历史';
+    // 有分母才能算比例。收藏没有官方计数字段,分母得手填。
+    if(!s.total){
+      return `<span class="lb">${esc(s.label)}</span>
+        <span class="cnt">${n0(s.collected)} <s>/ ?</s></span>
+        <span class="none">未设总数,无法判断完整度</span>
+        <span></span>
+        <button class="set" data-scope="${s.scope}">设置总数</button>
+        <span class="act${s.action==='skip'?' wait':''}">${act}</span>`;
+    }
+    const pct = Math.min(100, s.percent);
+    return `<span class="lb">${esc(s.label)}</span>
+      <span class="cnt">${n0(s.collected)} <s>/ ${n0(s.total)}</s></span>
+      <span class="bar${s.short?' bad':''}"><i style="width:${pct}%"></i></span>
+      <span class="pc${s.short?' bad':''}">${s.percent}%</span>
+      <span class="${s.short?'left':'none'}">${s.short?`还差 ${n0(s.gap)}`:'已齐'}</span>
+      <span class="act${s.action==='skip'?' wait':''}">${act}</span>`;
+  }).join('');
+
+  $('#plan').innerHTML =
+    `<div class="hd"><span>采集进度(已采 / 平台总数)</span>
+       <button class="set" id="p-refresh" title="向抖音取一次官方计数">刷新计数</button></div>` + rows;
 
   $('#p-refresh').onclick = async () => {
     const b=$('#p-refresh'); b.disabled=true; b.textContent='取数中…';
     try{ await api('/api/collect/totals/refresh',{method:'POST'}); await loadPlan(); }
-    catch(e){ warn(esc(e.message)); b.disabled=false; b.textContent='刷新平台计数'; }
+    catch(e){ warn(esc(e.message)); b.disabled=false; b.textContent='刷新计数'; }
   };
+
+  // 手填分母:抖音不提供「我收藏了多少条」,只能你在 App 里看到后填进来
+  $('#plan').querySelectorAll('.set[data-scope]').forEach(b => b.onclick = async () => {
+    const cur = d.steps.find(x=>x.scope===b.dataset.scope);
+    const v = prompt(
+      `「${cur.label}」在抖音 App 里显示多少条?\n\n` +
+      `抖音资料接口不提供这个数(收藏是私密的,没有计数器),所以只能手填。\n` +
+      `填了之后就能看到完整度,采集也会照着补齐。留空则清除。`,
+      cur.total || '');
+    if(v===null) return;
+    const q = new URLSearchParams({scope:b.dataset.scope});
+    if(v.trim()) q.set('total', String(parseInt(v,10)||0));
+    try{ await api('/api/collect/totals/manual?'+q,{method:'POST'}); await loadPlan(); }
+    catch(e){ warn(esc(e.message)); }
+  });
 }
 
 async function loadTags(){

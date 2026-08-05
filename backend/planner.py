@@ -139,7 +139,27 @@ def save_totals(totals: dict[str, int]) -> None:
     at = _now().isoformat(timespec="seconds")
     for scope, n in totals.items():
         if scope in PLANS:
-            store.save_state(scope, platform_total=n, platform_total_at=at)
+            store.save_state(scope, platform_total=n, platform_total_at=at,
+                             total_source="api")
+
+
+def set_manual_total(scope: str, total: int | None) -> None:
+    """手填分母。收藏只能走这条路 —— 抖音不给「我收藏了多少条」。
+
+    填了之后完整度判定就生效:缺口超容差会继续续采而不是切增量。
+    传 None 清除。
+    """
+    if scope not in PLANS:
+        raise ValueError(f"未知分类:{scope}")
+    if total is not None and total < 0:
+        raise ValueError("总数不能为负")
+    store.save_state(
+        scope,
+        platform_total=total,
+        platform_total_at=_now().isoformat(timespec="seconds") if total else None,
+        total_source="manual" if total else None,
+        exhaust_passes=0,      # 换了分母就重新给它机会去补齐
+    )
 
 
 def record_success(scope: str, pages: int, exhausted: bool) -> None:
