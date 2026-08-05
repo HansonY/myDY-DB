@@ -213,6 +213,36 @@ async def collect_scope(
                 "note": "已采部分与游标都保留了,可以再试。403 表示被风控限流。"}
 
 
+async def refill(
+    scope: Scope | None = None,
+    max_pages: int = 0,
+) -> dict[str, Any]:
+    """回补完整字段:重走列表,把已有作品的原始响应与新字段补上。
+
+    早期采集时只存了 f2 提取的 31 个字段,而抖音真实响应有 787 个 ——
+    互动数据(赞/评/藏/转)、视频与音轨地址、雪碧图、结构化话题、尺寸都丢了。
+    这些只能重新请求才拿得到,且媒体地址带 x-expires 会过期,越早补越好。
+
+    不会动深挖游标,也不会提前停(整页已知条目也要继续,目的就是更新它们)。
+    """
+    store.init_db()
+    try:
+        await asyncio.to_thread(service.guard_single_run)
+    except service.AlreadyCollecting as e:
+        return {"started": False, "reason": str(e)}
+
+    scopes = [scope] if scope else ["collection", "like", "post"]
+    out = []
+    for sc in scopes:
+        try:
+            r = await service.refill_scope(sc, max_pages=max_pages)
+            out.append({"scope": sc, "pages": r["pages"], "updated": r["fetched"],
+                        "hit_cap": r.get("hit_cap")})
+        except Exception as e:
+            out.append({"scope": sc, "error": f"{type(e).__name__}: {e}"})
+    return {"results": out}
+
+
 async def refresh_totals(
     manual_scope: Scope | None = None,
     manual_total: int | None = None,
@@ -373,6 +403,18 @@ _TOOLS: list[Tool] = [
         },
     ),
     Tool(
+        name="refill",
+        description=(
+            "回补完整字段。早期采集只存了 31/787 个字段,互动数据、视频与音轨地址、"
+            "雪碧图、结构化话题、尺寸都丢了 —— 只能重走列表补回。"
+            "不动深挖游标,不提前停。媒体地址会过期,越早补越好。"
+        ),
+        inputSchema={"type": "object", "properties": {
+            "scope": {"type": "string", "enum": ["collection", "like", "post"],
+                      "description": "留空则三类都补"},
+            "max_pages": {"type": "integer", "description": "单次页数上限,0=不限"}}},
+    ),
+    Tool(
         name="refresh_totals",
         description=(
             "刷新「平台总数」(完整度的分母),从抖音 self 端点取作品/点赞/收藏三个官方计数。"
@@ -403,6 +445,7 @@ _HANDLERS = {
     "collect_status": lambda a: collect_status(),
     "collect_smart": lambda a: collect_smart(**a),
     "collect_scope": lambda a: collect_scope(**a),
+    "refill": lambda a: refill(**a),
     "refresh_totals": lambda a: refresh_totals(**a),
     "rebuild_tags": lambda a: rebuild_tags(),
     "auth_status": lambda a: auth_status(),

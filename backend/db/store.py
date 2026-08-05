@@ -23,6 +23,10 @@ _VIDEO_COLUMNS = (
     "description", "nickname", "sec_user_id", "uid", "create_time",
     "video_duration", "cover", "music_title", "share_url",
     "is_prohibited", "author_deleted", "raw_json",
+    "digg_count", "comment_count", "share_count", "collect_count",
+    "video_width", "video_height", "play_url", "music_url",
+    "sprite_url", "sprite_frames", "poi_name", "mix_name",
+    "is_subtitled", "is_deleted",
 )
 
 
@@ -45,6 +49,15 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
             "origin": "TEXT",
             "heartbeat_at": "TEXT",
             "progress": "TEXT",
+        },
+        "videos": {
+            "digg_count": "INTEGER", "comment_count": "INTEGER",
+            "share_count": "INTEGER", "collect_count": "INTEGER",
+            "video_width": "INTEGER", "video_height": "INTEGER",
+            "play_url": "TEXT", "music_url": "TEXT",
+            "sprite_url": "TEXT", "sprite_frames": "INTEGER",
+            "poi_name": "TEXT", "mix_name": "TEXT",
+            "is_subtitled": "INTEGER DEFAULT 0", "is_deleted": "INTEGER DEFAULT 0",
         },
         "collect_state": {
             "platform_total": "INTEGER",
@@ -100,7 +113,17 @@ def upsert_videos(items: Iterable[dict[str, Any]]) -> tuple[int, int]:
 
         rows = []
         for it in items:
-            row = {k: it.get(k) for k in _VIDEO_COLUMNS}
+            row = {}
+            for k in _VIDEO_COLUMNS:
+                v = it.get(k)
+                # SQLite 只接受标量。曾因 url_list 直接塞进来导致整页落库失败
+                # (Error binding parameter: type 'list' is not supported)——
+                # 一个字段的问题不该让整页数据丢掉,这里统一兜住。
+                if isinstance(v, (list, dict, tuple, set)):
+                    v = json.dumps(v, ensure_ascii=False, default=str)
+                elif isinstance(v, bool):
+                    v = int(v)
+                row[k] = v
             row["collected_at"] = now
             row["updated_at"] = now
             rows.append(row)
@@ -168,6 +191,18 @@ def rebuild_tags() -> tuple[int, int]:
             "SELECT COUNT(*) AS n FROM (SELECT 1 FROM tags GROUP BY LOWER(tag))"
         ).fetchone()["n"]
     return tagged, distinct
+
+
+def save_hashtags(aweme_id: str, tags_: list[str]) -> None:
+    """写入平台给的结构化话题。与 rebuild_tags 的正则结果共存于同一张表,
+    但这些更可信 —— 直接来自 text_extra[].hashtag_name。"""
+    if not tags_:
+        return
+    with connect() as conn:
+        conn.executemany(
+            "INSERT OR IGNORE INTO tags (aweme_id, tag) VALUES (?, ?)",
+            [(aweme_id, t) for t in tags_ if t and t.strip()],
+        )
 
 
 def top_tags(limit: int = 40) -> list[dict[str, Any]]:

@@ -187,6 +187,24 @@ async def cmd_state(args) -> None:
     print("   缺口可能是原作者删稿造成的永久差额,连续确认两遍后就会接受现状。")
 
 
+async def cmd_refill(args) -> None:
+    """回补完整字段:重走列表,把已有作品的 raw 与新字段补上。"""
+    import service
+
+    scopes = [args.scope] if args.scope else ["collection", "like", "post"]
+    for sc in scopes:
+        label = {"collection": "收藏", "like": "点赞", "post": "我的作品"}[sc]
+        print(f"\n── 回补 {label} ──")
+        try:
+            r = await service.refill_scope(sc, max_pages=args.max_pages,
+                                           on_progress=_progress)
+            print(f"  走了 {r['pages']} 页,更新 {r['fetched']} 条"
+                  f"{'(采够上限主动收手)' if r.get('hit_cap') else ''}")
+        except Exception as e:
+            print(f"  ✗ {type(e).__name__}: {str(e)[:80]}")
+            print("    已更新的保留了,再跑一次会接着走。")
+
+
 async def cmd_sync(args) -> None:
     """增量同步:从最新开始扫,连续几页无新增就停。
 
@@ -349,6 +367,10 @@ def main() -> None:
     sp.add_argument("--set", action="append", metavar="SCOPE=N",
                     help="手填总数,如 collection=1300(收藏只能手填,抖音不给这个数)")
 
+    sp = sub.add_parser("refill", help="回补完整字段(早期采的只存了 31/787 个字段)")
+    sp.add_argument("--scope", choices=["collection", "like", "post"])
+    sp.add_argument("--max-pages", type=int, default=0, help="单次页数上限,0=不限")
+
     sp = sub.add_parser("sync", help="增量同步(只发现新增,不续采历史)")
     sp.add_argument("--skip-posts", action="store_true", help="不同步我的作品")
 
@@ -386,6 +408,7 @@ def main() -> None:
         "whoami": cmd_whoami,
         "smart": cmd_smart,
         "state": cmd_state,
+        "refill": cmd_refill,
         "sync": cmd_sync,
         "probe": cmd_probe,
         "favorites": cmd_favorites,

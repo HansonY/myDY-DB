@@ -24,7 +24,30 @@ CREATE TABLE IF NOT EXISTS videos (
     share_url       TEXT,                      -- 可直接点开的作品链接
     is_prohibited   INTEGER DEFAULT 0,
     author_deleted  INTEGER DEFAULT 0,
-    raw_json        TEXT,                      -- 原始条目全量留档
+    -- ⚠️ raw_json 曾经只存 f2 提取后的 31 个字段,而抖音真实响应有 787 个 ——
+    -- 等于每条丢掉 750+ 字段(互动数据、视频地址、雪碧图、结构化话题…)。
+    -- 现在存**真实响应原文**,以后要新字段直接从这里解析,不必重采。
+    raw_json        TEXT,
+
+    -- ── 从 raw 提升出来的可查询字段 ────────────────────────
+    -- 互动数据:判断「我收藏的这条到底好不好」的唯一客观信号
+    digg_count      INTEGER,                   -- 赞
+    comment_count   INTEGER,
+    share_count     INTEGER,
+    collect_count   INTEGER,                   -- 该作品被多少人收藏
+    -- 尺寸:封面/网格的比例排版需要,之前只能靠前端猜
+    video_width     INTEGER,
+    video_height    INTEGER,
+    -- 媒体地址(都带 x-expires,会过期 —— 想用就得尽快取)
+    play_url        TEXT,                      -- 视频地址
+    music_url       TEXT,                      -- 原声音轨,可直接做 ASR
+    sprite_url      TEXT,                      -- 抖音自带雪碧图(逐秒关键帧)
+    sprite_frames   INTEGER,
+    -- 其它维度
+    poi_name        TEXT,                      -- 拍摄地点
+    mix_name        TEXT,                      -- 所属合集/连载
+    is_subtitled    INTEGER DEFAULT 0,         -- 平台标记该视频有字幕
+    is_deleted      INTEGER DEFAULT 0,         -- 作品已被删除
     collected_at    TEXT    NOT NULL,          -- 本地入库时间
     updated_at      TEXT    NOT NULL
 );

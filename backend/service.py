@@ -45,12 +45,15 @@ def guard_single_run() -> None:
 
 
 def _persist_page(rows: list[dict[str, Any]]) -> tuple[int, int]:
-    """落库一页,并把文案写入文本层(Phase 1 的免费信息)。"""
+    """落库一页:作品 + 文案 + 结构化话题。"""
     fetched, inserted = store.upsert_videos(rows)
     for r in rows:
         desc = (r.get("description") or "").strip()
         if desc:
             store.save_transcript(r["aweme_id"], "desc", desc, {"tier": 1})
+        # 平台给的结构化话题比从文案正则抠更准(不会粘上标点)
+        if r.get("hashtags"):
+            store.save_hashtags(r["aweme_id"], r["hashtags"])
     return fetched, inserted
 
 
@@ -239,6 +242,27 @@ async def _refresh_tags(inserted: int) -> None:
 SYNC_KNOWN_PAGES = 3
 
 
+async def refill_scope(
+    scope: str,
+    max_pages: int = 0,
+    on_progress: Callable[[dict], None] | None = None,
+) -> dict[str, Any]:
+    """回补:重走列表,把已有作品补上完整字段。
+
+    为什么需要:早期采集时 raw_json 只存了 f2 提取的 31 个字段,而抖音真实
+    响应有 787 个 —— 互动数据、视频/音轨/雪碧图地址、结构化话题、尺寸全丢了。
+    这些只能重新请求才能拿到(媒体地址还带 x-expires,越晚越可能失效)。
+
+    与其它模式的区别:
+      * 从最新开始走全程(不是从游标续) —— 要覆盖所有已有作品
+      * **不碰深挖游标** —— 那是 resume 的进度,不能被这次回补覆盖
+      * 不提前停 —— 整页都是已知条目也要继续,因为目的就是更新它们
+    """
+    fn = _COLLECTORS[scope]
+    return await fn(resume=False, max_pages=max_pages, refill=True,
+                    on_progress=on_progress)
+
+
 def _sync_args(sync: bool, resume: bool) -> tuple[bool, int, bool]:
     """返回 (resume, stop_after_known_pages, persist_cursor)。
 
@@ -256,9 +280,13 @@ async def collect_favorites(
     on_progress: Callable[[dict], None] | None = None,
     sync: bool = False,
     max_pages: int = 0,
+    refill: bool = False,
 ) -> dict[str, Any]:
     limit = max_items if max_items is not None else settings.max_items
     resume, stop, keep = _sync_args(sync, resume)
+    if refill:
+        # 回补:从最新走全程,不提前停,且绝不动深挖游标
+        resume, stop, keep = False, 0, False
     return await _run(
         "collection",
         lambda cur: douyin.collect_favorites(max_items=limit, start_cursor=cur),
@@ -302,10 +330,14 @@ async def collect_likes(
     on_progress: Callable[[dict], None] | None = None,
     sync: bool = False,
     max_pages: int = 0,
+    refill: bool = False,
 ) -> dict[str, Any]:
     sec_user_id = await own_sec_user_id()
     limit = max_items if max_items is not None else settings.max_items
     resume, stop, keep = _sync_args(sync, resume)
+    if refill:
+        # 回补:从最新走全程,不提前停,且绝不动深挖游标
+        resume, stop, keep = False, 0, False
     return await _run(
         "like",
         lambda cur: douyin.collect_likes(
@@ -325,10 +357,14 @@ async def collect_posts(
     on_progress: Callable[[dict], None] | None = None,
     sync: bool = False,
     max_pages: int = 0,
+    refill: bool = False,
 ) -> dict[str, Any]:
     sec_user_id = await own_sec_user_id()
     limit = max_items if max_items is not None else settings.max_items
     resume, stop, keep = _sync_args(sync, resume)
+    if refill:
+        # 回补:从最新走全程,不提前停,且绝不动深挖游标
+        resume, stop, keep = False, 0, False
     return await _run(
         "post",
         lambda cur: douyin.collect_posts(

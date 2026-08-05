@@ -91,11 +91,75 @@ def _fix_time(v: Any) -> Any:
     return f"{date} {clock.replace('-', ':')}"
 
 
+def _dig(o: Any, path: str) -> Any:
+    """按 a.b.c 取值,遇中间层是 list 时取第 0 项。任何一步缺失返回 None。"""
+    for k in path.split("."):
+        if isinstance(o, list):
+            o = o[0] if o else None
+        if not isinstance(o, dict):
+            return None
+        o = o.get(k)
+    return o
+
+
+def _first_url(o: Any, path: str) -> str | None:
+    """取 url_list 这类地址数组的第一个。
+
+    直接用 _dig 会把整个 list 返回,而 SQLite 绑不了 list ——
+    实测报 `type 'list' is not supported`,整页落库全失败。
+    """
+    v = _dig(o, path)
+    if isinstance(v, list):
+        v = next((x for x in v if isinstance(x, str) and x), None)
+    return v if isinstance(v, str) and v else None
+
+
+def _from_raw(aw: dict[str, Any]) -> dict[str, Any]:
+    """从**真实响应**里提取 f2 没暴露的高价值字段。
+
+    f2 的 _to_list() 只给 31 个字段,而抖音一条作品有 787 个 —— 互动数据、
+    视频地址、雪碧图、结构化话题、尺寸全在被丢掉的那 750+ 里。
+    这些只能在采集当时拿到(媒体地址还带 x-expires 会过期),
+    所以必须当场提取,不能指望以后回补。
+    """
+    st = aw.get("statistics") or {}
+    sprite = (aw.get("video") or {}).get("big_thumbs") or []
+    sprite = sprite[0] if isinstance(sprite, list) and sprite else (sprite or {})
+    status = aw.get("status") or {}
+
+    return {
+        "digg_count": st.get("digg_count"),
+        "comment_count": st.get("comment_count"),
+        "share_count": st.get("share_count"),
+        "collect_count": st.get("collect_count"),
+        "video_width": _dig(aw, "video.width"),
+        "video_height": _dig(aw, "video.height"),
+        "play_url": _first_url(aw, "video.play_addr.url_list"),
+        "music_url": _first_url(aw, "music.play_url.url_list"),
+        "sprite_url": sprite.get("img_url") if isinstance(sprite, dict) else None,
+        "sprite_frames": sprite.get("img_num") if isinstance(sprite, dict) else None,
+        "poi_name": _dig(aw, "poi_info.poi_name"),
+        "mix_name": _dig(aw, "mix_info.mix_name"),
+        "is_subtitled": 1 if aw.get("is_subtitled") else 0,
+        "is_deleted": 1 if status.get("is_delete") else 0,
+    }
+
+
+def _hashtags_from_raw(aw: dict[str, Any]) -> list[str]:
+    """结构化话题,比从文案里正则抠 #标签 准确(不会把标点粘进来)。"""
+    return [
+        t["hashtag_name"]
+        for t in (aw.get("text_extra") or [])
+        if isinstance(t, dict) and t.get("hashtag_name")
+    ]
+
+
 def _normalize(
     item: dict[str, Any],
     source: str,
     collects_id: str | None = None,
     collects_name: str | None = None,
+    raw: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """f2 的一条 → 我们的一行。拿不到 aweme_id 的条目直接丢弃。"""
     aweme_id = item.get("aweme_id")
@@ -116,8 +180,15 @@ def _normalize(
     row["collects_id"] = collects_id
     row["collects_name"] = collects_name
     row["share_url"] = f"https://www.douyin.com/video/{aweme_id}"
-    # 全量留档:以后要补字段不必重采(重采才是风控风险)
-    row["raw_json"] = json.dumps(item, ensure_ascii=False, default=str)
+
+    # 有真实响应就用它:存原文 + 提取 f2 丢掉的字段。
+    # 没有(理论上不该发生)才退回 f2 的提取结果。
+    if raw:
+        row.update(_from_raw(raw))
+        row["hashtags"] = _hashtags_from_raw(raw)      # 供落库时写 tags 表
+        row["raw_json"] = json.dumps(raw, ensure_ascii=False, default=str)
+    else:
+        row["raw_json"] = json.dumps(item, ensure_ascii=False, default=str)
 
     for flag in ("is_prohibited", "author_deleted"):
         row[flag] = 1 if row.get(flag) else 0
@@ -135,13 +206,24 @@ async def _iter_pages(
         except Exception:
             raw_items = []
 
-        rows = [
-            r
-            for r in (
-                _normalize(it, source, collects_id, collects_name) for it in raw_items
+        # 同时拿真实响应 —— f2 的 _to_list() 只留 31 个字段,
+        # 真实响应有 787 个,不取原文就永久丢掉。
+        by_id: dict[str, dict[str, Any]] = {}
+        try:
+            for aw in (page._to_raw() or {}).get("aweme_list") or []:
+                if isinstance(aw, dict) and aw.get("aweme_id"):
+                    by_id[str(aw["aweme_id"])] = aw
+        except Exception:
+            pass
+
+        rows = []
+        for it in raw_items:
+            r = _normalize(
+                it, source, collects_id, collects_name,
+                raw=by_id.get(str(it.get("aweme_id") or "")),
             )
-            if r
-        ]
+            if r:
+                rows.append(r)
         yield rows, getattr(page, "max_cursor", None)
 
 
