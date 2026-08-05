@@ -101,6 +101,105 @@ macOS 上读 Safari 需要给终端「系统设置 → 隐私与安全性 → **
 
 ---
 
+## 三种操作方式
+
+同一套逻辑、同一个数据库、同一把**跨进程采集锁**——三个入口互相可见、互相拦截,
+不会两个进程同时打抖音接口(那是风控头号诱因)。
+
+| 入口 | 怎么启动 | 适合 |
+|---|---|---|
+| **网页** | `.venv/bin/python -m uvicorn main:app --app-dir backend --port 8000` → http://localhost:8000 | 浏览、搜索、点按钮采集 |
+| **命令行** | `.venv/bin/python backend/cli.py <命令>` | 日常采集、挂定时任务 |
+| **MCP** | `.venv/bin/python backend/mcp_server.py` | 在 Cursor / Claude Code 里用自然语言问库、驱动采集 |
+
+### 完整启动步骤(首次)
+
+```bash
+# 1. 装依赖
+python3 -m venv .venv
+.venv/bin/pip install -r backend/requirements.txt
+.venv/bin/pip install -r backend/requirements-login.txt   # 扫码登录用,可选
+.venv/bin/python -m playwright install chromium
+
+# 2. 配置
+cp .env.example .env
+
+# 3. 建库
+.venv/bin/python backend/cli.py init
+
+# 4. 登录(要真人扫码,只能在本机终端跑)
+.venv/bin/python backend/cli.py qrlogin --keep-session
+
+# 5. 解析自己的 sec_user_id(采点赞/作品需要)
+.venv/bin/python backend/cli.py whoami
+
+# 6. 核对字段(只拉 3 条不写库)
+.venv/bin/python backend/cli.py probe
+
+# 7. 开采
+.venv/bin/python backend/cli.py smart
+
+# 8. 起网页
+.venv/bin/python -m uvicorn main:app --app-dir backend --port 8000
+```
+
+**日常只需要两条**:
+
+```bash
+.venv/bin/python backend/cli.py smart                                    # 采集
+.venv/bin/python -m uvicorn main:app --app-dir backend --port 8000       # 看
+```
+
+不确定缺什么就问:`.venv/bin/python backend/cli.py state`,或在 AI 里调 `auth_status`。
+
+---
+
+## MCP 服务:让 AI 直接查你的库
+
+市面上的抖音 MCP 都是**无状态的单链接解析**(给 URL 返回无水印地址或文案)。
+这个背后有库,所以能回答跨作品的问题:
+
+> 「我收藏过的做菜视频里,关于牛排回温的说法有哪些?」
+> 「我点赞的 AI 相关内容,最近三个月有哪些?」
+> 「帮我看看采集完整度,顺便把缺的补上」
+
+**接进 Claude Code**:
+
+```bash
+claude mcp add douyin-db -- /绝对路径/Douyin-DB/.venv/bin/python /绝对路径/Douyin-DB/backend/mcp_server.py
+```
+
+**接进 Cursor / Claude Desktop**(`mcpServers` 配置):
+
+```json
+{
+  "mcpServers": {
+    "douyin-db": {
+      "command": "/绝对路径/Douyin-DB/.venv/bin/python",
+      "args": ["/绝对路径/Douyin-DB/backend/mcp_server.py"]
+    }
+  }
+}
+```
+
+**8 个工具**:
+
+| 工具 | 作用 |
+|---|---|
+| `search_videos` | 按关键词 / 标签 / 作者 / 来源检索(回答「我收藏过的关于X」的主入口) |
+| `library_stats` | 库概览 + 热门话题标签 |
+| `collect_status` | 各类完整度「已采 / 平台总数」+ 下一步计划 + 是否有采集在跑 |
+| `collect_smart` | 触发智能采集(日常唯一需要的) |
+| `collect_scope` | 只采某一类,指定 resume / sync / fresh |
+| `refresh_totals` | 刷新分母,或手填 |
+| `rebuild_tags` | 重抽 #话题标签(纯本地) |
+| `auth_status` | 环境诊断 + 缺什么该跑哪条命令 |
+
+⚠️ **扫码登录不能由 AI 代跑**——需要真人用抖音 App 扫码,必须在本机终端执行。
+`auth_status` 会告诉你该跑哪条命令。
+
+---
+
 ## 智能采集
 
 **日常只需要这一条命令:**

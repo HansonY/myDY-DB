@@ -175,6 +175,8 @@ main{max-width:1400px;margin:0 auto;padding:14px 20px 64px}
   border-radius:4px;font-size:12px;color:var(--fg)}
 .notice.warn{border-color:rgba(201,161,83,.3);background:var(--warn-dim);color:#dcbc7c}
 .notice.busy{border-color:var(--accent-line);background:var(--accent-dim);color:#a9cdec}
+.notice.done{border-color:rgba(91,157,217,.22);background:var(--surface);color:var(--fg-2)}
+.notice.done svg{color:var(--accent)}
 .notice svg{width:14px;height:14px;stroke-width:1.6;margin-top:3px}
 .spin{width:12px;height:12px;border-radius:50%;border:1.5px solid rgba(169,205,236,.28);
   border-top-color:#a9cdec;animation:sp .7s linear infinite;margin-top:4px;flex:0 0 auto}
@@ -287,6 +289,7 @@ footer{max-width:1400px;margin:18px auto 0;padding:16px 20px 8px;
   <g id="i-img"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M4 17l5-4.5 4 3.5 3-2.5 4 3.5"/></g>
   <g id="i-key"><circle cx="8" cy="14" r="4"/><path d="M11 11l8-8"/><path d="M16 3h4v4"/></g>
   <g id="i-warn"><path d="M12 4.5L21 19.5H3z"/><path d="M12 10v4"/><path d="M12 17h.01"/></g>
+  <g id="i-check"><path d="M4.5 12.5l5 5 10-11"/></g>
   <g id="i-inbox"><path d="M3.5 12.5h4l1.5 3h6l1.5-3h4"/><path d="M5.5 5.5h13l2 7v6a1.5 1.5 0 0 1-1.5 1.5h-14A1.5 1.5 0 0 1 3.5 18.5v-6z"/></g>
 </defs></svg>
 
@@ -621,13 +624,43 @@ async function pollRuns(){
     if(!polling) polling=setInterval(pollRuns,3000);
   }else{
     busy(false);
-    if(polling){ clearInterval(polling); polling=null;
-      await loadStats(); await loadTags(); await loadPlan(); await loadList(); }
+    if(polling){
+      clearInterval(polling); polling=null;
+      await loadStats(); await loadTags(); await loadPlan(); await loadList();
+      // 跑完必须给结果 —— 否则「都已采尽、增量没新东西」的正常情况
+      // 在界面上表现为「转个圈然后什么都没变」,看起来像坏了
+      showOutcome(d.items||[]);
+    }
     const last=(d.items||[])[0];
     if(last && last.status==='failed') box.insertAdjacentHTML('beforeend',
       `<div class="notice warn rn">${ico('i-warn')}<div>上次采集中断:${esc(last.error)}<br>
        <span style="opacity:.8">已抓到的数据和游标都保留了,重新采集会从断点续采。</span></div></div>`);
   }
+}
+
+/* 汇总刚结束那一轮的结果。取最近连续的、几分钟内的记录当作同一轮。 */
+function showOutcome(items){
+  const now = Date.now();
+  const mine = items.filter(r => r.finished_at &&
+    now - Date.parse(r.finished_at) < 10*60*1000).slice(0, 3);
+  if(!mine.length) return;
+
+  const added = mine.reduce((s,r)=>s+(r.inserted||0), 0);
+  const parts = mine.map(r => {
+    const nm = SRC[r.scope] || r.scope;
+    if(r.status==='failed')  return `${nm} 被限流中断`;
+    if(r.status==='stale')   return `${nm} 记录被回收`;
+    return `${nm} +${r.inserted||0}`;
+  }).join(' · ');
+
+  const head = added > 0
+    ? `本轮新增 ${added} 条`
+    : `本轮没有新内容 —— 三类都已是最新`;
+  $('#notices').insertAdjacentHTML('beforeend',
+    `<div class="notice done" id="oc">${ico(added?'i-down':'i-check')}<div>${head}
+      <span style="opacity:.72"> · ${esc(parts)}</span></div>
+      <button class="set" onclick="this.parentNode.remove()" style="margin-left:auto">关闭</button></div>`);
+  setTimeout(()=>$('#oc')?.remove(), 15000);
 }
 
 async function trigger(url){

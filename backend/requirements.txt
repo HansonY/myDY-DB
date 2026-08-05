@@ -11,3 +11,10 @@ fastapi>=0.115
 uvicorn[standard]>=0.34
 pydantic-settings>=2.7
 python-dotenv>=1.0
+
+# MCP 服务(让 AI 直接查库 / 触发采集)
+# ⚠️ 装它会把 pydantic 升到 2.13,而 f2 钉的是 pydantic==2.9.*,
+#    `pip check` 会报冲突。已实测 f2 在 2.13 下功能正常(pydantic 模型
+#    model_dump、ABogus 签名、真实采集全部通过),所以这条警告可以忽略。
+#    若将来 f2 真的挂了,把 mcp 拆到独立 venv 用子进程调即可。
+mcp>=1.2
