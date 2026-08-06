@@ -1,0 +1,12 @@
+# 语义检索的可选依赖。setup.sh 默认**不装** —— 只做采集和关键词检索不需要它。
+#
+# ⚠️ 已知冲突,已验证无害:
+#   sentence-transformers 会带 huggingface-hub,它要 click>=8.4.2,
+#   而 f2 钉死 click==8.1.7。两者互斥,pip check 无论如何不会干净。
+#   实测装 click==8.1.7 时两边运行时都正常 —— hf-hub 只在它自己的 CLI 里
+#   用 click,我们不用那个 CLI。所以装完请把 click 按回去:
+#       pip install "click==8.1.7"
+#
+# 首次运行会下 bge-small-zh-v1.5(92 MB)。
+sentence-transformers>=3.0
+sqlite-vec>=0.1.9
