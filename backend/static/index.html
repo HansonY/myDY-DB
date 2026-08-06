@@ -259,6 +259,16 @@ main{max-width:1400px;margin:0 auto;padding:14px 20px 64px}
 .pill.c:hover{border-color:var(--accent-line);color:#a9cdec}
 
 /* 互动数据。等宽 + tabular-nums,竖着扫一列时数字对齐才好比大小 */
+/* 内容总结标记。三态靠「实心/描边/虚线」区分形态,不引第二个强调色。
+   只有「有内容」值得用强调色 —— 它是库里唯一能回答「视频讲了什么」的信号。 */
+.cm{font-size:10.5px;padding:0 5px;border-radius:4px;cursor:pointer;white-space:nowrap;
+  border:1px solid transparent;transition:all .14s var(--ease)}
+.cm.ok{background:var(--accent-dim);border-color:var(--accent-line);color:#a9cdec}
+.cm.no{color:var(--dim-2);border-color:var(--line)}
+.cm.todo{color:var(--fg-2);border-color:var(--line-2);border-style:dashed}
+.cm:hover{filter:brightness(1.25)}
+.cm:active{transform:translateY(1px)}
+
 .mx{display:inline-flex;gap:9px;font-family:var(--mono);font-size:11.5px;
   color:var(--fg-2);font-variant-numeric:tabular-nums}
 .mx i{font-style:normal;color:var(--dim-2);margin-right:2px}
@@ -299,7 +309,10 @@ main{max-width:1400px;margin:0 auto;padding:14px 20px 64px}
 .gf .d{font-family:var(--mono);font-size:10.5px;color:var(--dim-2)}
 /* 「有内容总结」角标。时长在右上,所以它走左上 */
 .gm{position:absolute;top:5px;left:5px;z-index:3;padding:1px 5px;border-radius:4px;
-  font-size:10px;background:rgba(6,8,11,.82);border:1px solid var(--accent-line);color:#a9cdec}
+  font-size:10px;background:rgba(6,8,11,.82);border:1px solid transparent}
+.gm.ok{border-color:var(--accent-line);color:#a9cdec}
+.gm.no{color:#8b939c}
+.gm.todo{color:#c8ced6;border-color:rgba(255,255,255,.22);border-style:dashed}
 
 /* ══ 详情弹层 ══════════════════════════════════════════════
    知识库的核心动作是「读内容」。网格里文案被截断,列表里也只显示 5 行 ——
@@ -758,6 +771,20 @@ function metrics(v){
   return `<span class="mx">${ms.map(([k,n])=>`<i>${k}</i>${num(n)}`).join('')}</span>`;
 }
 
+/* 内容总结标记。三态必须长得不一样 —— 「抖音确认没给」是结论(认命),
+   「还不知道」是待办(该去回补)。标成同一个「无」就把这个区分抹平了。
+   实心=有 · 描边=确认没给 · 虚线=还不知道 */
+const CMARK = {
+  have:    {t:'有内容', cls:'ok',   tip:'抖音生成了视频内容总结 —— 这条能回答「视频讲了什么」'},
+  none:    {t:'无内容', cls:'no',   tip:'已采到完整响应,抖音确认没为这条生成总结(它只给长视频/知识类生成)'},
+  unknown: {t:'待补',   cls:'todo', tip:'还没采到完整响应,有没有总结是未知的 —— 点上方「回补字段」去确定,不是真没有'},
+};
+function cmark(v){
+  const m = CMARK[v.content_state || 'unknown'];
+  return m ? `<span class="cm ${m.cls}" title="${esc(m.tip)}"
+    onclick="event.stopPropagation();byContent('${v.content_state||'unknown'}')">${m.t}</span>` : '';
+}
+
 function catPill(v){
   const c = [v.cat1,v.cat2,v.cat3].filter(Boolean);
   return c.length ? `<span class="pill c" onclick="byCat('${jsq(v.cat1)}')"
@@ -777,6 +804,7 @@ function listRow(v){
       <div class="rm">
         <span class="who" onclick="byAuthor('${jsq(v.nickname)}')">${esc(v.nickname)||'未知作者'}</span>
         <span class="t">${esc(day(v.create_time))}</span>
+        ${cmark(v)}
         ${metrics(v)}
         <a class="out" href="${esc(v.share_url)}" target="_blank" rel="noreferrer">抖音打开${ico('i-ext')}</a>
       </div>
@@ -797,8 +825,9 @@ function listRow(v){
 function gridCell(v){
   const t=(v.description||'').trim();
   // 点卡片开详情而不是直接跳抖音 —— 网格里文案被截断,先给个能读全文的地方
-  // 网格里放不下总结全文,但要能一眼看出「这条有内容可读」
-  const mark = v.content_state==='have' ? `<span class="gm" title="有内容总结">内容</span>` : '';
+  // 网格里放不下总结全文,但要能一眼看出这条有没有内容可读
+  const m = CMARK[v.content_state || 'unknown'];
+  const mark = m ? `<span class="gm ${m.cls}" title="${esc(m.tip)}">${m.t}</span>` : '';
   return `<div class="g" onclick="detail('${esc(v.aweme_id)}')">
     <div style="position:relative">${cover(v,'gc')}${mark}${t?`<div class="gt">${esc(t)}</div>`:''}</div>
     <div class="gf"><span class="a">${esc(v.nickname)||'未知作者'}</span>
@@ -860,6 +889,7 @@ window.detail = async id => {
             <div class="sm">
               <span>${esc((v.create_time||'').slice(0,10))}</span>
               ${v.video_duration?`<span>${dur(v.video_duration)}</span>`:''}
+              ${cmark(v)}
               ${metrics(v)}
               <span>${esc(v.aweme_id)}</span>
             </div>
@@ -915,6 +945,9 @@ window.byAuthor = n => { author = author===n?'':n; $('#author').value=author; of
 window.byTag = t => { tag = tag===t?'':t; offset=0; loadTags(); loadActive(); loadList(); };
 window.byCat = c => { cat = cat===c?'':c; $('#cat').value=cat; offset=0;
   closeSheet(); loadActive(); loadList(); };
+/* 点标记 = 按这个状态筛选,和上面那排三态 chip 是同一个筛选 */
+window.byContent = k => { content = content===k?'':k; offset=0;
+  closeSheet(); loadStats(); loadActive(); loadList(); };
 window.resetAll = () => { q=source=author=tag=cat=content=''; sort='collected'; offset=0;
   $('#q').value=''; $('#author').value=''; $('#cat').value=''; $('#sort').value='collected';
   loadStats(); loadTags(); loadActive(); loadList(); };
