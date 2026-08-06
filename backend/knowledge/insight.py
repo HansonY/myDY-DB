@@ -368,3 +368,93 @@ def analyze(force: bool = False, with_narrative: bool = False) -> dict[str, Any]
     return {"from_cache": False, "insight_id": iid,
             "created_at": store.get_insight(iid)["created_at"],
             "narrative": narr, "model": model, **st}
+
+
+# ── 标签关联图 ─────────────────────────────────────────────
+
+def tag_graph(min_count: int = 6, min_edge: int = 3,
+              max_nodes: int = 70) -> dict[str, Any]:
+    """标签共现网络:节点=标签,边=同一作品上同时出现的次数。
+
+    为什么共现比「标签排行」有信息量:排行只告诉你「哪个标签多」,
+    共现告诉你**哪些兴趣是连在一起的**。实测这个库里能自然分出
+    英语簇(英语/口语/听力/启蒙)、AI 簇(ai/人工智能/大模型/程序员)、
+    情感簇(情感/情感共鸣/婚姻)—— 这些簇就是你的真实关注面。
+
+    **只染 3 个簇的颜色,其余归中性。** 这不是审美选择:网络图是
+    「所有簇同时在屏上」的情形(all-pairs),用配色验证器在本页实际底色
+    #0b0d11 上跑过 —— 3 色全过,加第 4 色时黄↔橙在红绿色盲下
+    ΔE 只有 4.8、常视觉 10.6,硬失败。所以第 4 簇起一律中性灰,
+    靠标签文字本身区分(secondary encoding)。
+    """
+    with store.connect() as c:
+        nodes = {r["t"]: r["n"] for r in c.execute(
+            "SELECT LOWER(tag) t, COUNT(DISTINCT aweme_id) n FROM tags "
+            "GROUP BY t HAVING n >= ? ORDER BY n DESC LIMIT ?",
+            (min_count, max_nodes))}
+        if not nodes:
+            return {"nodes": [], "edges": [], "clusters": []}
+        ph = ",".join("?" * len(nodes))
+        keys = list(nodes)
+        edges = [
+            {"a": r["t1"], "b": r["t2"], "w": r["w"]}
+            for r in c.execute(f"""
+                SELECT LOWER(a.tag) t1, LOWER(b.tag) t2, COUNT(*) w
+                FROM tags a JOIN tags b
+                  ON a.aweme_id = b.aweme_id AND LOWER(a.tag) < LOWER(b.tag)
+                WHERE LOWER(a.tag) IN ({ph}) AND LOWER(b.tag) IN ({ph})
+                GROUP BY t1, t2 HAVING w >= ?""", keys + keys + [min_edge])
+        ]
+        # 每个标签的主分类 —— 用来给簇起名字之外的第二种解释
+        cats = {}
+        for r in c.execute(f"""
+            SELECT LOWER(t.tag) t, v.cat1 c, COUNT(*) n FROM tags t
+            JOIN videos v ON v.aweme_id = t.aweme_id
+            WHERE LOWER(t.tag) IN ({ph}) AND v.cat1 IS NOT NULL
+            GROUP BY t, c ORDER BY n DESC""", keys):
+            cats.setdefault(r["t"], r["c"])
+
+    # 连通分量 = 簇。用并查集,边已经过了 min_edge 阈值
+    parent = {k: k for k in nodes}
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    for e in edges:
+        ra, rb = find(e["a"]), find(e["b"])
+        if ra != rb:
+            parent[ra] = rb
+
+    groups: dict[str, list[str]] = {}
+    for k in nodes:
+        groups.setdefault(find(k), []).append(k)
+    # 按「簇内作品总数」排,而不是按标签个数 —— 大簇应该是真的占比大
+    ranked = sorted(groups.values(), key=lambda g: -sum(nodes[t] for t in g))
+
+    # 只有前 3 个簇上色(见 docstring 里的配色验证结论)
+    COLORED = 3
+    cluster_of: dict[str, int] = {}
+    clusters = []
+    for i, g in enumerate(ranked):
+        cid = i if i < COLORED else -1          # -1 = 中性
+        for t in g:
+            cluster_of[t] = cid
+        if i < COLORED and len(g) > 1:
+            lead = max(g, key=lambda t: nodes[t])
+            clusters.append({
+                "id": i, "lead": lead, "size": len(g),
+                "videos": sum(nodes[t] for t in g),
+                "tags": sorted(g, key=lambda t: -nodes[t])[:8],
+                "cat": cats.get(lead),
+            })
+
+    return {
+        "nodes": [{"tag": t, "n": n, "cluster": cluster_of.get(t, -1),
+                   "cat": cats.get(t)} for t, n in nodes.items()],
+        "edges": edges,
+        "clusters": clusters,
+        "note": (f"节点 = 出现 ≥{min_count} 次的标签,边 = 同一作品上共现 ≥{min_edge} 次。"
+                 f"只有最大的 {COLORED} 个簇上色 —— 网络图上所有簇同屏,"
+                 "配色验证器在本页底色上实测第 4 色会与第 2 色在红绿色盲下无法区分。"),
+    }

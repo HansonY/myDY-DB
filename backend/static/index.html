@@ -545,7 +545,14 @@ footer{max-width:1400px;margin:18px auto 0;padding:16px 20px 8px;
 const $ = s => document.querySelector(s);
 const api = (p,o) => fetch(p,o).then(async r => {
   const d = await r.json().catch(()=>({}));
-  if(!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+  if(!r.ok){
+    // FastAPI 校验失败时 detail 是**数组**,直接进模板字符串会变成
+    // "[object Object]" —— 实测踩过,错误信息等于没有。所以要摊平。
+    const det = Array.isArray(d.detail)
+      ? d.detail.map(x => `${(x.loc||[]).join('.')}: ${x.msg}`).join('; ')
+      : d.detail;
+    throw new Error(det || `HTTP ${r.status}`);
+  }
   return d;
 });
 const esc = s => (s??'').toString().replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));

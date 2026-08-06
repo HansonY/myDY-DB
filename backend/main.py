@@ -174,6 +174,20 @@ async def get_insight(
     return await asyncio.to_thread(ki.analyze, force, narrative)
 
 
+@app.get("/api/insight/graph")
+async def insight_graph(
+    min_count: int = Query(6, ge=2, le=50),
+    min_edge: int = Query(3, ge=1, le=20),
+    max_nodes: int = Query(70, ge=10, le=200),
+) -> dict[str, Any]:
+    """标签共现网络。节点=标签,边=同一作品上共现次数。
+
+    共现比「标签排行」有信息量:排行只说哪个多,共现说**哪些兴趣连在一起**。
+    """
+    from knowledge import insight as ki
+    return await asyncio.to_thread(ki.tag_graph, min_count, min_edge, max_nodes)
+
+
 @app.get("/api/insight/history")
 async def insight_history(limit: int = Query(20, ge=1, le=100)) -> dict[str, Any]:
     """历史快照列表。两次之间的差就是时间信息 —— 抖音不给收藏时间,
