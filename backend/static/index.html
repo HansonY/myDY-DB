@@ -269,6 +269,13 @@ main{max-width:1400px;margin:0 auto;padding:14px 20px 64px}
 .cm:hover{filter:brightness(1.25)}
 .cm:active{transform:translateY(1px)}
 
+/* 语义相似度。等宽 —— 竖着扫一列时要能比大小。
+   ok = 过了 good 线 · mid = 只在「可能相关」那一档,视觉上必须弱一等 */
+.sc{font-family:var(--mono);font-size:11.5px;padding:0 5px;border-radius:4px;
+  font-variant-numeric:tabular-nums}
+.sc.ok{background:var(--accent-dim);border:1px solid var(--accent-line);color:#a9cdec}
+.sc.mid{border:1px dashed var(--line-2);color:var(--dim)}
+
 .mx{display:inline-flex;gap:9px;font-family:var(--mono);font-size:11.5px;
   color:var(--fg-2);font-variant-numeric:tabular-nums}
 .mx i{font-style:normal;color:var(--dim-2);margin-right:2px}
@@ -454,6 +461,12 @@ footer{max-width:1400px;margin:18px auto 0;padding:16px 20px 8px;
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#i-search"/></svg>
           <input type="search" id="q" placeholder="搜文案、抖音总结、作者…">
         </label>
+        <!-- 两种搜法刻意分开,而不是偷偷融合:字面搜是「这几个字出现过」,
+             语义搜是「意思接近」。混成一个之后你就不知道结果是怎么来的了。 -->
+        <div class="seg" id="smode">
+          <button id="m-lit" class="on" title="字面匹配:这几个字出现过才命中。即时、不需要模型">字面</button>
+          <button id="m-sem" title="语义匹配:换句话说也找得到。回车执行,需要先建索引">语义</button>
+        </div>
         <span id="srcs" class="row" style="gap:6px"></span>
         <span class="vsep"></span>
         <select id="sort">
@@ -530,6 +543,8 @@ let offset=0, total=0;
 // 每页条数记住选择:2485 条按 50/页 要翻 50 页,默认给 100
 let limit = +(localStorage.getItem('dydb.limit') || 100);
 let q='', source='', sort='collected', author='', tag='', cat='', content='';
+let smode = 'lit';      // lit=字面(即时) | sem=语义(回车执行)
+let semData = null;     // 语义结果,null 表示当前不在语义模式
 let view = localStorage.getItem('dydb.view') || 'list';
 let tagsOpen=false, polling=null;
 let shown = new Map();          // 当前页 aweme_id → 作品,详情弹层用
@@ -837,6 +852,71 @@ function gridCell(v){
       <span class="d">${v.digg_count!=null?num(v.digg_count)+' 赞':esc(day(v.create_time))}</span></div></div>`;
 }
 
+/* ── 语义检索 ────────────────────────────────────────────
+   和字面搜共用列表区域,但**必须让人看出这是语义结果**:
+   每条带相似度,顶上有一条判定横幅。分数不藏起来 ——
+   阈值只是十几组样本调出来的,机器分不清的那一档得交给人判断。 */
+async function runSemantic(){
+  const kw = q.trim();
+  if(!kw){ semData=null; loadList(); return; }
+  $('#out').innerHTML = `<div class="empty">${ico('i-search')}正在按意思找…</div>`;
+  try{
+    semData = await api('/api/search?' + new URLSearchParams({q:kw, limit:50}));
+  }catch(e){
+    semData = null;
+    $('#out').innerHTML = `<div class="empty">${ico('i-search')}语义检索不可用<br><br>
+      <span style="color:var(--dim)">${esc(e.message)}</span></div>`;
+    $('#pager').innerHTML=''; return;
+  }
+  renderSemantic();
+}
+
+const VERDICT = {
+  relevant:   {cls:'ok',   t:'找到相关内容'},
+  only_maybe: {cls:'warn', t:'没有确定相关的 —— 下面都只是「可能相关」,别当成答案'},
+  nothing:    {cls:'warn', t:'库里没有相关内容'},
+};
+
+function semRow(v, zone){
+  const ts = v.at_sec!=null ? `${Math.floor(v.at_sec/60)}:${String(v.at_sec%60).padStart(2,'0')}` : '';
+  const KIND = {overview:'概览', chapter:'章节', queries:'搜索词'};
+  return `<div class="r">
+    <span style="cursor:zoom-in" onclick="detail('${esc(v.aweme_id)}')">
+      ${cover({aweme_id:v.aweme_id, cover:1, video_duration:0},'thumb')}</span>
+    <div class="rb">
+      <div class="rm">
+        <span class="sc ${zone}">${v.score.toFixed(3)}</span>
+        <span class="who" onclick="byAuthor('${jsq(v.author)}')">${esc(v.author)||'未知作者'}</span>
+        ${ts?`<span class="t">命中 ${KIND[v.matched_kind]||v.matched_kind} @${ts}</span>`
+            :`<span class="t">命中 ${KIND[v.matched_kind]||v.matched_kind}</span>`}
+        ${v.n_matched_fragments>1?`<span class="t">${v.n_matched_fragments} 段都命中</span>`:''}
+        <a class="out" href="${esc(v.url)}" target="_blank" rel="noreferrer">抖音打开${ico('i-ext')}</a>
+      </div>
+      <div class="txt">${esc(v.title)}</div>
+      <div class="sum"><b>命中原文</b>${esc(v.text||'')}</div>
+      <button class="link" style="align-self:flex-start" onclick="detail('${esc(v.aweme_id)}')">详情</button>
+      <div class="pills">${v.cat?`<span class="pill c">${esc(v.cat)}</span>`:''}</div>
+    </div></div>`;
+}
+
+function renderSemantic(){
+  const d = semData, V = VERDICT[d.verdict] || VERDICT.nothing;
+  const items = [...d.good.map(x=>[x,'ok']), ...d.maybe.map(x=>[x,'mid'])];
+  shown = new Map(items.map(([v]) => [String(v.aweme_id), {aweme_id:v.aweme_id}]));
+
+  let html = `<div class="notice ${V.cls==='ok'?'done':'warn'}">${ico(V.cls==='ok'?'i-check':'i-key')}
+    <div>${V.t}
+      <span style="opacity:.72"> · 相关 ${d.good.length} 条 · 可能相关 ${d.maybe.length} 条
+      · 阈值 ${d.thresholds.good}/${d.thresholds.maybe} · ${esc(d.model)}</span>
+      ${d.nearest_below.length?`<br><span style="opacity:.6">最接近的分数:${
+        d.nearest_below.map(x=>x.toFixed(3)).join(' · ')}(都低于下限)</span>`:''}
+    </div></div>`;
+  html += items.length ? `<div class="rows">${items.map(([v,z])=>semRow(v,z)).join('')}</div>`
+                       : `<div class="empty">${ico('i-inbox')}没有达到下限的结果</div>`;
+  $('#out').innerHTML = html;
+  $('#pager').innerHTML = `<span class="pg i">语义检索共 ${items.length} 条 · 按相似度排序</span>`;
+}
+
 async function loadList(){
   if(!$('#out').innerHTML) $('#out').innerHTML = `<div class="rows">${'<div class="sk"></div>'.repeat(6)}</div>`;
   const d = await api('/api/videos?'+qs());
@@ -943,7 +1023,7 @@ window.closeSheet = () => {
   document.body.style.overflow = '';
 };
 
-window.go = d => { offset=Math.max(0,offset+d*limit); loadList(); scrollTo({top:0,behavior:'smooth'}); };
+window.go = d => { if(semData) return; offset=Math.max(0,offset+d*limit); loadList(); scrollTo({top:0,behavior:'smooth'}); };
 window.tg = b => { const e=b.previousElementSibling; e.classList.toggle('open');
   b.textContent = e.classList.contains('open')?'收起':'展开全文'; };
 window.byAuthor = n => { author = author===n?'':n; $('#author').value=author; offset=0; loadActive(); loadList(); };
@@ -1059,8 +1139,27 @@ $('#psize').onchange  = e => {
   offset = 0;                     // 换页大小后页码必须归零,否则可能落到不存在的页
   loadList(); scrollTo({top:0,behavior:'smooth'});
 };
-let dt; $('#q').oninput = e => { clearTimeout(dt);
-  dt=setTimeout(()=>{ q=e.target.value.trim(); offset=0; loadActive(); loadList(); },250); };
+let dt;
+$('#q').oninput = e => {
+  q = e.target.value.trim();
+  if(smode === 'sem') return;          // 语义要花时间,不做即时搜,等回车
+  clearTimeout(dt);
+  dt = setTimeout(()=>{ offset=0; loadActive(); loadList(); }, 250);
+};
+$('#q').onkeydown = e => { if(e.key === 'Enter' && smode === 'sem') runSemantic(); };
+
+function setSmode(m){
+  smode = m;
+  $('#m-lit').classList.toggle('on', m==='lit');
+  $('#m-sem').classList.toggle('on', m==='sem');
+  $('#q').placeholder = m==='sem'
+    ? '按意思找,回车执行 —— 例:怎么提高英语口语'
+    : '搜文案、抖音总结、作者…';
+  if(m==='lit'){ semData=null; loadList(); }
+  else if(q) runSemantic();
+}
+$('#m-lit').onclick = () => setSmode('lit');
+$('#m-sem').onclick = () => setSmode('sem');
 
 (async()=>{
   renderActs(); setView(view);
