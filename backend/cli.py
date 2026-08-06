@@ -227,9 +227,9 @@ async def cmd_go(args) -> None:
 
     c = store.coverage()
     if c["content_unknown"]:
-        print(f"\n下一步:{c['content_unknown']} 条还没采到完整响应,"
-              "「有没有视频内容总结」是未知的。")
-        print("        跑 `cli.py refill` 去确定(会被 403 打断,分多轮跑)。")
+        print(f"\n下一步:还有 {c['content_unknown']} 条没采完详细信息,"
+              "所以不知道它们有没有抖音总结。")
+        print("        跑 `cli.py refill` 补齐(中途被限流是正常的,再跑一次接着补)。")
     print("\n看数据:.venv/bin/python -m uvicorn main:app --app-dir backend --port 8000")
 
 
@@ -398,16 +398,16 @@ def cmd_stats(_args) -> None:
     t = c["total"] or 1
     # 视频内容总结必须三态报。混成「有/没有」的话,「抖音确认没给」和
     # 「还没采全所以不知道」会被当成同一件事 —— 而前者该认命,后者该去补采。
-    print("\n视频内容总结(抖音自己生成的,不是文案):")
-    print(f"  有            {c['content_have']:>5}  {c['content_have']*100/t:.0f}%")
-    print(f"  抖音确认没给   {c['content_none']:>5}  {c['content_none']*100/t:.0f}%"
-          "   ← 它只给长视频/知识类生成")
-    print(f"  还不知道       {c['content_unknown']:>5}  {c['content_unknown']*100/t:.0f}%"
-          "   ← 没采到完整响应,跑 refill 才能确定")
+    print("\n抖音总结(抖音给视频生成的文字概要,有它就不用点开看):")
+    print(f"  有总结   {c['content_have']:>5}  {c['content_have']*100/t:.0f}%")
+    print(f"  无总结   {c['content_none']:>5}  {c['content_none']*100/t:.0f}%"
+          "   抖音一般只给长视频和知识类的做")
+    print(f"  未采全   {c['content_unknown']:>5}  {c['content_unknown']*100/t:.0f}%"
+          "   还没采完这批的详细信息,跑 refill 才知道有没有")
 
     print("\n字段覆盖:")
     for key, label in (
-        ("full_raw", "完整原始响应"), ("digg_count", "互动数据"),
+        ("full_raw", "原始数据留档"), ("digg_count", "互动数据"),
         ("cat1", "官方分类"), ("music_url", "音轨地址"),
         ("chapters", "章节大纲"),
     ):
@@ -532,7 +532,7 @@ def main() -> None:
     sp.add_argument("--set", action="append", metavar="SCOPE=N",
                     help="手填总数,如 collection=1300(收藏只能手填,抖音不给这个数)")
 
-    sp = sub.add_parser("refill", help="回补完整字段(早期采的只存了 31/787 个字段)")
+    sp = sub.add_parser("refill", help="补齐早期采的那批的详细信息(「未采全」的靠它确定)")
     sp.add_argument("--scope", choices=["collection", "like", "post"])
     sp.add_argument("--max-pages", type=int, default=0, help="单次页数上限,0=不限")
 
@@ -569,10 +569,10 @@ def main() -> None:
                     help="digg/collect/comment = 按互动数据排,挑优质内容用")
     sp.add_argument("--cat", help="按抖音官方一级分类筛选")
     sp.add_argument("--content", choices=["have", "none", "unknown"],
-                    help="按内容总结状态筛:have=有 · none=抖音确认没给 · "
-                         "unknown=还没采全(该去 refill,不是真没有)")
+                    help="按抖音总结筛:have=有总结 · none=无总结 · "
+                         "unknown=未采全(还没查过,不等于没有)")
 
-    sp = sub.add_parser("raw", help="看一条作品的完整原始响应(787 个字段都在库里)")
+    sp = sub.add_parser("raw", help="看一条作品的原始数据(抖音返回的全部字段都留档了)")
     sp.add_argument("aweme_id")
     sp.add_argument("--keys", action="store_true", help="只列顶层字段名")
     sp.add_argument("--chars", type=int, default=4000, help="最多打印多少字符")

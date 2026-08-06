@@ -452,7 +452,7 @@ footer{max-width:1400px;margin:18px auto 0;padding:16px 20px 8px;
       <div class="row">
         <label class="search">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#i-search"/></svg>
-          <input type="search" id="q" placeholder="搜文案、内容总结、作者…">
+          <input type="search" id="q" placeholder="搜文案、抖音总结、作者…">
         </label>
         <span id="srcs" class="row" style="gap:6px"></span>
         <span class="vsep"></span>
@@ -521,9 +521,9 @@ const ACTS = [
    hint:'只列出收藏夹清单,不采里面的内容(采内容用命令行 cli.py folder <id>)'},
   /* 回补是「还不知道有没有内容总结」的唯一解法。它有自己的游标,
      被 403 打断后再点一次接着往深处走,不会从最新重刷。 */
-  {id:'refill', icon:'i-resume', label:'回补字段', url:'/api/collect/refill', refill:true,
-   hint:'早期采的只存了 31 个字段(抖音真实响应有 787 个)。回补把它们补全,'
-      + '「还不知道有没有内容总结」的那些才能确定。403 打断是正常的,再点一次接着走'},
+  {id:'refill', icon:'i-resume', label:'补齐信息', url:'/api/collect/refill', refill:true,
+   hint:'早期采的那批只存了很少几项信息。补齐之后,「未采全」的那些才能确定'
+      + '到底有没有抖音总结。中途被抖音限流是正常的,再点一次接着补'},
 ];
 
 let offset=0, total=0;
@@ -573,9 +573,9 @@ function markTodo(s){
 
 async function loadStats(){
   const [s,h] = await Promise.all([api('/api/stats'), api('/api/health')]);
-  // 「有内容」和「有文案」分开列 —— 前者是视频讲了什么,后者只是作者写的标题
+  // 「有总结」和「有文案」分开列:总结是视频讲了什么,文案只是作者写的标题
   $('#kpis').innerHTML = [['作品',s.total],['有文案',s.with_description],
-                          ['有内容',s.content_have],['作者',s.authors]]
+                          ['有总结',s.content_have],['作者',s.authors]]
     .map(([k,v]) => `<span class="kpi"><b>${(v||0).toLocaleString()}</b><i>${k}</i></span>`).join('');
   renderContentStates(s);
   markTodo(s);
@@ -593,19 +593,36 @@ async function loadStats(){
     `<div class="notice warn ck">${ico('i-key')}<div>还没登录。跑 <code>python backend/cli.py qrlogin</code> 扫码,cookie 只存在你本机。</div></div>`);
 }
 
-/* 视频内容总结的三态。第三态是重点:「还不知道」不等于「没有」——
-   它意味着这条还没采到完整响应,该去 refill,而不是认命。 */
+/* 「总结」= 抖音自己给视频生成的文字版内容概要,App 里就叫这个名字。
+   有它就不用点开视频也知道讲了什么。
+
+   三态用词的讲究:前两个说的是**视频有没有**,第三个说的是**我的库采没采全**。
+   混成一个「无」就等于告诉人「这 771 条没有」,而它们其实只是还没查过 ——
+   人一旦以为没有,就再也不会去采了。 */
+const CMARK = {
+  have:    {t:'有总结', cls:'ok',
+            tip:'抖音给这条视频生成了文字总结,不用点开也知道讲了什么'},
+  none:    {t:'无总结', cls:'no',
+            tip:'抖音没给这条生成总结 —— 它一般只给长视频和知识类的做'},
+  unknown: {t:'未采全', cls:'todo',
+            tip:'这条的详细信息还没采完,所以不知道有没有总结。点上方「补齐信息」就能确定'},
+};
+function cmark(v){
+  const m = CMARK[v.content_state || 'unknown'];
+  return m ? `<span class="cm ${m.cls}" title="${esc(m.tip)}"
+    onclick="event.stopPropagation();byContent('${v.content_state||'unknown'}')">${m.t}</span>` : '';
+}
+
+/* 顶部的三态筛选。用词和条目上的标记保持一字不差 ——
+   同一件事在两个地方叫不同名字,人得先在脑子里做一次翻译。 */
 const CSTATE = [
-  {k:'have',    label:'有内容总结', n:'content_have',
-   hint:'抖音自己生成的视频内容总结 —— 库里唯一能回答「视频讲了什么」的东西'},
-  {k:'none',    label:'抖音没给',   n:'content_none',
-   hint:'已采到完整响应,抖音确认没为这条生成总结(它只给长视频/知识类生成)'},
-  {k:'unknown', label:'还不知道',   n:'content_unknown', warn:true,
-   hint:'还没采到完整响应,有没有总结是未知的 —— 点「回补字段」去确定,不是真没有'},
+  {k:'have',    label:'有总结', n:'content_have',  hint:CMARK.have.tip},
+  {k:'none',    label:'无总结', n:'content_none',  hint:CMARK.none.tip},
+  {k:'unknown', label:'未采全', n:'content_unknown', warn:true, hint:CMARK.unknown.tip},
 ];
 
 function renderContentStates(s){
-  $('#cstates').innerHTML = '<span class="act-lbl">视频内容</span>' + CSTATE.map(c =>
+  $('#cstates').innerHTML = '<span class="act-lbl">抖音总结</span>' + CSTATE.map(c =>
     `<span class="chip${content===c.k?' on':''}${c.warn&&s[c.n]?' warn':''}"
            data-c="${c.k}" title="${esc(c.hint)}">${c.label}<span class="n">${s[c.n]||0}</span></span>`
   ).join('');
@@ -712,7 +729,7 @@ function loadActive(){
     author && {k:'作者', v:author,        clear:()=>{ author=''; $('#author').value=''; }},
     tag    && {k:'标签', v:'#'+tag,       clear:()=>{ tag=''; }},
     cat    && {k:'分类', v:cat,           clear:()=>{ cat=''; $('#cat').value=''; }},
-    content&& {k:'视频内容', v:(CSTATE.find(c=>c.k===content)||{}).label,
+    content&& {k:'抖音总结', v:(CSTATE.find(c=>c.k===content)||{}).label,
                               clear:()=>{ content=''; }},
   ].filter(Boolean);
 
@@ -771,20 +788,6 @@ function metrics(v){
   return `<span class="mx">${ms.map(([k,n])=>`<i>${k}</i>${num(n)}`).join('')}</span>`;
 }
 
-/* 内容总结标记。三态必须长得不一样 —— 「抖音确认没给」是结论(认命),
-   「还不知道」是待办(该去回补)。标成同一个「无」就把这个区分抹平了。
-   实心=有 · 描边=确认没给 · 虚线=还不知道 */
-const CMARK = {
-  have:    {t:'有内容', cls:'ok',   tip:'抖音生成了视频内容总结 —— 这条能回答「视频讲了什么」'},
-  none:    {t:'无内容', cls:'no',   tip:'已采到完整响应,抖音确认没为这条生成总结(它只给长视频/知识类生成)'},
-  unknown: {t:'待补',   cls:'todo', tip:'还没采到完整响应,有没有总结是未知的 —— 点上方「回补字段」去确定,不是真没有'},
-};
-function cmark(v){
-  const m = CMARK[v.content_state || 'unknown'];
-  return m ? `<span class="cm ${m.cls}" title="${esc(m.tip)}"
-    onclick="event.stopPropagation();byContent('${v.content_state||'unknown'}')">${m.t}</span>` : '';
-}
-
 function catPill(v){
   const c = [v.cat1,v.cat2,v.cat3].filter(Boolean);
   return c.length ? `<span class="pill c" onclick="byCat('${jsq(v.cat1)}')"
@@ -810,7 +813,7 @@ function listRow(v){
       </div>
       <div class="txt${t?'':' none'}">${t?esc(t):'（无文案）'}</div>
       ${long?`<button class="link" onclick="tg(this)">展开全文</button>`:''}
-      ${sum?`<div class="sum"><b>内容</b>${esc(sum)}</div>`:''}
+      ${sum?`<div class="sum"><b>总结</b>${esc(sum)}</div>`:''}
       <button class="link" style="align-self:flex-start" onclick="detail('${esc(v.aweme_id)}')">详情</button>
       <div class="pills">
         ${srcs.map(s=>`<span class="pill src">${SRC[s]||s}</span>`).join('')}
@@ -899,7 +902,7 @@ window.detail = async id => {
         <div class="sbody">
           <div class="pic">${cover(v,'cover')}</div>
           <div class="scol">
-          ${sum ? `<div class="sec"><h4>内容总结<em>抖音生成</em></h4>
+          ${sum ? `<div class="sec"><h4>视频讲了什么<em>抖音生成的总结</em></h4>
                      <div class="sfull">${esc(sum)}</div></div>` : ''}
           ${chs.length ? `<div class="sec"><h4>章节<em>${chs.length} 段</em></h4>
             <ol class="chs">${chs.map(c=>`<li>
@@ -908,10 +911,12 @@ window.detail = async id => {
               ${c.detail?`<p>${esc(c.detail)}</p>`:''}
               ${(c.points||[]).length?`<ul>${c.points.map(p=>`<li>${esc(p)}</li>`).join('')}</ul>`:''}
               </div></li>`).join('')}</ol></div>` : ''}
-          <div class="sec"><h4>作者文案${sum?'<em>不是视频内容</em>':''}</h4>
+          <div class="sec"><h4>作者写的文案${sum?'<em>不是视频内容</em>':''}</h4>
             <div class="sfull${t?'':' none'}">${t?esc(t):'（这条作品没有文案）'}</div></div>
-          ${!sum ? `<div class="sec hintbox">抖音没为这条生成内容总结（只有约 20% 的作品有，
-            多是长视频/知识类）。要拿到它讲了什么，得走 ASR —— 下一步的事。</div>` : ''}
+          ${!sum ? `<div class="sec hintbox">${v.content_state==='unknown'
+              ? '这条的详细信息还没采完，所以不知道有没有抖音总结 —— 点上方「补齐信息」就能确定。'
+              : '抖音没给这条生成总结（它一般只给长视频和知识类的做）。想知道讲了什么，'
+                + '只能听一遍原声转文字，那是后面的事。'}</div>` : ''}
           </div>
         </div>
         <footer>
