@@ -315,7 +315,13 @@ async def cmd_sync(args) -> None:
 
 async def cmd_probe(args) -> None:
     """只拉几条,核对字段映射是否正确。不写库。"""
+    import service
     from collector import douyin
+
+    # 不写库,但**照样在打抖音接口** —— 所以必须过跨进程锁。
+    # 否则网页/MCP 正在采时跑 probe,两个进程一起请求,正是风控的头号诱因。
+    # (这里是架构复查时发现的漏洞:probe 是唯一绕过 service 直接翻页的入口。)
+    service.guard_single_run()
 
     print(f"探测中(最多 {args.max} 条,不写库)…\n")
     async for rows, cursor in douyin.collect_favorites(max_items=args.max):

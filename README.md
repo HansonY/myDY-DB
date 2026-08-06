@@ -42,21 +42,23 @@ Douyin-DB 把这些视频的**文案和内容**抽出来落到本地库里,于�
 
 ## 快速开始
 
-完整步骤(含 Python 版本要求、每步耗时)见下面
-**[从 clone 到能用](#从-clone-到能用完整步骤)**。最短路径:
+三条命令:
 
 ```bash
 git clone git@github.com:HansonY/myDY-DB.git && cd myDY-DB
-python3.13 -m venv .venv                                   # 必须 3.10–3.13,别用裸 python3
-.venv/bin/pip install -r backend/requirements.txt
-.venv/bin/pip install -r backend/requirements-login.txt && .venv/bin/python -m playwright install chromium
-cp .env.example .env
-.venv/bin/python backend/cli.py init
-.venv/bin/python backend/cli.py qrlogin --keep-session     # 扫码,只能你自己做
-.venv/bin/python backend/cli.py whoami
-.venv/bin/python backend/cli.py smart                      # 开采
-.venv/bin/python -m uvicorn main:app --app-dir backend --port 8000
+./setup.sh     # 挑 Python(3.10–3.13)→ venv → 依赖 → 浏览器 → 建库
+./go.sh        # 扫码登录 + 自动采集(收藏 / 点赞 / 我的作品)
+./web.sh       # 工作台 → http://localhost:8000
 ```
+
+`./go.sh` **可以反复跑**,而且日常更新就是它:每一步先看「是不是已经做过了」,
+登录过就跳过登录;采集本身是断点续跑的,被 403 打断下次接着走。
+
+想单步控制或看每步在干什么,见 [从 clone 到能用](#从-clone-到能用完整步骤)。
+
+> **采得到什么**:我的作品 · 收藏 · 点赞 · 收藏夹。
+> **转发采不到** —— f2 的 21 个抓取方法里没有转发接口,而且实测「我的作品」里
+> `is_share_post` 全是 0,转发也没混在里面。
 
 ### 怎么登录(三种,按省事排序)
 

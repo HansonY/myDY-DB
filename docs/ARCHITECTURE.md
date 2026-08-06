@@ -1,18 +1,34 @@
 # 架构
 
-约 4000 行,其中前端 707 行(单文件、零构建)。
+后端 6583 行 + 前端 1037 行(单文件、零构建)。
 
 ## 分层
 
 三个入口共用同一套逻辑、同一个数据库、同一把跨进程锁。任何一个入口在采集时,
 另两个都会被拦住 —— 两个进程同时打抖音接口是风控的头号诱因。
 
+**依赖方向是单向的**(复查过,没有反向依赖):
+
+```
+collector → config                    只碰抖音,不认识库
+db/store  → config                    只碰库,不认识抖音
+planner   → db                        只读状态做决策
+service   → collector + db + config   唯一同时认识两边的地方
+入口三件  → service (+ db 只读)
+```
+
+**唯一允许绕过 service 直接翻页的地方:没有。** `cli.py probe` 曾是个漏洞 ——
+它不写库但照样在打抖音接口,却没过锁;复查时补上了 `guard_single_run()`。
+其余直连 collector 的调用(扫码登录 / 解析 sec_user_id / 取平台计数)都是
+单请求、不翻页,不需要上锁 —— 而扫码登录**必须**能在采集期间用,
+因为 cookie 过期时正是要重登的时候。
+
 ```mermaid
 flowchart TB
     subgraph entry["入口层 · 三种操作方式"]
-        web["main.py · 390 行<br/>网页 + REST API + 封面代理"]
-        cli["cli.py · 414 行<br/>15 个子命令"]
-        mcp["mcp_server.py · 437 行<br/>MCP 服务 · 8 个工具"]
+        web["main.py · 459 行<br/>网页 + REST API + 封面代理"]
+        cli["cli.py · 610 行<br/>17 个子命令(日常只用 go)"]
+        mcp["mcp_server.py · 595 行<br/>MCP 服务 · 10 个工具"]
     end
 
     subgraph brain["决策层"]
@@ -20,18 +36,18 @@ flowchart TB
     end
 
     subgraph orch["编排层"]
-        service["service.py · 375 行<br/>逐页落库 + 存游标 + 写心跳<br/>跨进程锁 · 主动收手 · 标签自动重建"]
+        service["service.py · 457 行<br/>逐页落库 + 存游标 + 写心跳<br/>跨进程锁 · 主动收手 · 回补独立游标"]
     end
 
     subgraph fetch["采集层 · 唯一碰抖音的地方"]
-        douyin["collector/douyin.py · 235<br/>封装 f2:收藏 / 点赞 / 作品 / 收藏夹"]
+        douyin["collector/douyin.py · 383<br/>封装 f2:收藏 / 点赞 / 作品 / 收藏夹<br/>并从真实响应提取 f2 丢掉的字段"]
         totals["collector/totals.py · 97<br/>平台总数(self 端点 + ABogus 签名)"]
         whoami["collector/whoami.py · 105<br/>解析自己的 sec_user_id"]
         cookie["collector/cookie.py · 136<br/>扫码登录 / 读本机浏览器 cookie"]
     end
 
     subgraph data["数据层"]
-        store["db/store.py · 575<br/>schema.sql · 9 张表"]
+        store["db/store.py · 893<br/>schema.sql · 9 张表 · raw 压缩层"]
         tags["extractor/hashtags.py · 47<br/>文案 → #标签(零 AI 成本)"]
         sqlite[("SQLite<br/>data/douyin.db")]
     end
