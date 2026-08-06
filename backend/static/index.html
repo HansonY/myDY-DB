@@ -95,6 +95,10 @@ button,select,input{font-family:inherit}
 .btn svg{width:13px;height:13px;stroke-width:1.5}
 
 .btn.primary{background:var(--accent-dim);border-color:var(--accent-line);color:#a9cdec}
+/* 按钮上的待办数。等宽,和界面里其他数字一致 */
+.badge{font-family:var(--mono);font-size:10.5px;padding:0 4px;border-radius:4px;
+  background:var(--surface-2);color:var(--fg-2);margin-left:2px}
+.btn.primary .badge{background:rgba(91,157,217,.24);color:#c6dff5}
 .btn.primary:hover:not(:disabled){background:rgba(91,157,217,.2);border-color:var(--accent);color:#d3e6f7}
 
 .search{position:relative;flex:1;min-width:220px;max-width:420px}
@@ -123,6 +127,10 @@ select:focus{outline:none;border-color:var(--accent-line)}
 .chip:active{transform:translateY(1px)}
 .chip .n{font-family:var(--mono);opacity:.55;margin-left:4px;font-size:11.5px}
 .chip.on{background:var(--accent-dim);border-color:var(--accent-line);color:#a9cdec}
+/* 「还不知道」是待办不是结论 —— 用虚线边框区分:它在提示「这里该去补采」。
+   不另开一个颜色,唯一强调色的规矩不破。 */
+.chip.warn{border-style:dashed;border-color:var(--line-2);color:var(--fg-2)}
+.chip.warn.on{border-style:dashed}
 .chip.on .n{opacity:.8}
 
 .seg{display:flex;border:1px solid var(--line-2);border-radius:8px;overflow:hidden}
@@ -458,12 +466,10 @@ footer{max-width:1400px;margin:18px auto 0;padding:16px 20px 8px;
         </div>
         <button class="chip" id="b-reset">重置</button>
       </div>
-      <!-- 「有内容总结」是抖音自己给的视频内容摘要 —— 库里唯一能回答
-           「视频讲了什么」的东西(文案只是作者写的标题),所以给它一个显眼入口 -->
-      <div class="row" style="gap:6px">
-        <span class="chip" id="b-sum" title="只看抖音生成了内容总结的作品">
-          有内容总结<span class="n" id="n-sum"></span></span>
-      </div>
+      <!-- 视频内容总结的三态。必须分开显示:
+           「抖音确认没给」该认命,「还不知道」该去补采 —— 混成一个开关就
+           分不出下一步该干什么了。 -->
+      <div class="row" id="cstates" style="gap:6px"></div>
       <div class="row" id="tags" style="gap:6px"></div>
       <div class="row" id="active" style="gap:6px"></div>
     </div>
@@ -500,12 +506,17 @@ const ACTS = [
    hint:'只采我自己发布的视频'},
   {id:'fold',  icon:'i-folder', label:'查找收藏夹', url:'/api/collect/folders/sync', folders:true,
    hint:'只列出收藏夹清单,不采里面的内容(采内容用命令行 cli.py folder <id>)'},
+  /* 回补是「还不知道有没有内容总结」的唯一解法。它有自己的游标,
+     被 403 打断后再点一次接着往深处走,不会从最新重刷。 */
+  {id:'refill', icon:'i-resume', label:'回补字段', url:'/api/collect/refill', refill:true,
+   hint:'早期采的只存了 31 个字段(抖音真实响应有 787 个)。回补把它们补全,'
+      + '「还不知道有没有内容总结」的那些才能确定。403 打断是正常的,再点一次接着走'},
 ];
 
 let offset=0, total=0;
 // 每页条数记住选择:2485 条按 50/页 要翻 50 页,默认给 100
 let limit = +(localStorage.getItem('dydb.limit') || 100);
-let q='', source='', sort='collected', author='', tag='', cat='', onlySum=false;
+let q='', source='', sort='collected', author='', tag='', cat='', content='';
 let view = localStorage.getItem('dydb.view') || 'list';
 let tagsOpen=false, polling=null;
 let shown = new Map();          // 当前页 aweme_id → 作品,详情弹层用
@@ -524,7 +535,7 @@ const qs = () => {
   const p=new URLSearchParams({limit,offset,sort});
   if(q) p.set('q',q); if(source) p.set('source',source);
   if(author) p.set('nickname',author); if(tag) p.set('tag',tag);
-  if(cat) p.set('cat1',cat); if(onlySum) p.set('has_summary','true');
+  if(cat) p.set('cat1',cat); if(content) p.set('content',content);
   return p.toString();
 };
 /* 大数要好读:61.6万 比 616071 快得多 */
@@ -534,18 +545,27 @@ const num = n => n==null ? '' :
 function renderActs(){
   $('#acts').innerHTML = ACTS.map(a =>
     `<button class="btn${a.primary?' primary':''}" id="b-${a.id}" title="${esc(a.hint)}">
-       ${ico(a.icon)}${a.label}</button>`).join('');
+       ${ico(a.icon)}${a.label}<span class="badge" id="bg-${a.id}" hidden></span></button>`).join('');
   ACTS.forEach(a => $(`#b-${a.id}`).onclick = () => a.folders ? doFolders() : trigger(a.url));
+}
+
+/* 按钮上挂个待办数:回补按钮显示还有多少条「不知道」。
+   这样不用先去读说明,光看按钮就知道该不该点。 */
+function markTodo(s){
+  const n = s.content_unknown || 0, el = $('#bg-refill');
+  if(!el) return;
+  el.textContent = n; el.hidden = !n;
+  $('#b-refill').classList.toggle('primary', n > 0);
 }
 
 async function loadStats(){
   const [s,h] = await Promise.all([api('/api/stats'), api('/api/health')]);
   // 「有内容」和「有文案」分开列 —— 前者是视频讲了什么,后者只是作者写的标题
   $('#kpis').innerHTML = [['作品',s.total],['有文案',s.with_description],
-                          ['有内容',s.with_ai_summary],['作者',s.authors]]
-    .map(([k,v]) => `<span class="kpi"><b>${v.toLocaleString()}</b><i>${k}</i></span>`).join('');
-  $('#n-sum').textContent = s.with_ai_summary;
-  $('#b-sum').classList.toggle('on', onlySum);
+                          ['有内容',s.content_have],['作者',s.authors]]
+    .map(([k,v]) => `<span class="kpi"><b>${(v||0).toLocaleString()}</b><i>${k}</i></span>`).join('');
+  renderContentStates(s);
+  markTodo(s);
 
   const es = Object.entries(s.by_source||{});
   $('#srcs').innerHTML =
@@ -558,6 +578,28 @@ async function loadStats(){
   const box=$('#notices'); box.querySelector('.ck')?.remove();
   if(!h.cookie_configured) box.insertAdjacentHTML('afterbegin',
     `<div class="notice warn ck">${ico('i-key')}<div>还没登录。跑 <code>python backend/cli.py qrlogin</code> 扫码,cookie 只存在你本机。</div></div>`);
+}
+
+/* 视频内容总结的三态。第三态是重点:「还不知道」不等于「没有」——
+   它意味着这条还没采到完整响应,该去 refill,而不是认命。 */
+const CSTATE = [
+  {k:'have',    label:'有内容总结', n:'content_have',
+   hint:'抖音自己生成的视频内容总结 —— 库里唯一能回答「视频讲了什么」的东西'},
+  {k:'none',    label:'抖音没给',   n:'content_none',
+   hint:'已采到完整响应,抖音确认没为这条生成总结(它只给长视频/知识类生成)'},
+  {k:'unknown', label:'还不知道',   n:'content_unknown', warn:true,
+   hint:'还没采到完整响应,有没有总结是未知的 —— 点「回补字段」去确定,不是真没有'},
+];
+
+function renderContentStates(s){
+  $('#cstates').innerHTML = '<span class="act-lbl">视频内容</span>' + CSTATE.map(c =>
+    `<span class="chip${content===c.k?' on':''}${c.warn&&s[c.n]?' warn':''}"
+           data-c="${c.k}" title="${esc(c.hint)}">${c.label}<span class="n">${s[c.n]||0}</span></span>`
+  ).join('');
+  $('#cstates').querySelectorAll('.chip').forEach(el => el.onclick = () => {
+    content = content===el.dataset.c ? '' : el.dataset.c;
+    offset=0; loadStats(); loadActive(); loadList();
+  });
 }
 
 const PLAN_ICON = {resume:'i-resume', sync:'i-sync', skip:'i-pause'};
@@ -657,7 +699,8 @@ function loadActive(){
     author && {k:'作者', v:author,        clear:()=>{ author=''; $('#author').value=''; }},
     tag    && {k:'标签', v:'#'+tag,       clear:()=>{ tag=''; }},
     cat    && {k:'分类', v:cat,           clear:()=>{ cat=''; $('#cat').value=''; }},
-    onlySum&& {k:'限定', v:'有内容总结',   clear:()=>{ onlySum=false; }},
+    content&& {k:'视频内容', v:(CSTATE.find(c=>c.k===content)||{}).label,
+                              clear:()=>{ content=''; }},
   ].filter(Boolean);
 
   if(!fs.length){ $('#active').innerHTML=''; return; }
@@ -755,7 +798,7 @@ function gridCell(v){
   const t=(v.description||'').trim();
   // 点卡片开详情而不是直接跳抖音 —— 网格里文案被截断,先给个能读全文的地方
   // 网格里放不下总结全文,但要能一眼看出「这条有内容可读」
-  const mark = v.has_ai_summary ? `<span class="gm" title="有内容总结">内容</span>` : '';
+  const mark = v.content_state==='have' ? `<span class="gm" title="有内容总结">内容</span>` : '';
   return `<div class="g" onclick="detail('${esc(v.aweme_id)}')">
     <div style="position:relative">${cover(v,'gc')}${mark}${t?`<div class="gt">${esc(t)}</div>`:''}</div>
     <div class="gf"><span class="a">${esc(v.nickname)||'未知作者'}</span>
@@ -872,7 +915,7 @@ window.byAuthor = n => { author = author===n?'':n; $('#author').value=author; of
 window.byTag = t => { tag = tag===t?'':t; offset=0; loadTags(); loadActive(); loadList(); };
 window.byCat = c => { cat = cat===c?'':c; $('#cat').value=cat; offset=0;
   closeSheet(); loadActive(); loadList(); };
-window.resetAll = () => { q=source=author=tag=cat=''; onlySum=false; sort='collected'; offset=0;
+window.resetAll = () => { q=source=author=tag=cat=content=''; sort='collected'; offset=0;
   $('#q').value=''; $('#author').value=''; $('#cat').value=''; $('#sort').value='collected';
   loadStats(); loadTags(); loadActive(); loadList(); };
 
@@ -971,8 +1014,7 @@ $('#v-grid').onclick  = () => setView('grid');
 $('#sort').onchange   = e => { sort=e.target.value; offset=0; loadList(); };
 $('#author').onchange = e => { author=e.target.value; offset=0; loadActive(); loadList(); };
 $('#cat').onchange    = e => { cat=e.target.value; offset=0; loadActive(); loadList(); };
-$('#b-sum').onclick   = () => { onlySum=!onlySum; offset=0;
-  $('#b-sum').classList.toggle('on', onlySum); loadActive(); loadList(); };
+/* 三态 chip 的点击在 renderContentStates 里绑定 —— 它每次 loadStats 都重画 */
 $('#psize').onchange  = e => {
   limit = +e.target.value;
   localStorage.setItem('dydb.limit', limit);

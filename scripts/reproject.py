@@ -48,8 +48,11 @@ def main() -> None:
     for aid, raw in store.iter_raw(only_full=True):
         fields = douyin._from_raw(raw)
         ai = douyin._ai_content_from_raw(raw)
+        # 这里读的是**完整 raw**,所以结论是确定的:有就 have,没有就 none。
+        # 绝不会写 unknown —— iter_raw(only_full=True) 已经把旧结构过滤掉了。
         fields.update(
             cat1=ai["cat1"], cat2=ai["cat2"], cat3=ai["cat3"],
+            content_state="have" if ai["summary"] else "none",
             has_ai_summary=1 if ai["summary"] else 0,
         )
         store.update_derived(aid, fields)

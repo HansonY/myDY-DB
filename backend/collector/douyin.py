@@ -223,10 +223,17 @@ def _normalize(
         row["hashtags"] = _hashtags_from_raw(raw)      # 供落库时写 tags 表
         ai = _ai_content_from_raw(raw)
         row["cat1"], row["cat2"], row["cat3"] = ai["cat1"], ai["cat2"], ai["cat3"]
+        # 拿到了完整响应,所以「有没有内容总结」这件事是**确定**的:
+        # 有就 have,没有就 none —— 不是 unknown。
+        row["content_state"] = "have" if ai["summary"] else "none"
         row["has_ai_summary"] = 1 if ai["summary"] else 0
         row["_ai"] = ai                                # 供落库时写 transcripts / extractions
         row["raw_json"] = json.dumps(raw, ensure_ascii=False, default=str)
     else:
+        # 只有 f2 那 31 个字段,里面压根没有 recommend_chapter_info ——
+        # 所以不能说「没有总结」,只能说「不知道」。写 none 会把它错标成
+        # 已确认,以后就再也不会来补采了。
+        row["content_state"] = "unknown"
         row["raw_json"] = json.dumps(item, ensure_ascii=False, default=str)
 
     for flag in ("is_prohibited", "author_deleted"):

@@ -57,9 +57,18 @@ CREATE TABLE IF NOT EXISTS videos (
     cat1            TEXT,
     cat2            TEXT,
     cat3            TEXT,
-    -- 抖音**自己生成的 AI 内容总结**存在 transcripts(kind='summary'),
-    -- 章节大纲存在 extractions。这里只记有没有,便于筛选。
-    has_ai_summary  INTEGER DEFAULT 0,
+    -- 抖音**自己生成的视频内容总结**(不是文案!)存在 transcripts(kind='summary'),
+    -- 章节大纲存在 extractions。这里记状态,便于筛选与判断「数据全不全」。
+    --
+    -- ⚠️ 必须三态,不能用布尔:
+    --   have    抖音给了内容总结
+    --   none    已经采到完整响应,抖音**确认没给**(它只给长视频/知识类生成)
+    --   unknown 这条还没采到完整响应,**压根不知道有没有**(早期只存了 31 个字段)
+    -- 用 0/1 的话后两者会被混成同一个 0 —— 实测 1484 条「确认没有」和
+    -- 771 条「还不知道」全被标成 0,界面和检索根本分不出来,
+    -- 于是「这条没内容」到底该去补采还是该认命,谁也说不清。
+    content_state   TEXT NOT NULL DEFAULT 'unknown',
+    has_ai_summary  INTEGER DEFAULT 0,      -- 兼容旧数据,新代码一律读 content_state
 
     collected_at    TEXT    NOT NULL,          -- 本地入库时间
     updated_at      TEXT    NOT NULL
@@ -72,7 +81,7 @@ CREATE INDEX IF NOT EXISTS idx_videos_nickname    ON videos(nickname);
 -- 新维度的筛选/排序入口
 CREATE INDEX IF NOT EXISTS idx_videos_cat1        ON videos(cat1);
 CREATE INDEX IF NOT EXISTS idx_videos_digg        ON videos(digg_count DESC);
-CREATE INDEX IF NOT EXISTS idx_videos_summary     ON videos(has_ai_summary);
+CREATE INDEX IF NOT EXISTS idx_videos_summary     ON videos(content_state);
 
 -- ── 作品 ↔ 来源(多对多)──────────────────────────────────────
 -- 同一作品可能同时出现在「收藏」「点赞」和某个收藏夹里。

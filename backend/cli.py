@@ -1,11 +1,13 @@
 #!/usr/bin/env python
 """Douyin-DB 命令行。
 
-首次使用顺序:
-    python backend/cli.py init          # 建库
-    python backend/cli.py probe         # 只拉 3 条,核对字段映射(不写库)
-    python backend/cli.py favorites     # 全量采集收藏
-    python backend/cli.py stats
+日常只需要一条命令(可反复跑,每步都会跳过已完成的):
+    python backend/cli.py go
+
+它按顺序做:建库 → 扫码登录 → 认自己的 sec_user_id → 收藏夹清单 →
+智能采集(收藏/点赞/我的作品,自己处理限流退避)→ 报告覆盖率。
+
+下面那些是它内部用到的单步命令,想单独控制时才需要。
 """
 
 from __future__ import annotations
@@ -146,6 +148,89 @@ async def cmd_smart(args) -> None:
     r = await service.smart_collect(on_progress=_progress, on_step=step)
     print(f"\n═══ 本轮共新增 {r['inserted']} 条 ═══")
     cmd_stats(args)
+
+
+async def cmd_go(args) -> None:
+    """一条命令跑完全流程:建库 → 登录 → 认人 → 采全部 → 报告。
+
+    clone 下来之后**只需要记住这一个命令**,而且可以反复跑 ——
+    每一步都会先看「是不是已经做过了」,做过就跳过。所以它既是首次安装,
+    也是日常更新(采集本身是断点续跑的)。
+    """
+    import config
+    import service
+    from collector import cookie as ck
+    from config import ROOT
+
+    store.init_db()
+    print(f"① 数据库  {settings.db_file}")
+
+    # ── 登录 ──────────────────────────────────────────────
+    # cookie 等同账号控制权,只写本机 .env(已 gitignore),不打印内容。
+    config.reload()
+    if settings.has_cookie:
+        print("② 登录    已有 cookie,跳过")
+    else:
+        print("② 登录    没有 cookie,开浏览器扫码(只有你自己能扫)")
+        profile = ROOT / "data" / "browser-profile"
+        cookie = await ck.qr_login(timeout=args.timeout, profile_dir=profile)
+        ck.write_to_env(cookie, ROOT / ".env")
+        config.reload()
+        print(f"          ✓ 已写入 .env(长度 {len(cookie)},内容不打印)")
+
+    # ── 认人:点赞和「我的作品」都需要自己的 sec_user_id ──
+    if settings.douyin_sec_user_id.strip():
+        print("③ 认人    已有 sec_user_id,跳过")
+    else:
+        from collector import whoami
+        sec, uid = await whoami.resolve(ROOT / "data" / "browser-profile")
+        whoami.write_to_env(sec, ROOT / ".env")
+        config.reload()
+        print(f"③ 认人    ✓ uid={uid}")
+
+    # ── 收藏夹清单:1 个请求,顺手拿 ──────────────────────
+    try:
+        folders = await service.sync_folders()
+        print(f"④ 收藏夹  {len(folders)} 个")
+    except Exception as e:
+        print(f"④ 收藏夹  跳过({type(e).__name__})")
+
+    # ── 采集:三类各自判断续采/增量/跳过,自己处理限流退避 ──
+    print("\n⑤ 采集(收藏 / 点赞 / 我的作品)")
+    print("   注:抖音没有「转发」接口 —— f2 的 21 个方法里没有,")
+    print("       实测「我的作品」里 is_share_post 也全是 0,采不到。\n")
+
+    def step(o):
+        st = o["status"]
+        if st == "skipped":
+            print(f"   ⏸ {o['label']}:{o['reason']}")
+        elif st == "throttled":
+            print(f"   ⚠️ {o['label']}:被限流,冷却 {o['cooldown_minutes']} 分钟"
+                  f"(已采部分与游标都保留,重跑本命令即可接着走)")
+        elif st == "failed":
+            print(f"   ✗ {o['label']}:{o['error'][:80]}")
+        else:
+            why = ("已到历史尽头" if o.get("exhausted")
+                   else "主动收手,下次继续" if o.get("hit_cap")
+                   else "已追上最新" if o.get("stopped_early") else "")
+            print(f"   ✓ {o['label']}:新增 {o['inserted']} 条 / {o['pages']} 页 {why}")
+
+    try:
+        r = await service.smart_collect(on_progress=_progress, on_step=step)
+        print(f"\n   本轮新增 {r['inserted']} 条")
+    except Exception as e:
+        print(f"\n   ✗ {type(e).__name__}: {str(e)[:90]}")
+        print("   已采部分和游标都保留了,重跑本命令接着走。")
+
+    print("\n" + "─" * 60)
+    cmd_stats(args)
+
+    c = store.coverage()
+    if c["content_unknown"]:
+        print(f"\n下一步:{c['content_unknown']} 条还没采到完整响应,"
+              "「有没有视频内容总结」是未知的。")
+        print("        跑 `cli.py refill` 去确定(会被 403 打断,分多轮跑)。")
+    print("\n看数据:.venv/bin/python -m uvicorn main:app --app-dir backend --port 8000")
 
 
 async def cmd_state(args) -> None:
@@ -300,18 +385,25 @@ def cmd_stats(_args) -> None:
     s = store.stats()
     print(f"作品总数      {s['total']}")
     print(f"有文案的      {s['with_description']}")
-    print(f"有AI总结的    {s['with_ai_summary']}  ← 抖音自己生成的视频内容总结")
     print(f"涉及作者      {s['authors']}")
     print(f"按来源        {s['by_source'] or '—'}")
 
-    # 覆盖率:「数据到底全不全」必须能一眼看到 —— 此前两次靠推断判断采尽都错了
     c = store.coverage()
     t = c["total"] or 1
+    # 视频内容总结必须三态报。混成「有/没有」的话,「抖音确认没给」和
+    # 「还没采全所以不知道」会被当成同一件事 —— 而前者该认命,后者该去补采。
+    print("\n视频内容总结(抖音自己生成的,不是文案):")
+    print(f"  有            {c['content_have']:>5}  {c['content_have']*100/t:.0f}%")
+    print(f"  抖音确认没给   {c['content_none']:>5}  {c['content_none']*100/t:.0f}%"
+          "   ← 它只给长视频/知识类生成")
+    print(f"  还不知道       {c['content_unknown']:>5}  {c['content_unknown']*100/t:.0f}%"
+          "   ← 没采到完整响应,跑 refill 才能确定")
+
     print("\n字段覆盖:")
     for key, label in (
         ("full_raw", "完整原始响应"), ("digg_count", "互动数据"),
         ("cat1", "官方分类"), ("music_url", "音轨地址"),
-        ("ai_summary", "平台AI总结"), ("chapters", "章节大纲"),
+        ("chapters", "章节大纲"),
     ):
         print(f"  {label:<12} {c[key]:>5}/{c['total']}  {c[key] * 100 / t:.0f}%")
     if c["legacy_raw"]:
@@ -346,10 +438,10 @@ def cmd_tags(args) -> None:
 def cmd_search(args) -> None:
     rows = store.list_videos(
         q=args.keyword, limit=args.limit, sort=args.sort,
-        cat1=args.cat, has_summary=True if args.summary else None,
+        cat1=args.cat, content=args.content,
     )
     total = store.count_videos(
-        q=args.keyword, cat1=args.cat, has_summary=True if args.summary else None,
+        q=args.keyword, cat1=args.cat, content=args.content,
     )
     print(f"命中 {total} 条,显示前 {len(rows)}:\n")
     for r in rows:
@@ -391,6 +483,9 @@ def cmd_raw(args) -> None:
 def main() -> None:
     p = argparse.ArgumentParser(prog="douyin-db", description="抖音收藏夹 → 个人知识库")
     sub = p.add_subparsers(dest="cmd", required=True)
+
+    sp = sub.add_parser("go", help="★ 一条命令跑完:建库+登录+认人+采全部(可反复跑)")
+    sp.add_argument("--timeout", type=int, default=180, help="扫码等待秒数")
 
     sub.add_parser("init", help="建库")
 
@@ -458,7 +553,9 @@ def main() -> None:
                              "digg", "collect", "comment"],
                     help="digg/collect/comment = 按互动数据排,挑优质内容用")
     sp.add_argument("--cat", help="按抖音官方一级分类筛选")
-    sp.add_argument("--summary", action="store_true", help="只看有平台 AI 总结的")
+    sp.add_argument("--content", choices=["have", "none", "unknown"],
+                    help="按内容总结状态筛:have=有 · none=抖音确认没给 · "
+                         "unknown=还没采全(该去 refill,不是真没有)")
 
     sp = sub.add_parser("raw", help="看一条作品的完整原始响应(787 个字段都在库里)")
     sp.add_argument("aweme_id")
@@ -468,6 +565,7 @@ def main() -> None:
     args = p.parse_args()
 
     handlers = {
+        "go": cmd_go,
         "init": cmd_init,
         "login": cmd_login,
         "qrlogin": cmd_qrlogin,

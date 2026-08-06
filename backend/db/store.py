@@ -29,8 +29,14 @@ _VIDEO_COLUMNS = (
     "video_width", "video_height", "play_url", "music_url",
     "poi_name", "mix_name",
     "is_subtitled", "is_deleted",
-    "cat1", "cat2", "cat3", "has_ai_summary",
+    "cat1", "cat2", "cat3", "content_state", "has_ai_summary",
 )
+
+# 内容总结的三态。这个区分是刚性的:
+#   have    抖音给了视频内容总结
+#   none    采到完整响应了,抖音确认没给(它只给长视频/知识类生成)
+#   unknown 还没采到完整响应,不知道有没有 —— 该去补采,不是该认命
+CONTENT_HAVE, CONTENT_NONE, CONTENT_UNKNOWN = "have", "none", "unknown"
 
 # 列表/详情查询用的列。**不能用 `v.*`** —— 那会把 raw_z 也捞出来:
 # 一是 17 KB × 100 条 = 1.7 MB 白传给浏览器,二是 bytes 过不了 JSON 序列化。
@@ -118,6 +124,7 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
             "poi_name": "TEXT", "mix_name": "TEXT",
             "is_subtitled": "INTEGER DEFAULT 0", "is_deleted": "INTEGER DEFAULT 0",
             "cat1": "TEXT", "cat2": "TEXT", "cat3": "TEXT",
+            "content_state": "TEXT NOT NULL DEFAULT 'unknown'",
             "has_ai_summary": "INTEGER DEFAULT 0",
         },
         "collect_state": {
@@ -139,6 +146,18 @@ def init_db() -> None:
     with connect() as conn:
         conn.executescript(SCHEMA_FILE.read_text(encoding="utf-8"))
         _add_missing_columns(conn)
+        # 从旧的 has_ai_summary 布尔推出三态(幂等,只补还是默认值的行):
+        #   有总结                        → have
+        #   有完整响应但没总结            → none    抖音确认没给
+        #   连完整响应都还没有            → unknown 该去补采
+        # digg_count 是「有完整响应」的判据:早期那 31 个字段里没有 statistics。
+        conn.execute(
+            "UPDATE videos SET content_state = CASE "
+            "  WHEN has_ai_summary = 1        THEN 'have' "
+            "  WHEN digg_count IS NOT NULL    THEN 'none' "
+            "  ELSE 'unknown' END "
+            "WHERE content_state IS NULL OR content_state = 'unknown'"
+        )
         # 把早期只存在 videos.source 的归属关系补进 video_sources。
         # 幂等,可反复执行。
         conn.execute(
@@ -197,14 +216,23 @@ def upsert_videos(items: Iterable[dict[str, Any]]) -> tuple[int, int]:
         #   collected_at / source / collects_* —— videos 表保留「首次发现」的信息,
         #   完整的归属关系由 video_sources 承担。否则采完点赞会把收藏的 source 冲掉。
         _keep = {"aweme_id", "collected_at", "source", "collects_id", "collects_name"}
-        updates = ",".join(
-            # raw 只补不覆盖:某些路径拿不到真实响应(只有 f2 那 31 个字段),
-            # 直接 excluded.raw_z 会把已经存好的完整响应清成 NULL —— 而它重采
-            # 才能拿回来,媒体地址还可能已经过期。宁可保旧。
-            "raw_z=COALESCE(excluded.raw_z, videos.raw_z)" if c == "raw_z"
-            else f"{c}=excluded.{c}"
-            for c in cols if c not in _keep
-        )
+        def _set(c: str) -> str:
+            if c == "raw_z":
+                # raw 只补不覆盖:某些路径拿不到真实响应(只有 f2 那 31 个字段),
+                # 直接 excluded.raw_z 会把已经存好的完整响应清成 NULL —— 而它重采
+                # 才能拿回来,媒体地址还可能已经过期。宁可保旧。
+                return "raw_z=COALESCE(excluded.raw_z, videos.raw_z)"
+            if c == "content_state":
+                # 只升不降:unknown 是「还不知道」,不能拿它覆盖已经确定的
+                # have/none。否则某一页 raw 配对失败,就把之前查清的结论抹掉,
+                # 这条以后再也不会被补采。
+                # have↔none 之间允许更新 —— 抖音是异步生成总结的,
+                # 今天没有明天可能就有了。
+                return ("content_state=CASE WHEN excluded.content_state='unknown' "
+                        "THEN videos.content_state ELSE excluded.content_state END")
+            return f"{c}=excluded.{c}"
+
+        updates = ",".join(_set(c) for c in cols if c not in _keep)
         conn.executemany(
             f"INSERT INTO videos ({','.join(cols)}) VALUES ({placeholders}) "
             f"ON CONFLICT(aweme_id) DO UPDATE SET {updates}",
@@ -332,7 +360,7 @@ def _filters(
     nickname: str | None,
     tag: str | None = None,
     cat1: str | None = None,
-    has_summary: bool | None = None,
+    content: str | None = None,
 ) -> tuple[list[str], list[Any]]:
     where: list[str] = []
     params: list[Any] = []
@@ -347,9 +375,10 @@ def _filters(
     if cat1:
         where.append("v.cat1 = ?")
         params.append(cat1)
-    if has_summary is not None:
-        where.append("COALESCE(v.has_ai_summary, 0) = ?")
-        params.append(1 if has_summary else 0)
+    # content: have=有内容总结 · none=抖音确认没给 · unknown=还没采全,不知道
+    if content in (CONTENT_HAVE, CONTENT_NONE, CONTENT_UNKNOWN):
+        where.append("COALESCE(v.content_state,'unknown') = ?")
+        params.append(content)
     if nickname:
         where.append("v.nickname = ?")
         params.append(nickname)
@@ -400,14 +429,14 @@ def list_videos(
     sort: str = "collected",
     tag: str | None = None,
     cat1: str | None = None,
-    has_summary: bool | None = None,
+    content: str | None = None,
 ) -> list[dict[str, Any]]:
     """列表 + 关键词搜索 + 来源/收藏夹/作者/标签/分类筛选 + 排序。
 
     关键词用 LIKE:几千条数据下瞬时返回,不值得引入 FTS5。
     语义检索留给后续的向量库。
     """
-    where, params = _filters(q, source, collects_id, nickname, tag, cat1, has_summary)
+    where, params = _filters(q, source, collects_id, nickname, tag, cat1, content)
 
     sql = (
         f"SELECT {_SELECT_COLS}, "
@@ -437,9 +466,9 @@ def count_videos(
     nickname: str | None = None,
     tag: str | None = None,
     cat1: str | None = None,
-    has_summary: bool | None = None,
+    content: str | None = None,
 ) -> int:
-    where, params = _filters(q, source, collects_id, nickname, tag, cat1, has_summary)
+    where, params = _filters(q, source, collects_id, nickname, tag, cat1, content)
     sql = "SELECT COUNT(*) AS n FROM videos v"
     if where:
         sql += " WHERE " + " AND ".join(where)
@@ -555,6 +584,11 @@ def coverage() -> dict[str, Any]:
             # 还没迁移的明文老数据,迁移脚本跑完应为 0
             "legacy_raw": n("raw_json IS NOT NULL") if "raw_json" in cols else 0,
             "digg_count": n("digg_count IS NOT NULL"),
+            # 内容总结三态。unknown 不是「没有」,是「还没采全,不知道」——
+            # 前者该认命,后者该去补采,混在一起就没法决定下一步做什么。
+            "content_have": n("content_state='have'"),
+            "content_none": n("content_state='none'"),
+            "content_unknown": n("COALESCE(content_state,'unknown')='unknown'"),
             "cat1": n("cat1 IS NOT NULL AND TRIM(cat1) <> ''"),
             "music_url": n("music_url IS NOT NULL AND TRIM(music_url) <> ''"),
             "ai_summary": conn.execute(
@@ -589,15 +623,19 @@ def stats() -> dict[str, Any]:
         authors = conn.execute(
             "SELECT COUNT(DISTINCT nickname) AS n FROM videos"
         ).fetchone()["n"]
-        with_summary = conn.execute(
-            "SELECT COUNT(*) AS n FROM transcripts WHERE kind='summary'"
-        ).fetchone()["n"]
+        # 内容总结三态。分开报,因为它们要的下一步动作不一样:
+        #   none = 抖音确认没给 → 认命(或以后单独做 ASR)
+        #   unknown = 还没采全 → 去补采
+        cs = {r["s"]: r["n"] for r in conn.execute(
+            "SELECT COALESCE(content_state,'unknown') AS s, COUNT(*) AS n "
+            "FROM videos GROUP BY s")}
     return {
         "total": total,
         "by_source": by_source,
         "with_description": with_desc,
-        # 平台 AI 总结的条数 —— 这是目前唯一「视频内容」来源
-        "with_ai_summary": with_summary,
+        "content_have": cs.get("have", 0),
+        "content_none": cs.get("none", 0),
+        "content_unknown": cs.get("unknown", 0),
         "authors": authors,
     }
 

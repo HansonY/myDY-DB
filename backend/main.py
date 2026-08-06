@@ -86,8 +86,8 @@ async def get_videos(
     nickname: str | None = None,
     tag: str | None = None,
     cat1: str | None = None,
-    # 只看有平台 AI 总结的 —— 那是目前唯一的「视频内容」来源
-    has_summary: bool | None = None,
+    # 内容总结三态筛选:have=有 · none=抖音确认没给 · unknown=还没采全
+    content: str | None = None,
     sort: str = "collected",
     # 上限放宽到 500:网格视图下每页 50 条要翻 50 页,太碎
     limit: int = Query(100, ge=1, le=500),
@@ -95,10 +95,10 @@ async def get_videos(
 ) -> dict[str, Any]:
     items = await asyncio.to_thread(
         store.list_videos, q, source, limit, offset, collects_id, nickname,
-        sort, tag, cat1, has_summary,
+        sort, tag, cat1, content,
     )
     total = await asyncio.to_thread(
-        store.count_videos, q, source, collects_id, nickname, tag, cat1, has_summary
+        store.count_videos, q, source, collects_id, nickname, tag, cat1, content
     )
     return {"total": total, "limit": limit, "offset": offset, "items": items}
 
@@ -313,6 +313,45 @@ async def collect_smart(bg: BackgroundTasks) -> dict[str, Any]:
 
     bg.add_task(_guarded, lambda: service.smart_collect(on_progress=_track))
     return {"started": True, "scope": "smart", "hint": "轮询 /api/runs 看进度"}
+
+
+@app.post("/api/collect/refill")
+async def collect_refill(
+    bg: BackgroundTasks,
+    scope: str | None = None,
+    max_pages: int = 0,
+) -> dict[str, Any]:
+    """回补完整字段:重走列表,把早期只存了 31 个字段的作品补全。
+
+    这是界面上那些「还不知道有没有内容总结」的唯一解法 ——
+    它们不是真没有,而是当时没采到完整响应。
+
+    特点(和普通采集不同):
+      * 用**自己的一套游标** `refill:<scope>`,不碰续采的深挖进度;
+        被 403 打断后再点一次接着往深处走,不会从最新重刷
+      * 不提前停 —— 整页都是已知条目也要继续,因为目的就是更新它们
+    """
+    _require_cookie()
+    if scope and scope not in ("collection", "like", "post"):
+        raise HTTPException(400, "scope 只能是 collection / like / post")
+    if scope in ("like", "post"):
+        _require_own_id()
+    await _require_idle()
+
+    scopes = [scope] if scope else ["collection", "like", "post"]
+
+    async def _all() -> None:
+        for sc in scopes:
+            try:
+                await service.refill_scope(sc, max_pages=max_pages, on_progress=_track)
+            except Exception:
+                # 被 403 打断是常态(点赞实测 6 页就断)。已补的都留住了,
+                # 回补游标也存住了 —— 再点一次接着走,所以这里不中断后面的类。
+                continue
+
+    bg.add_task(_guarded, _all)
+    return {"started": True, "scope": "refill:" + ",".join(scopes),
+            "hint": "轮询 /api/runs 看进度;403 打断是正常的,再点一次接着走"}
 
 
 @app.post("/api/collect/favorites")

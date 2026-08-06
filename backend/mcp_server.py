@@ -120,13 +120,13 @@ async def search_videos(
     """
     store.init_db()
     limit = max(1, min(limit, 100))
-    has_summary = True if only_with_content else None
+    content = 'have' if only_with_content else None
     rows = await asyncio.to_thread(
         store.list_videos, query, source, limit, 0, None, author, sort, tag,
-        category, has_summary,
+        category, content,
     )
     total = await asyncio.to_thread(
-        store.count_videos, query, source, None, author, tag, category, has_summary
+        store.count_videos, query, source, None, author, tag, category, content
     )
     return {"matched": total, "returned": len(rows), "items": [_slim(r) for r in rows]}
 
