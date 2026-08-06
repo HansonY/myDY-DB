@@ -276,28 +276,6 @@ main{max-width:1400px;margin:0 auto;padding:14px 20px 64px}
 .sc.ok{background:var(--accent-dim);border:1px solid var(--accent-line);color:#a9cdec}
 .sc.mid{border:1px dashed var(--line-2);color:var(--dim)}
 
-/* ══ 认识自己 ══════════════════════════════════════════════
-   每条结论一张卡。这里用卡片是合理的 —— 结论之间是并列关系、密度低,
-   而列表区不用卡片是因为那里密度高。 */
-.ins-top{display:flex;align-items:center;justify-content:space-between;gap:12px;
-  padding:2px 0 12px;
-  /* header 是 sticky 的,滚动时会压住这一行 —— 给它一个吸附余量 */
-  scroll-margin-top:120px}
-#insight{padding-top:6px}
-.ins{border:1px solid var(--line);border-radius:11px;padding:14px 16px;margin-bottom:12px;
-  background:var(--surface)}
-.ins-h{display:flex;align-items:center;gap:8px;margin-bottom:8px}
-.ins-h b{font-size:12px;font-weight:600;letter-spacing:.03em;color:var(--dim)}
-.ins-head{font-size:16px;line-height:1.62;color:var(--fg)}
-.ins-head b{color:#a9cdec;font-weight:600}
-.ins-why{margin-top:8px;font-size:12.5px;line-height:1.65;color:var(--dim)}
-.ins-ev{margin:9px 0 0;padding-left:18px;font-size:12.5px;line-height:1.85;color:var(--fg-2)}
-.ins-ev li.dim{color:var(--dim-2)}
-.ins-narr{margin-top:6px;font-size:14.5px;line-height:1.78;color:var(--fg-2);
-  white-space:pre-wrap}
-/* AI 那两张卡用左侧强调线区分「这是模型写的 / 这是交互区」,不另开颜色 */
-.ins-ai,.ins-ask{border-left:2px solid var(--accent-line)}
-@media(max-width:720px){ .ins-top{flex-direction:column;align-items:flex-start} }
 
 .mx{display:inline-flex;gap:9px;font-family:var(--mono);font-size:11.5px;
   color:var(--fg-2);font-variant-numeric:tabular-nums}
@@ -465,10 +443,10 @@ footer{max-width:1400px;margin:18px auto 0;padding:16px 20px 8px;
     <div class="kpis" id="kpis"></div>
     <!-- 顶层视图切换。分析是另一件事(看自己)而不是浏览的一个筛选,
          所以给它独立的视图,不塞进筛选栏。 -->
-    <div class="seg" id="views" style="margin-left:14px">
-      <button id="v-browse" class="on">浏览</button>
-      <button id="v-insight">认识自己</button>
-    </div>
+    <!-- 分析已独立成 /insight.html —— 那页有标签球和关联图,需要整屏空间,
+         塞在筛选栏下面会挤成一团 -->
+    <a class="btn" href="/insight.html" style="margin-left:14px"
+       title="从你自己做过的收藏和点赞里看你自己">认识自己 →</a>
   </div>
 
   <!-- ① 操作区:会真的向抖音发请求 -->
@@ -535,9 +513,6 @@ footer{max-width:1400px;margin:18px auto 0;padding:16px 20px 8px;
 <main>
   <div id="notices"></div>
   <div id="out"></div>
-  <!-- 分析视图。默认隐藏 —— [hidden] 在本文件顶部有 !important,
-       否则会被 display 规则盖掉(踩过) -->
-  <div id="insight" hidden></div>
 </main>
 <footer id="pager"></footer>
 
@@ -959,142 +934,6 @@ function renderSemantic(){
   $('#pager').innerHTML = `<span class="pg i">语义检索共 ${items.length} 条 · 按相似度排序</span>`;
 }
 
-/* ══ 认识自己 ═══════════════════════════════════════════════
-   立场:做落差,不做图表。饼图谁都能画,看完你什么也没多知道 ——
-   你早知道自己爱看什么。有价值的是「你以为的」和「实际的」不一样的地方。
-
-   所以每条结论都是:一句话 + 可展开的具体数字 + 实测/推断的标记。
-   只给百分比不给证据,那和星座运势没区别。 */
-
-let insightData = null;
-
-async function loadInsight(force){
-  const box = $('#insight');
-  box.innerHTML = `<div class="empty">${ico('i-search')}${force?'重新分析中…':'读取分析…'}</div>`;
-  try{
-    insightData = await api('/api/insight?' + new URLSearchParams({force: force?'true':'false'}));
-  }catch(e){
-    box.innerHTML = `<div class="notice warn">${ico('i-key')}<div>分析失败:${esc(e.message)}</div></div>`;
-    return;
-  }
-  renderInsight();
-  loadInsightHistory();
-}
-
-const KIND = {
-  measured: {t:'实测', cls:'ok',   tip:'直接从库里算出来的数字'},
-  inferred: {t:'推断', cls:'todo', tip:'由多个旁证拼出来的解读,不是直接证据 —— 别当成事实'},
-};
-
-function insCard(p, i){
-  const k = KIND[p.kind] || KIND.inferred;
-  return `<div class="ins">
-    <div class="ins-h">
-      <span class="cm ${k.cls}" title="${esc(k.tip)}">${k.t}</span>
-      <b>${esc(p.title)}</b>
-    </div>
-    <div class="ins-head">${mdBold(p.headline)}</div>
-    ${p.why?`<div class="ins-why">${mdBold(p.why)}</div>`:''}
-    ${(p.evidence||[]).length?`
-      <button class="link" onclick="tgEv(${i})">看依据(${p.evidence.length} 条)</button>
-      <ul class="ins-ev" id="ev-${i}" hidden>
-        ${p.evidence.map(e=>`<li>${esc(e)}</li>`).join('')}
-        ${p.denominator?`<li class="dim">分母:${esc(p.denominator)}</li>`:''}
-      </ul>`:''}
-  </div>`;
-}
-
-/* headline 里用 **粗体** 标了关键词。只认这一种标记,不引 markdown 库 */
-function mdBold(t){
-  return esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
-}
-window.tgEv = i => { const el=$('#ev-'+i); el.hidden = !el.hidden; };
-
-function renderInsight(){
-  const d = insightData;
-  const when = (d.created_at||'').slice(0,16).replace('T',' ');
-  $('#insight').innerHTML = `
-    <div class="ins-top">
-      <div>
-        <b>基于你自己做过的动作</b>
-        <span class="dim"> · ${d.n_videos} 条作品 · 分析于 ${when}
-        ${d.from_cache?' · 数据没变,复用上次结果':''}</span>
-      </div>
-      <div class="row" style="gap:6px">
-        <button class="btn" onclick="loadInsight(true)">${ico('i-resume')}重新分析</button>
-      </div>
-    </div>
-    <div class="notice">${ico('i-key')}<div>${esc(d.coverage_note||'')}</div></div>
-    ${d.narrative?`<div class="ins ins-ai"><div class="ins-h">
-        <span class="cm ok">AI 解读</span><b>${esc(d.model||'')}</b></div>
-      <div class="ins-narr">${esc(d.narrative)}</div></div>`:''}
-    ${(d.parts||[]).map(insCard).join('')}
-    <div id="ins-hist"></div>
-    ${askBox()}`;
-}
-
-/* AI 入口:直接问自己的库。放在分析页底部 ——
-   看完「我是什么样的」之后,自然想接着问「那 X 我收藏过什么」。 */
-function askBox(){
-  return `<div class="ins ins-ask">
-    <div class="ins-h"><span class="cm ok">AI</span><b>问你自己的收藏</b></div>
-    <div class="ins-why">${mdBold('基于收藏内容回答,**每句都带出处** —— 库里没有就直说没有,不编。')}</div>
-    <div class="row" style="gap:8px;margin-top:10px">
-      <label class="search" style="flex:1">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#i-search"/></svg>
-        <input id="askq" placeholder="例:我收藏过哪些讲英语学习的方法?回车提问">
-      </label>
-      <button class="btn primary" id="askgo">${ico('i-bolt')}提问</button>
-    </div>
-    <div id="askout"></div>
-  </div>`;
-}
-
-async function doAsk(){
-  const q = ($('#askq')?.value || '').trim();
-  if(!q) return;
-  const out = $('#askout');
-  out.innerHTML = `<div class="ins-narr dim">正在检索并回答…</div>`;
-  let r;
-  try{
-    r = await api('/api/ask?' + new URLSearchParams({q}), {method:'POST'});
-  }catch(e){
-    out.innerHTML = `<div class="notice warn">${ico('i-key')}<div>${esc(e.message)}</div></div>`;
-    return;
-  }
-  let html = `<div class="ins-narr">${esc(r.answer)}</div>`;
-  if(!r.answered){
-    html += `<div class="ins-why">${esc(r.reason||'')}${
-      r.nearest_scores?.length?` · 最接近的相关度 ${r.nearest_scores.map(x=>x.toFixed(3)).join(' / ')}`:''}</div>`;
-  }
-  if(r.only_maybe) html += `<div class="notice warn">${ico('i-key')}<div>所有依据都只是「可能相关」,答案可信度打折</div></div>`;
-  if((r.citations||[]).length){
-    html += `<div class="ins-ev" style="display:block">出处(${r.citations.length} 条):
-      ${r.citations.map(c=>{
-        const ts = c.at_sec!=null?` 第 ${Math.floor(c.at_sec/60)}:${String(c.at_sec%60).padStart(2,'0')} 处`:'';
-        return `<li>[${c.n}] <a href="${esc(c.url)}" target="_blank" rel="noreferrer">${esc(c.author)}《${esc((c.title||'').slice(0,36))}》</a>${ts} · 相关度 ${c.score}</li>`;
-      }).join('')}</div>`;
-  }
-  if((r.dropped_bogus_citations||[]).length){
-    html += `<div class="notice warn">${ico('i-key')}<div>模型引用了 ${r.dropped_bogus_citations.join('、')} 这些不存在的编号,已剔除 —— 这次回答不太可靠</div></div>`;
-  }
-  out.innerHTML = html;
-}
-
-async function loadInsightHistory(){
-  let d;
-  try{ d = await api('/api/insight/history?limit=10'); }catch(e){ return; }
-  const box = $('#ins-hist');
-  if(!box || d.items.length < 2) return;
-  box.innerHTML = `<div class="ins"><div class="ins-h">
-      <span class="cm no">历史</span><b>分析记录</b></div>
-    <div class="ins-why">抖音不给「你什么时候收藏的」,所以时间维度只能靠快照之间的差来看。分析越勤,漂移看得越清。</div>
-    <ul class="ins-ev" style="display:block">
-      ${d.items.map(h=>`<li>${h.created_at.slice(0,16).replace('T',' ')} · ${h.n_videos} 条`
-        + (h.has_narrative?' · 有 AI 解读':'') + `</li>`).join('')}
-    </ul></div>`;
-}
-
 async function loadList(){
   if(!$('#out').innerHTML) $('#out').innerHTML = `<div class="rows">${'<div class="sk"></div>'.repeat(6)}</div>`;
   const d = await api('/api/videos?'+qs());
@@ -1336,24 +1175,6 @@ function setSmode(m){
   if(m==='lit'){ semData=null; loadList(); }
   else if(q) runSemantic();
 }
-function setView2(v){
-  const ins = v === 'insight';
-  $('#v-browse').classList.toggle('on', !ins);
-  $('#v-insight').classList.toggle('on', ins);
-  $('#insight').hidden = !ins;
-  $('#out').hidden = ins;
-  $('#pager').hidden = ins;
-  // 浏览区的筛选栏在分析视图下没意义,收起来少点噪音
-  document.querySelectorAll('.zone')[1].hidden = ins;
-  if(ins && !insightData) loadInsight(false);
-}
-$('#v-browse').onclick  = () => setView2('browse');
-$('#v-insight').onclick = () => setView2('insight');
-document.addEventListener('click', e => { if(e.target.id === 'askgo') doAsk(); });
-document.addEventListener('keydown', e => {
-  if(e.key === 'Enter' && e.target.id === 'askq') doAsk();
-});
-
 $('#m-lit').onclick = () => setSmode('lit');
 $('#m-sem').onclick = () => setSmode('sem');
 
