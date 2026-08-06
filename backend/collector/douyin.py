@@ -273,7 +273,6 @@ def _normalize(
         # 拿到了完整响应,所以「有没有内容总结」这件事是**确定**的:
         # 有就 have,没有就 none —— 不是 unknown。
         row["content_state"] = "have" if ai["summary"] else "none"
-        row["has_ai_summary"] = 1 if ai["summary"] else 0
         row["_ai"] = ai                                # 供落库时写 transcripts / extractions
         row["raw_json"] = json.dumps(raw, ensure_ascii=False, default=str)
     else:

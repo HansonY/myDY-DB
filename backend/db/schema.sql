@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS videos (
     collects_id     TEXT,                      -- source=collects 时所属收藏夹
     collects_name   TEXT,
     aweme_type      INTEGER,                   -- 0=视频, 68=图集 等
-    description     TEXT,                      -- 作品文案:Phase 1 的免费信息主来源
+    description     TEXT,                      -- 作者写的文案。⚠️ 不是视频内容
     nickname        TEXT,
     sec_user_id     TEXT,
     uid             TEXT,
@@ -74,7 +74,6 @@ CREATE TABLE IF NOT EXISTS videos (
     -- 771 条「还不知道」全被标成 0,界面和检索根本分不出来,
     -- 于是「这条没内容」到底该去补采还是该认命,谁也说不清。
     content_state   TEXT NOT NULL DEFAULT 'unknown',
-    has_ai_summary  INTEGER DEFAULT 0,      -- 兼容旧数据,新代码一律读 content_state
 
     collected_at    TEXT    NOT NULL,          -- 本地入库时间
     updated_at      TEXT    NOT NULL
@@ -106,13 +105,18 @@ CREATE TABLE IF NOT EXISTS video_sources (
 CREATE INDEX IF NOT EXISTS idx_vs_source   ON video_sources(source);
 CREATE INDEX IF NOT EXISTS idx_vs_collects ON video_sources(collects_id);
 
--- ── 文本层(文案 / 平台AI总结 / 字幕 / ASR / 视觉理解)─────────
--- summary 是**抖音自己生成的视频内容总结**(recommend_chapter_info.
--- chapter_abstract),零成本零风险,实测 20% 的作品有。这才是「视频讲了什么」;
--- desc 只是作者写的标题。
+-- ── 文本层(同一作品可有多个文本来源)───────────────────────
+--   desc     作者写的文案。**不是视频内容**,常是营销话术
+--   summary  抖音自己生成的视频内容总结(chapter_abstract)。这才是
+--            「视频讲了什么」,零成本零风险。实测 22% 的作品有 ——
+--            注意要读顶层和 recommend_chapter_info 两处,它们基本互斥
+--   queries  「大家都在搜」(suggest_words)。真人写的查询语句,62% 覆盖,
+--            专门用来提升检索召回
+--   asr / subtitle / vision  都还没做(ASR 是 130 小时音频的活,见
+--            docs/KNOWLEDGE-BASE.md 里为什么先不做)
 CREATE TABLE IF NOT EXISTS transcripts (
     aweme_id    TEXT NOT NULL,
-    kind        TEXT NOT NULL,   -- desc | summary | subtitle | asr | vision
+    kind        TEXT NOT NULL,   -- desc | summary | queries | subtitle | asr | vision
     content     TEXT NOT NULL,
     meta        TEXT,            -- JSON:模型名/耗时/成本等
     created_at  TEXT NOT NULL,
@@ -120,7 +124,9 @@ CREATE TABLE IF NOT EXISTS transcripts (
     FOREIGN KEY (aweme_id) REFERENCES videos(aweme_id) ON DELETE CASCADE
 );
 
--- ── Phase 2:结构化提取结果 ──────────────────────────────────
+-- ── 结构化提取结果 ─────────────────────────────────────────
+-- 现在只存平台给的章节大纲(category='chapters', tier=0)。
+-- 以后 AI 抽的知识卡也进这里 —— 那时要加 prompt_version 做版本闸门。
 CREATE TABLE IF NOT EXISTS extractions (
     aweme_id    TEXT PRIMARY KEY,
     category    TEXT,            -- recipe | tutorial | knowledge | fitness | other

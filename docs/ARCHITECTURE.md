@@ -47,8 +47,9 @@ flowchart TB
     end
 
     subgraph data["数据层"]
-        store["db/store.py · 893<br/>schema.sql · 9 张表 · raw 压缩层"]
+        store["db/store.py · 893<br/>schema.sql · 10 张表 · raw 压缩层"]
         tags["extractor/hashtags.py · 47<br/>文案 → #标签(零 AI 成本)"]
+        frag["knowledge/fragments.py<br/>散字段 → 等粒度知识片段<br/>检索的最小单位"]
         sqlite[("SQLite<br/>data/douyin.db")]
     end
 
@@ -57,6 +58,7 @@ flowchart TB
     entry -.只读查询.-> data
     store --- sqlite
     tags --- store
+    frag --- store
 ```
 
 ## 数据模型
@@ -241,3 +243,58 @@ sequenceDiagram
 
 `pipeline/` 与 `search/` 目录是空占位,分别留给「视频 → 文本」管线和
 「向量检索 + 问答」。
+
+
+---
+
+## 复查记录
+
+每次阶段收尾都实跑一遍下面这些,而不是靠上一轮的结论 —— 改名和改索引的
+坑都是这么抓到的。
+
+### 抓到过的真问题
+
+| 问题 | 根因 | 为什么容易漏 |
+|---|---|---|
+| MCP `library_stats` 直接 KeyError | `stats()` 把 `with_ai_summary` 改成三态时,MCP 那一处没跟着改 | 我验证 MCP 是在改名**之前**跑的,改完没重跑 |
+| `ALTER TABLE DROP COLUMN` 报 `error in index ... after drop column` | 索引从 A 列改到 B 列,但 `CREATE INDEX IF NOT EXISTS` 只看名字 —— 老索引静默留在旧列上 | 报错信息完全看不出根因在索引上 |
+| 新采的作品没有知识片段 | 片段只在脚本里生成,没接进 `_persist_page` | 不报错、不提示,只是检索里查不到 |
+| `cli.py probe` 绕过跨进程锁 | 它不写库,但照样在打抖音接口 | 「不写库」让人以为无害 |
+| 两个字段表达同一件事 | `has_ai_summary` 和 `content_state` 并存 | 布尔表达不了「还不知道」,留着必然被误用 → 已删列 |
+
+### 每轮必跑的检查
+
+```bash
+# 1. 改名后有没有漏改的调用点(会直接 KeyError)
+grep -rn "旧字段名" backend/ scripts/
+
+# 2. 三个入口对同一条件是否返回同样的数
+#    网页 / cli / MCP 各查一次,数字必须相等
+
+# 3. 数据完整性(全量,不抽样)
+#    完整 raw 无缺 · 三态取值合法 · have 与 transcripts 双向一致
+#    片段无孤儿 · n_chars 与实际一致 · 章节段都有时间戳
+
+# 4. 全新空库跑 init_db 三遍
+#    表数/列数对 · 已删的列不该出现 · 幂等无报错
+
+# 5. 干净克隆跑 setup.sh
+#    pip check 干净 · f2 的钉子(httpx 0.27.2 / pydantic 2.9.*)没被下游破坏
+```
+
+### 分层纪律
+
+依赖单向,无反向依赖:
+
+```
+collector → config          只碰抖音,不认识库
+db/store  → config          只碰库,不认识抖音
+planner   → db              只读状态做决策
+knowledge → 无              纯函数,散字段 → 片段
+service   → collector + db  唯一同时认识两边的地方
+入口三件  → service(+ db 只读)
+```
+
+**任何会打抖音接口的路径都必须过 `guard_single_run()`**,包括不写库的
+(probe 就是反例)。单请求且不翻页的除外:扫码登录 / 解析 sec_user_id /
+取平台计数 —— 而扫码登录必须能在采集期间用,cookie 过期时正是要重登的时候。

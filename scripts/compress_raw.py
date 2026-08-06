@@ -38,8 +38,11 @@ from config import settings  # noqa: E402
 from db import store  # noqa: E402
 
 BATCH = 200
-# 雪碧图:用户决定不做。列删掉,数据仍在完整 raw 里。
-DROP_COLS = ("sprite_url", "sprite_frames")
+# 已经不用的列。数据要么在完整 raw 里、要么已被更好的字段取代。
+#   sprite_*        雪碧图,用户决定不做
+#   has_ai_summary  被三态的 content_state 取代。两个字段表达同一件事就会漂移,
+#                   而且布尔本来就表达不了「还不知道」——留着只会有人误用。
+DROP_COLS = ("sprite_url", "sprite_frames", "has_ai_summary")
 
 
 def mb(n: float) -> str:

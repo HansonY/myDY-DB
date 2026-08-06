@@ -55,7 +55,6 @@ def main() -> None:
             cat1=ai["cat1"], cat2=ai["cat2"], cat3=ai["cat3"],
             cat_conf=ai["cat_conf"], item_title=ai["item_title"],
             content_state="have" if ai["summary"] else "none",
-            has_ai_summary=1 if ai["summary"] else 0,
         )
         store.update_derived(aid, fields)
 

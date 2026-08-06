@@ -179,7 +179,11 @@ async def library_stats(top_tags: int = 20) -> dict[str, Any]:
     return {
         "total": s["total"],
         "with_text": s["with_description"],
-        "with_content": s["with_ai_summary"],
+        # 三态都给 AI:它必须能区分「抖音确认没给」和「还没采全所以不知道」,
+        # 否则会把后者当成「这条没内容」而给出错误结论。
+        "with_content": s["content_have"],
+        "content_confirmed_none": s["content_none"],
+        "content_unknown_need_refill": s["content_unknown"],
         "authors": s["authors"],
         "by_source": {SRC_LABEL.get(k, k): v for k, v in (s["by_source"] or {}).items()},
         "categories": [{"category": c["cat"], "count": c["n"]} for c in cats],

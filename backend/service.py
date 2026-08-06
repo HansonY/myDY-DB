@@ -45,7 +45,13 @@ def guard_single_run() -> None:
 
 
 def _persist_page(rows: list[dict[str, Any]]) -> tuple[int, int]:
-    """落库一页:作品 + 文案 + 结构化话题。"""
+    """落库一页:作品 + 文案 + 结构化话题 + 知识片段。
+
+    片段在这里就地生成,而不是留给一个「记得跑」的脚本 —— 那种东西一定会忘,
+    然后新采的作品在检索里永远查不到,而且没有任何报错提示。
+    """
+    from knowledge import fragments as frag
+
     fetched, inserted = store.upsert_videos(rows)
     for r in rows:
         desc = (r.get("description") or "").strip()
@@ -73,6 +79,14 @@ def _persist_page(rows: list[dict[str, Any]]) -> tuple[int, int]:
                 r["aweme_id"], category="chapters",
                 fields=ai["chapters"], model="douyin_recommend_chapter",
                 tier=0, summary=ai.get("summary") or None,
+            )
+
+        # 知识片段:只有拿到真实响应时才拼。旧结构那 31 个字段拼不出章节和
+        # 搜索意图词,硬拼只会得到一个「只有文案」的假片段,还会盖掉
+        # 以后回补出来的好片段。
+        if ai:
+            store.save_fragments(
+                r["aweme_id"], frag.build(r, ai, r.get("hashtags") or [])
             )
     return fetched, inserted
 

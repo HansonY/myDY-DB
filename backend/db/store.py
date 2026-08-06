@@ -30,7 +30,7 @@ _VIDEO_COLUMNS = (
     "poi_name", "mix_name",
     "is_subtitled", "is_deleted",
     "cat1", "cat2", "cat3", "cat_conf", "item_title",
-    "content_state", "has_ai_summary",
+    "content_state",
 )
 
 # 内容总结的三态。这个区分是刚性的:
@@ -127,7 +127,6 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
             "cat1": "TEXT", "cat2": "TEXT", "cat3": "TEXT",
             "cat_conf": "REAL", "item_title": "TEXT",
             "content_state": "TEXT NOT NULL DEFAULT 'unknown'",
-            "has_ai_summary": "INTEGER DEFAULT 0",
         },
         "collect_state": {
             "platform_total": "INTEGER",
@@ -143,23 +142,51 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
 
 
+def _drop_stale_indexes(conn: sqlite3.Connection) -> None:
+    """删掉「名字还在但定义已经变了」的索引。
+
+    `CREATE INDEX IF NOT EXISTS` 只看名字。所以把一个索引从 A 列改到 B 列时,
+    老库里那个建在 A 列上的索引会**静默留着**,schema 里的新定义永远不生效。
+
+    这不是洁癖问题:实测把 `idx_videos_summary` 从 has_ai_summary 改到
+    content_state 之后,老索引还挂在旧列上,导致 `ALTER TABLE DROP COLUMN
+    has_ai_summary` 直接报错 `error in index idx_videos_summary after drop
+    column` —— 列删不掉,而且报错信息完全看不出根因在索引上。
+
+    做法:比对 sqlite_master 里存的建表语句和期望的列,不符就删,
+    让紧接着的 executescript 用新定义重建。
+    """
+    want = {                       # 索引名 → 它应该建在哪一列上
+        "idx_videos_summary": "content_state",
+        "idx_videos_cat1": "cat1",
+        "idx_videos_digg": "digg_count",
+    }
+    for name, col in want.items():
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND name=?", (name,)
+        ).fetchone()
+        if row and row["sql"] and col not in row["sql"]:
+            conn.execute(f"DROP INDEX IF EXISTS {name}")
+
+
 def init_db() -> None:
     """建表 + 迁移(幂等)。"""
     with connect() as conn:
+        _drop_stale_indexes(conn)      # 必须在 executescript 之前
         conn.executescript(SCHEMA_FILE.read_text(encoding="utf-8"))
         _add_missing_columns(conn)
-        # 从旧的 has_ai_summary 布尔推出三态(幂等,只补还是默认值的行):
-        #   有总结                        → have
-        #   有完整响应但没总结            → none    抖音确认没给
-        #   连完整响应都还没有            → unknown 该去补采
-        # digg_count 是「有完整响应」的判据:早期那 31 个字段里没有 statistics。
-        conn.execute(
-            "UPDATE videos SET content_state = CASE "
-            "  WHEN has_ai_summary = 1        THEN 'have' "
-            "  WHEN digg_count IS NOT NULL    THEN 'none' "
-            "  ELSE 'unknown' END "
-            "WHERE content_state IS NULL OR content_state = 'unknown'"
-        )
+        # 老库迁移:从已废弃的 has_ai_summary 布尔推出三态。
+        # 只在那一列还存在时跑(新库根本没有它),幂等,只补还是默认值的行。
+        # digg_count 是「有完整响应」的判据 —— 早期那 31 个字段里没有 statistics。
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(videos)")}
+        if "has_ai_summary" in cols:
+            conn.execute(
+                "UPDATE videos SET content_state = CASE "
+                "  WHEN has_ai_summary = 1        THEN 'have' "
+                "  WHEN digg_count IS NOT NULL    THEN 'none' "
+                "  ELSE 'unknown' END "
+                "WHERE content_state IS NULL OR content_state = 'unknown'"
+            )
         # 把早期只存在 videos.source 的归属关系补进 video_sources。
         # 幂等,可反复执行。
         conn.execute(
@@ -897,11 +924,6 @@ def get_state(scope: str) -> dict[str, Any]:
         "platform_total": None, "platform_total_at": None, "exhaust_passes": 0,
         "total_source": None,
     }
-
-
-def all_states() -> list[dict[str, Any]]:
-    with connect() as conn:
-        return [dict(r) for r in conn.execute("SELECT * FROM collect_state")]
 
 
 def save_state(scope: str, **fields: Any) -> None:
