@@ -7,6 +7,9 @@
 #   用 click,我们不用那个 CLI。所以装完请把 click 按回去:
 #       pip install "click==8.1.7"
 #
-# 首次运行会下 bge-small-zh-v1.5(92 MB)。
+# 首次运行会下 bge-m3(2.2 GB)。选它的理由见 docs/SEARCH.md ——
+# 四个候选里只有它真能中英互通(8 组话题里 4 组中英问法命中同一条视频,
+# 其余模型 0–1 组)。代价是 2.2 GB 模型 + 嵌入 53 秒(全库 5153 段)。
+# 只要中文的话,换成 BAAI/bge-small-zh-v1.5:92 MB、4 秒,而且中文阈值余量更大。
 sentence-transformers>=3.0
 sqlite-vec>=0.1.9
