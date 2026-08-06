@@ -49,7 +49,11 @@ SERVER_INSTRUCTIONS = (
         "我的抖音收藏知识库(本地 SQLite)。可检索收藏/点赞/我发布的作品,"
         "按关键词、话题标签、作者、来源、抖音官方分类筛选,按互动数据排序;"
         "也能查看采集完整度并触发采集。\n"
-        "回答「我收藏过的关于X」这类问题时用 search_videos。\n"
+        "两种检索分工:search_videos 字面匹配(找专名/作者/按分类筛选排序);"
+        "search_library 语义匹配(问「关于怎么…的内容」用它,换句话说也找得到)。"
+        "回答「我收藏过的关于X」用 search_library,它返回的分数一定要看 —— "
+        "verdict=nothing 就是库里真没有,verdict=only_maybe 是只有猜测 —— "
+        "两种都别拿低分结果硬答、也别用自己的知识补。\n"
         "注意区分两种文本:text 是作者写的文案/标题,content 是抖音自己生成的"
         "视频内容总结(实测约 17% 的作品有,多为长视频/知识类)—— "
         "问「视频里讲了什么」只有 content 算。\n"
@@ -129,6 +133,50 @@ async def search_videos(
         store.count_videos, query, source, None, author, tag, category, content
     )
     return {"matched": total, "returned": len(rows), "items": [_slim(r) for r in rows]}
+
+
+async def search_library(query: str, limit: int = 10,
+                         include_maybe: bool = True) -> dict[str, Any]:
+    """**语义**检索我的抖音收藏 —— 换句话说也找得到。
+
+    和 search_videos 的分工:
+      search_videos   字面匹配。找专名、找作者、按分类/互动数筛选排序时用。
+      search_library  语义匹配。用户问「关于怎么…的内容」「讲…的视频」时用这个。
+
+    先看 **verdict**,它只有三个值,不会误读:
+      relevant     有确定相关的,在 good 里
+      only_maybe   **只有「可能相关」** —— 不要当成答案,要告诉用户这是猜的
+      nothing      库里真没有。**不要**用你自己的知识补,直接说没有。
+
+    每条都带 score。英文查询比中文弱(实测会出硬错),分数低的更要谨慎。
+
+    每条带 at_sec(命中的是哪一章、第几秒),引用时给出来。
+    """
+    from knowledge import search as ks, vecdb
+    store.init_db()
+    try:
+        return await asyncio.to_thread(ks.search, query, max(1, min(limit, 50)), include_maybe)
+    except (vecdb.IndexMismatch, RuntimeError) as e:
+        return {"error": str(e),
+                "hint": "先跑 scripts/build_index.py 建向量索引"}
+
+
+async def ask_library(question: str, k: int = 8) -> dict[str, Any]:
+    """基于我的收藏回答问题,**答案带出处**。
+
+    检索一条都没过线时不调模型,直接回「库里没有」—— 没有依据时让模型
+    回答它一定会编,而编出来的分辨不出来。
+
+    返回里 dropped_bogus_citations 非空,说明模型引用了不存在的编号
+    (已剔除),那是这次回答不太可靠的直接信号,该告诉用户。
+    """
+    from knowledge import answer as ka
+    from knowledge import vecdb
+    store.init_db()
+    try:
+        return await asyncio.to_thread(ka.ask, question, max(1, min(k, 20)))
+    except (vecdb.IndexMismatch, RuntimeError) as e:
+        return {"error": str(e)}
 
 
 async def video_raw(aweme_id: str, path: str | None = None) -> dict[str, Any]:
@@ -467,6 +515,43 @@ _TOOLS: list[Tool] = [
             "top_tags": {"type": "integer", "default": 20, "maximum": 100}}},
     ),
     Tool(
+        name="search_library",
+        description=(
+            "语义检索我的抖音收藏 —— 换句话说也找得到(问「关于怎么练口语的内容」"
+            "能命中标题里没这几个字的视频)。和 search_videos 分工:那个是字面匹配,"
+            "适合找专名/作者/按分类筛选;这个是语义匹配。"
+            "先看返回里的 verdict:relevant=有确定相关的 · only_maybe=只有可能相关"
+            "(不要当答案)· nothing=库里真没有(不要用自己的知识补)。"
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "自然语言问法,中英文都行"},
+                "limit": {"type": "integer", "default": 10, "maximum": 50},
+                "include_maybe": {"type": "boolean", "default": True,
+                                  "description": "是否带上「可能相关」那一档"},
+            },
+            "required": ["query"],
+        },
+    ),
+    Tool(
+        name="ask_library",
+        description=(
+            "基于我的收藏回答问题,答案强制带出处(作者 / 链接 / 第几秒)。"
+            "检索没有结果时不会编答案,直接说库里没有。"
+            "需要服务端配好 DASHSCOPE_API_KEY;只想检索不问答就用 search_library。"
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "question": {"type": "string"},
+                "k": {"type": "integer", "default": 8, "maximum": 20,
+                      "description": "给模型几条资料"},
+            },
+            "required": ["question"],
+        },
+    ),
+    Tool(
         name="video_raw",
         description=(
             "看一条作品的完整原始响应(抖音给的全部 787 个字段)。"
@@ -560,6 +645,8 @@ _TOOLS: list[Tool] = [
 _HANDLERS = {
     "search_videos": lambda a: search_videos(**a),
     "library_stats": lambda a: library_stats(**a),
+    "search_library": lambda a: search_library(**a),
+    "ask_library": lambda a: ask_library(**a),
     "video_raw": lambda a: video_raw(**a),
     "collect_status": lambda a: collect_status(),
     "collect_smart": lambda a: collect_smart(**a),

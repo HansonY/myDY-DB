@@ -476,6 +476,95 @@ def cmd_search(args) -> None:
         print(f"    {r['share_url']}")
 
 
+def cmd_find(args) -> None:
+    """语义检索:换句话说也找得到。
+
+    和 `search` 分开两个命令是刻意的:`search` 是 LIKE 子串(字面出现才命中),
+    这个是向量语义。分数一律打出来,让人自己判断,不做静默过滤。
+    """
+    from knowledge import search as ks, vecdb
+    try:
+        r = ks.search(args.query, limit=args.limit)
+    except vecdb.IndexMismatch as e:
+        print(f"✗ {e}"); sys.exit(1)
+    except RuntimeError as e:
+        print(f"✗ {e}"); sys.exit(1)
+
+    def line(x, mark):
+        ts = (f"@{x['at_sec']//60}:{x['at_sec']%60:02d}"
+              if x.get("at_sec") is not None else "")
+        nf = f"({x['n_matched_fragments']}段)" if x["n_matched_fragments"] > 1 else ""
+        print(f"  {mark} {x['score']:.3f} {ts:>7} {nf:<6} [{x.get('author') or '?'}] "
+              f"{(x.get('title') or '')[:44]}")
+        if args.text and x.get("text"):
+            print(f"        {x['text'][:110]}")
+
+    if r["verdict"] == "nothing":
+        print(f"库里没有相关内容(没有片段达到下限 {r['thresholds']['maybe']})。")
+        if r["nearest_below"]:
+            print("最接近的分数:", ", ".join(f"{s:.3f}" for s in r["nearest_below"]))
+        return
+    if r["verdict"] == "only_maybe":
+        print("⚠️ 没有确定相关的,下面都只是「可能相关」—— 别当成答案。\n")
+    if r["good"]:
+        print(f"相关({len(r['good'])} 条,≥{r['thresholds']['good']}):")
+        for x in r["good"]:
+            line(x, "✓")
+    if r["maybe"]:
+        print(f"\n可能相关({len(r['maybe'])} 条,{r['thresholds']['maybe']}–{r['thresholds']['good']}):")
+        for x in r["maybe"]:
+            line(x, "?")
+    print(f"\n模型 {r['model']}")
+
+
+def cmd_ask(args) -> None:
+    """基于收藏回答问题,带出处。需要 DASHSCOPE_API_KEY。"""
+    from knowledge import answer as ka, vecdb
+    try:
+        r = ka.ask(args.question, k=args.k)
+    except vecdb.IndexMismatch as e:
+        print(f"✗ {e}"); sys.exit(1)
+    except RuntimeError as e:
+        print(f"✗ {e}"); sys.exit(1)
+
+    print(r["answer"])
+    if not r["answered"]:
+        print(f"\n({r['reason']};最接近的分数 "
+              f"{', '.join(f'{s:.3f}' for s in r['nearest_scores']) or '无'})")
+        return
+    if r["only_maybe"]:
+        print("\n⚠️ 所有依据都只是「可能相关」,答案的可信度打折。")
+    print(f"\n出处({len(r['citations'])} 条 / 给了 {r['sources_given']} 条资料):")
+    for c in r["citations"]:
+        ts = f" 第 {c['at_sec']//60}:{c['at_sec']%60:02d} 处" if c["at_sec"] is not None else ""
+        print(f"  [{c['n']}] {c['author']}《{(c['title'] or '')[:40]}》{ts}  相关度 {c['score']}")
+        print(f"      {c['url']}")
+    if r["dropped_bogus_citations"]:
+        print(f"\n⚠️ 模型引用了 {r['dropped_bogus_citations']} 这些不存在的编号,已剔除 ——"
+              "这是它这次不太可靠的直接信号。")
+
+
+def cmd_index(args) -> None:
+    """建 / 同步向量索引。"""
+    from knowledge import index as ki
+    if args.status:
+        s = ki.status()
+        print(f"索引模型   {s['model'] or '(还没建)'}" + (f"  {s['dim']} 维" if s['dim'] else ""))
+        print(f"配置模型   {s['configured_model']}")
+        print(f"向量/片段  {s['vectors']} / {s['fragments']}   待嵌入 {s['pending']}")
+        if s["orphans"]:
+            print(f"孤儿向量   {s['orphans']}(片段重建过,下次 sync 清掉)")
+        print(f"状态       {'✓ 已同步' if s['in_sync'] else '需要跑一次'}")
+        return
+    last=[0]
+    def prog(d, t):
+        if d-last[0] >= 512 or d == t:
+            last[0]=d; print(f"  {d}/{t} 段…", flush=True)
+    r = ki.sync(rebuild=args.rebuild, on_progress=prog)
+    print(f"\n✓ {r['model']}({r['dim']} 维) 嵌入 {r['embedded']} 段 · {r['seconds']}s"
+          f" · 索引共 {r['total_vectors']} 条")
+
+
 def cmd_raw(args) -> None:
     """打印一条作品的完整原始响应。
 
@@ -572,6 +661,19 @@ def main() -> None:
                     help="按抖音总结筛:have=有总结 · none=无总结 · "
                          "unknown=未采全(还没查过,不等于没有)")
 
+    sp = sub.add_parser("find", help="★ 语义检索(换句话说也找得到,需要先建索引)")
+    sp.add_argument("query")
+    sp.add_argument("--limit", type=int, default=8)
+    sp.add_argument("--text", action="store_true", help="连命中的原文一起打出来")
+
+    sp = sub.add_parser("ask", help="★ 基于收藏回答问题,带出处(需 DASHSCOPE_API_KEY)")
+    sp.add_argument("question")
+    sp.add_argument("-k", type=int, default=8, help="给模型几条资料")
+
+    sp = sub.add_parser("index", help="建/同步向量索引(本地计算,不碰抖音)")
+    sp.add_argument("--rebuild", action="store_true", help="全量重建(换模型时必须)")
+    sp.add_argument("--status", action="store_true", help="只看现状")
+
     sp = sub.add_parser("raw", help="看一条作品的原始数据(抖音返回的全部字段都留档了)")
     sp.add_argument("aweme_id")
     sp.add_argument("--keys", action="store_true", help="只列顶层字段名")
@@ -598,6 +700,9 @@ def main() -> None:
         "stats": cmd_stats,
         "tags": cmd_tags,
         "search": cmd_search,
+        "find": cmd_find,
+        "ask": cmd_ask,
+        "index": cmd_index,
         "raw": cmd_raw,
     }
     fn = handlers[args.cmd]

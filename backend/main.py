@@ -119,6 +119,57 @@ async def get_categories(limit: int = Query(30, ge=1, le=200)) -> dict[str, Any]
     return {"items": await asyncio.to_thread(store.top_categories, limit)}
 
 
+@app.get("/api/search")
+async def semantic_search(
+    q: str,
+    limit: int = Query(10, ge=1, le=50),
+    include_maybe: bool = True,
+) -> dict[str, Any]:
+    """语义检索:换句话说也找得到。
+
+    和 `/api/videos?q=` **刻意分成两个接口**。那一路是 LIKE 子串匹配
+    (「MCP」「Claude Code」字面出现就命中),这一路是向量语义
+    (「怎么练口语」也能找到)。合并之后「这条是怎么被找到的」就说不清了,
+    出问题没法定位是哪一路的锅。
+
+    分数一律带出来,三档:good(≥阈值)· maybe(可能相关)· 全没过就是库里没有。
+    """
+    from knowledge import search as ks, vecdb
+    try:
+        return await asyncio.to_thread(ks.search, q, limit, include_maybe)
+    except vecdb.IndexMismatch as e:
+        raise HTTPException(409, str(e)) from e
+    except RuntimeError as e:      # 缺依赖 / 扩展加载不了
+        raise HTTPException(501, str(e)) from e
+
+
+@app.post("/api/ask")
+async def ask(q: str, k: int = Query(8, ge=1, le=20)) -> dict[str, Any]:
+    """基于收藏回答问题,**强制带出处**。
+
+    检索一条都没过线时**不调模型**直接说没有 —— 没有依据时让模型回答,
+    它一定会编,而编出来的你分辨不出来。
+    """
+    from knowledge import answer as ka
+    from knowledge import vecdb
+    try:
+        return await asyncio.to_thread(ka.ask, q, k)
+    except vecdb.IndexMismatch as e:
+        raise HTTPException(409, str(e)) from e
+    except RuntimeError as e:      # 缺 key / 缺依赖
+        raise HTTPException(501, str(e)) from e
+
+
+@app.get("/api/search/status")
+async def search_status() -> dict[str, Any]:
+    """向量索引现状。不加载模型 —— 光看状态不该等 bge-m3 加载几秒。"""
+    from knowledge import index as ki
+    try:
+        return await asyncio.to_thread(ki.status)
+    except RuntimeError as e:
+        return {"available": False, "reason": str(e)}
+
+
 @app.get("/api/coverage")
 async def get_coverage() -> dict[str, Any]:
     """各字段覆盖率。「数据到底全不全」要能一眼看到,不能靠推断 ——

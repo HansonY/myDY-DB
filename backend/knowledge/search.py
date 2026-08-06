@@ -88,14 +88,25 @@ def search(query: str, limit: int = 10,
 
         picked = good + (maybe if include_maybe else [])
         _hydrate(conn, picked)
+
+        # verdict 而不是 nothing_relevant:后者是个陷阱。
+        # 「有 maybe 但没有 good」时 nothing_relevant=False,读的人(尤其 AI)
+        # 会以为「有相关内容」,然后拿低分结果当答案 —— 正是要防的失败模式,
+        # 却被字段命名放了进来。所以给一个不会误读的三值:
+        #   relevant    有过 good 线的
+        #   only_maybe  只有「可能相关」,**不能当确定答案**
+        #   nothing     一条都没过 maybe 线,库里就是没有
+        verdict = ("relevant" if good else
+                   "only_maybe" if maybe else "nothing")
         return {
             "query": query,
+            "verdict": verdict,
             "good": good,
             "maybe": maybe,
-            # 一条都没过线时,把最接近的几条也带上 —— 让人看到「差多少」,
+            "has_relevant": bool(good),
+            # 一条都没过线时把最接近的分数带上 —— 让人看到「差多少」,
             # 而不是只得到一句「没有」
-            "nothing_relevant": not picked,
-            "nearest_below": below[:3] if not picked else [],
+            "nearest_below": [x["score"] for x in below[:3]] if verdict == "nothing" else [],
             "thresholds": {"good": settings.search_good, "maybe": settings.search_maybe},
             "model": emb.name,
         }
