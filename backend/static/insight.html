@@ -29,7 +29,33 @@ html,body{margin:0;background:var(--bg);color:var(--fg);
   font:14px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif;
   -webkit-font-smoothing:antialiased}
 a{color:var(--accent);text-decoration:none}
-.wrap{max-width:1180px;margin:0 auto;padding:0 22px}
+.wrap{max-width:1500px;margin:0 auto;padding:0 22px}
+/* 主栏 + 侧边栏。sticky 放在内层 .side-in,外层 aside 撑满行高。
+   这是 grid 里做 sticky 侧栏的常规写法(外层负责占位、内层负责粘),
+   比直接把 sticky 挂在 grid 项上更不容易受 align-* 影响。
+
+   排查记录(免得下次又绕一圈):一开始以为 sticky 失效,因为测到侧栏顶部
+   从 62 滑到 -22。**是测量点选错了** —— 我 scrollTo(1400) 而页面最大只能滚
+   1043,被钳到最底部,而 sticky 在容器末端本来就该释放。
+   换成中间位置测:滚到 0/200/500/800 全部稳在 62,只有到 1043 才脱离,
+   完全正常。原来的写法大概也是好的,这层 wrapper 是顺手留下的更稳写法。
+   教训:验 sticky 别在页面底部量。 */
+.page{display:grid;grid-template-columns:minmax(0,1fr) 364px;gap:18px}
+.main{min-width:0}
+.side{min-width:0}
+.side-in{position:sticky;top:62px;max-height:calc(100vh - 78px);overflow-y:auto;
+  padding-right:4px;scrollbar-width:thin}
+.side-in::-webkit-scrollbar{width:7px}
+.side-in::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:4px}
+.side-h{display:flex;align-items:baseline;gap:8px;margin:18px 0 10px;flex-wrap:wrap}
+.side-h b{font-size:13px;color:var(--fg)}
+.side .ins{padding:13px 15px}
+.side .ins-head{font-size:14px;line-height:1.6}
+.side .card-why,.side .ins-why{font-size:12px}
+@media(max-width:1100px){
+  .page{grid-template-columns:1fr}
+  .side-in{position:static;max-height:none;overflow:visible}
+}
 
 header{position:sticky;top:0;z-index:20;background:rgba(11,13,17,.9);
   backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
@@ -69,8 +95,8 @@ h1{font-size:16px;font-weight:600;margin:0;letter-spacing:-.2px}
 .focus li i{font-style:normal;font-family:var(--mono);color:var(--dim-2);margin-right:6px}
 
 /* ── 两栏:关联图 + 簇说明 ─────────────────────────────── */
-.two{display:grid;grid-template-columns:1fr 300px;gap:14px;margin:14px 0}
-@media(max-width:860px){ .two{grid-template-columns:1fr} }
+.two{display:grid;grid-template-columns:minmax(0,1fr) 272px;gap:14px;margin:14px 0}
+@media(max-width:1000px){ .two{grid-template-columns:1fr} }
 .card{border:1px solid var(--line);border-radius:12px;background:var(--surface);
   padding:14px 16px}
 .card-h{display:flex;align-items:center;gap:8px;margin-bottom:4px}
@@ -142,8 +168,6 @@ h1{font-size:16px;font-weight:600;margin:0;letter-spacing:-.2px}
 .link{background:none;border:none;color:var(--accent);cursor:pointer;
   font-size:12.5px;padding:2px 0;font-family:inherit}
 .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.top{display:flex;align-items:center;justify-content:space-between;gap:12px;
-  margin:22px 0 12px}
 .note{border:1px solid var(--line);border-left:2px solid var(--line-2);
   border-radius:8px;padding:10px 13px;font-size:12.5px;line-height:1.65;
   color:var(--dim);margin-bottom:14px}
@@ -172,55 +196,63 @@ footer{padding:30px 0 50px;font-size:12px;color:var(--dim-2)}
 </div></header>
 
 <div class="wrap">
-  <div id="hero" class="skl"></div>
+ <div class="page">
 
-  <div class="two">
-    <div class="card">
-      <div class="card-h"><span class="tag ok">关联</span><b>标签怎么连在一起</b></div>
-      <div class="card-why" id="graph-why"></div>
-      <canvas id="graph"></canvas>
-      <div class="legend" id="legend"></div>
+  <!-- 主栏:看图的部分,需要宽度 -->
+  <main class="main">
+    <div id="hero" class="skl"></div>
+
+    <div class="two">
+      <div class="card">
+        <div class="card-h"><span class="tag ok">关联</span><b>标签怎么连在一起</b></div>
+        <div class="card-why" id="graph-why"></div>
+        <canvas id="graph"></canvas>
+        <div class="legend" id="legend"></div>
+      </div>
+      <div class="card">
+        <div class="card-h"><span class="tag plain">簇</span><b>你的关注面</b></div>
+        <div class="card-why">连通的标签自动聚成簇 —— 这些就是你反复回到的几个主题。</div>
+        <div id="clusters"></div>
+      </div>
     </div>
-    <div class="card">
-      <div class="card-h"><span class="tag plain">簇</span><b>你的关注面</b></div>
-      <div class="card-why">连通的标签自动聚成簇 —— 这些就是你反复回到的几个主题。</div>
-      <div id="clusters"></div>
+
+    <div class="card" style="margin:14px 0">
+      <div class="card-h"><span class="tag ok">可以行动</span><b>你这些标签下,哪些值得留</b></div>
+      <div class="card-why" id="q-why"></div>
+      <div id="qual"></div>
     </div>
-  </div>
+  </main>
 
-  <!-- 「值不值」放在最前面,因为它是唯一能直接行动的。
-       行为画像(下面那些)回答「你是什么样的人」,看完不知道该干什么;
-       这个回答「哪些该留、哪些可以清」。 -->
-  <div class="card" style="margin:14px 0">
-    <div class="card-h"><span class="tag ok">可以行动</span><b>你这些标签下,哪些值得留</b></div>
-    <div class="card-why" id="q-why"></div>
-    <div id="qual"></div>
-  </div>
-
-  <div class="top">
-    <div><b>行为画像</b> <span class="sub" id="meta"></span></div>
-    <div class="row">
-      <button class="btn" id="re">重新分析</button>
-      <button class="btn primary" id="ai">让 AI 解读</button>
-    </div>
-  </div>
-  <div class="note" id="cov"></div>
-  <div id="cards"></div>
-
-  <div class="ins ins-ai">
-    <div class="card-h"><span class="tag ok">AI</span><b>问你自己的收藏</b></div>
-    <div class="ins-why">基于收藏内容回答,<b>每句都带出处</b> —— 库里没有就直说没有,不编。</div>
-    <div class="row" style="margin-top:10px">
-      <label class="search">
+  <!-- 侧边栏:问答 + 行为画像。
+       问答放最上面且整栏 sticky —— 它是交互入口,该一直在手边,
+       而不是滚到页面底部才看得到(第一版就是那样,用户直接说搞不懂)。 -->
+  <aside class="side"><div class="side-in">
+    <div class="card ins-ai">
+      <div class="card-h"><span class="tag ok">AI</span><b>问你自己的收藏</b></div>
+      <div class="ins-why">基于收藏内容回答,<b>每句都带出处</b> —— 库里没有就直说没有,不编。</div>
+      <label class="search" style="margin-top:10px">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
-        <input id="askq" placeholder="例:我收藏过哪些讲英语学习的方法?回车提问">
+        <input id="askq" placeholder="问点什么…回车提问">
       </label>
-      <button class="btn primary" id="askgo">提问</button>
+      <button class="btn primary" id="askgo" style="margin-top:8px;width:100%;
+        justify-content:center">提问</button>
+      <div id="askout"></div>
     </div>
-    <div id="askout"></div>
-  </div>
 
+    <div class="side-h">
+      <b>行为画像</b>
+      <span class="sub" id="meta"></span>
+    </div>
+    <div class="row" style="gap:6px;margin-bottom:10px">
+      <button class="btn" id="re" style="flex:1;justify-content:center">重新分析</button>
+      <button class="btn" id="ai" style="flex:1;justify-content:center">AI 解读</button>
+    </div>
+    <div class="note" id="cov"></div>
+    <div id="cards"></div>
+  </div></aside>
+
+ </div>
   <footer>数据全部来自本机 <code>data/douyin.db</code>,不出网。</footer>
 </div>
 
@@ -657,9 +689,10 @@ let INS = null;
 
 function renderCards(){
   const d = INS;
-  $('#meta').textContent = `${d.n_videos} 条作品 · 分析于 `
-    + (d.created_at||'').slice(0,16).replace('T',' ')
-    + (d.from_cache ? ' · 数据没变,复用上次结果' : '');
+  // 侧栏窄,时间那串太长会挤掉标题 —— 只留日期到分钟,复用状态缩成两个字
+  $('#meta').textContent = `${d.n_videos} 条 · `
+    + (d.created_at||'').slice(5,16).replace('T',' ')
+    + (d.from_cache ? ' · 复用' : ' · 新算');
   $('#cov').textContent = d.coverage_note || '';
   $('#cards').innerHTML =
     (d.narrative ? `<div class="ins ins-ai">
