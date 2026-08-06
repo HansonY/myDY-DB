@@ -176,6 +176,30 @@ CREATE TABLE IF NOT EXISTS fragments (
 CREATE INDEX IF NOT EXISTS idx_frag_kind  ON fragments(kind);
 CREATE INDEX IF NOT EXISTS idx_frag_chars ON fragments(n_chars DESC);
 
+-- ── 自我分析快照 ─────────────────────────────────────────────
+-- 每次分析存一份,**不是缓存,是历史**。两个理由:
+--   1. AI 写的那段结论要花钱和时间,数据没变就不该重算
+--   2. 更重要的:**两次快照之间的差本身就是信息**。
+--      我们拿不到「你什么时候收藏的」(抖音不给,游标只存了页级),
+--      但只要定期存一份快照,「上次 vs 这次」就能看出兴趣漂移和囤积节奏 ——
+--      用历史绕过缺失的时间戳。
+--
+-- data_fp 是数据指纹(条数 + 最新 updated_at + 分类覆盖数)。
+-- 指纹没变就直接返回上次结果,变了才重算。
+CREATE TABLE IF NOT EXISTS insights (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at  TEXT NOT NULL,
+    data_fp     TEXT NOT NULL,      -- 数据指纹,用来判断要不要重算
+    stats_json  TEXT NOT NULL,      -- 纯计算的部分(确定性,可复现)
+    narrative   TEXT,               -- AI 写的那段话(可选,要 key)
+    model       TEXT,               -- 写 narrative 用的模型
+    n_videos    INTEGER NOT NULL,   -- 冗余存一份,列历史时不用解 JSON
+    n_classified INTEGER NOT NULL   -- 有官方分类的条数 = 分类类指标的真实分母
+);
+
+CREATE INDEX IF NOT EXISTS idx_insights_time ON insights(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_insights_fp   ON insights(data_fp);
+
 -- ── 采集游标:断点续跑 ───────────────────────────────────────
 CREATE TABLE IF NOT EXISTS cursors (
     scope       TEXT PRIMARY KEY,   -- collection | like | collects:<id>

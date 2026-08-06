@@ -160,6 +160,36 @@ async def ask(q: str, k: int = Query(8, ge=1, le=20)) -> dict[str, Any]:
         raise HTTPException(501, str(e)) from e
 
 
+@app.get("/api/insight")
+async def get_insight(
+    force: bool = False,
+    narrative: bool = False,
+) -> dict[str, Any]:
+    """自我分析。**数据没变就返回上次的结果**(指纹比对),不重算。
+
+    force=true 强制重算并存一份新快照;narrative=true additionally 让 AI
+    把数字写成一段话(需要 DASHSCOPE_API_KEY,没有就只回数字)。
+    """
+    from knowledge import insight as ki
+    return await asyncio.to_thread(ki.analyze, force, narrative)
+
+
+@app.get("/api/insight/history")
+async def insight_history(limit: int = Query(20, ge=1, le=100)) -> dict[str, Any]:
+    """历史快照列表。两次之间的差就是时间信息 —— 抖音不给收藏时间,
+    这是唯一能看出兴趣漂移的办法。"""
+    return {"items": await asyncio.to_thread(store.insight_history, limit)}
+
+
+@app.get("/api/insight/{insight_id}")
+async def get_insight_by_id(insight_id: int) -> dict[str, Any]:
+    row = await asyncio.to_thread(store.get_insight, insight_id)
+    if not row:
+        raise HTTPException(404, "没有这份快照")
+    import json as _json
+    return {**row, **_json.loads(row["stats_json"])}
+
+
 @app.get("/api/search/status")
 async def search_status() -> dict[str, Any]:
     """向量索引现状。不加载模型 —— 光看状态不该等 bge-m3 加载几秒。"""

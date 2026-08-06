@@ -365,6 +365,71 @@ def fragment_stats() -> dict[str, Any]:
     }
 
 
+# ── 自我分析快照 ────────────────────────────────────────────
+# 存历史而不只是缓存:两次快照之间的差本身就是信息。抖音不给「你什么时候
+# 收藏的」,所以时间维度只能靠快照序列补回来。
+
+def save_insight(data_fp: str, stats: dict[str, Any], n_videos: int,
+                 n_classified: int, narrative: str | None = None,
+                 model: str | None = None) -> int:
+    with connect() as conn:
+        cur = conn.execute(
+            "INSERT INTO insights (created_at, data_fp, stats_json, narrative, "
+            "model, n_videos, n_classified) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (_now(), data_fp, json.dumps(stats, ensure_ascii=False),
+             narrative, model, n_videos, n_classified),
+        )
+        return cur.lastrowid
+
+
+def insight_by_fp(data_fp: str) -> dict[str, Any] | None:
+    """指纹相同的最新一份。数据没动就别重算 —— AI 那段要花钱。"""
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM insights WHERE data_fp = ? ORDER BY id DESC LIMIT 1",
+            (data_fp,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def last_insight(skip_fp: str | None = None) -> dict[str, Any] | None:
+    """最近一份快照。skip_fp 用来跳过「和当前数据同指纹」的那些 ——
+    对比要找的是**上一个不同状态**,不是同一状态的重复记录。"""
+    with connect() as conn:
+        if skip_fp:
+            row = conn.execute(
+                "SELECT * FROM insights WHERE data_fp <> ? ORDER BY id DESC LIMIT 1",
+                (skip_fp,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM insights ORDER BY id DESC LIMIT 1").fetchone()
+    return dict(row) if row else None
+
+
+def insight_history(limit: int = 20) -> list[dict[str, Any]]:
+    """历史列表。不带 stats_json —— 列表页不需要,那是几十 KB。"""
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT id, created_at, data_fp, n_videos, n_classified, model, "
+            "  (narrative IS NOT NULL) AS has_narrative "
+            "FROM insights ORDER BY id DESC LIMIT ?", (limit,))]
+
+
+def get_insight(insight_id: int) -> dict[str, Any] | None:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM insights WHERE id = ?", (insight_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def attach_narrative(insight_id: int, narrative: str, model: str) -> None:
+    """AI 那段是后补的 —— 先出确定性结果给人看,narrative 慢慢来。"""
+    with connect() as conn:
+        conn.execute("UPDATE insights SET narrative=?, model=? WHERE id=?",
+                     (narrative, model, insight_id))
+
+
 def rebuild_tags() -> tuple[int, int]:
     """从所有文案里重抽 #话题标签,重建 tags 表。
 
