@@ -1178,12 +1178,32 @@ function setSmode(m){
 $('#m-lit').onclick = () => setSmode('lit');
 $('#m-sem').onclick = () => setSmode('sem');
 
+/* 从 URL 读初始筛选。
+   分析页和标签球都靠 `/?tag=xxx&content=have` 跳过来 —— 不读参数的话
+   链接等于没用(实测:URL 带了参数但页面照样显示全部 2555 条)。 */
+function applyUrlFilters(){
+  const p = new URLSearchParams(location.search);
+  const t = p.get('tag');       if(t) tag = t;
+  const c = p.get('cat1');      if(c) cat = c;
+  const n = p.get('nickname');  if(n) author = n;
+  const kw = p.get('q');        if(kw){ q = kw; $('#q').value = kw; }
+  const ct = p.get('content');
+  if(['have','none','unknown'].includes(ct)) content = ct;
+  const so = p.get('sort');     if(so) sort = so;
+  return !!(t || c || n || kw || ct || so);
+}
+
 (async()=>{
   renderActs(); setView(view);
+  const fromUrl = applyUrlFilters();
   $('#psize').value = limit;
   setProgOpen(localStorage.getItem('dydb.progOpen') === '1');
   await loadStats(); await loadAuthors(); await loadCategories();
   await loadTags(); await loadPlan(); loadActive();
+  if(fromUrl){
+    // 带筛选进来的,把控件也同步上,否则界面显示「全部」而结果是筛过的
+    $('#cat').value = cat; $('#author').value = author; $('#sort').value = sort;
+  }
   await loadList(); await pollRuns();
 })();
 </script>

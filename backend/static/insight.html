@@ -91,6 +91,31 @@ h1{font-size:16px;font-weight:600;margin:0;letter-spacing:-.2px}
   background:var(--surface-2)}
 .clu-tags u:hover{background:var(--accent-dim);color:#a9cdec}
 
+/* ── 值不值表 ─────────────────────────────────────────── */
+.qt{width:100%;border-collapse:collapse;font-size:13px}
+.qt th{text-align:right;font-weight:500;font-size:11.5px;color:var(--dim);
+  padding:0 0 8px;border-bottom:1px solid var(--line)}
+.qt th:first-child,.qt td:first-child{text-align:left}
+.qt th:last-child,.qt td:last-child{text-align:left;padding-left:14px}
+.qt td{padding:9px 0;border-bottom:1px solid var(--line);text-align:right;
+  font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--fg-2)}
+.qt td:first-child{font-family:inherit;color:var(--fg)}
+.qt tr:last-child td{border-bottom:none}
+.qt tr:hover td{background:rgba(255,255,255,.022)}
+.qt .t{cursor:pointer}
+.qt .t:hover{color:#a9cdec}
+/* 干货率做成一条细条 —— 数字 + 长度双编码,不靠颜色单独承担 */
+.bar{display:inline-block;width:52px;height:5px;border-radius:3px;
+  background:var(--surface-2);overflow:hidden;vertical-align:middle;margin-left:7px}
+.bar i{display:block;height:100%;background:var(--accent);border-radius:3px}
+.vd{font-size:11.5px;font-family:inherit;white-space:nowrap}
+.vd.fed{color:#e0a07f}      /* 橙向:被喂 —— 和簇色 c1 同族但更淡,不抢 */
+.vd.keep{color:#7fc4a4}     /* 绿向:值得留 */
+.vd.quiet{color:var(--dim)}
+.vd.mixed{color:var(--dim-2)}
+.act{margin-top:10px;font-size:12.5px;color:var(--dim);line-height:1.7}
+.act b{color:var(--fg-2);font-weight:500}
+
 /* ── 结论卡 ───────────────────────────────────────────── */
 .ins{border:1px solid var(--line);border-radius:12px;padding:15px 17px;
   margin-bottom:12px;background:var(--surface)}
@@ -163,8 +188,17 @@ footer{padding:30px 0 50px;font-size:12px;color:var(--dim-2)}
     </div>
   </div>
 
+  <!-- 「值不值」放在最前面,因为它是唯一能直接行动的。
+       行为画像(下面那些)回答「你是什么样的人」,看完不知道该干什么;
+       这个回答「哪些该留、哪些可以清」。 -->
+  <div class="card" style="margin:14px 0">
+    <div class="card-h"><span class="tag ok">可以行动</span><b>你这些标签下,哪些值得留</b></div>
+    <div class="card-why" id="q-why"></div>
+    <div id="qual"></div>
+  </div>
+
   <div class="top">
-    <div><b>结论</b> <span class="sub" id="meta"></span></div>
+    <div><b>行为画像</b> <span class="sub" id="meta"></span></div>
     <div class="row">
       <button class="btn" id="re">重新分析</button>
       <button class="btn primary" id="ai">让 AI 解读</button>
@@ -570,6 +604,50 @@ let GRAPH_REDRAW = ()=>{};
 /* 从簇列表悬停也能联动球和图 —— 三处共用一个 focusTag */
 window.hoverTag = t => { setFocus(t); GRAPH_REDRAW(); };
 
+/* ══ 值不值 ═══════════════════════════════════════════════
+   两个维度一起看才有意义:
+     干货率低 + 平均赞高 → 被同一话题的爆款反复喂
+     干货率高 + 平均赞低 → 更像自己找的
+   单看干货率会把「小众但水」和「爆款但水」混成一类,而这两者该做的处置不同。 */
+const VD = {fed:'被爆款反复喂', keep:'值得留', quiet:'小众', mixed:'一般'};
+
+async function loadQuality(){
+  let d;
+  try{ d = await api('/api/insight/quality?limit=14'); }
+  catch(e){ $('#qual').innerHTML = `<div class="note">${esc(e.message)}</div>`; return; }
+  $('#q-why').innerHTML = bold(d.note);
+  const fed = d.items.filter(x=>x.verdict==='fed');
+  const thin = fed.reduce((s,x)=>s+(x.n-x.have),0);
+
+  $('#qual').innerHTML = `
+    <table class="qt">
+      <thead><tr>
+        <th>标签</th><th>条数</th><th>有干货</th><th>干货率</th><th>平均赞</th><th>读法</th>
+      </tr></thead>
+      <tbody>${d.items.map(x=>`
+        <tr>
+          <td class="t" onclick="goTag('${esc(x.tag).replace(/'/g,"\\'")}')"
+              title="点开看这个标签下的全部作品">#${esc(x.tag)}</td>
+          <td>${x.n}</td>
+          <td class="t" onclick="goTag('${esc(x.tag).replace(/'/g,"\\'")}','have')"
+              title="只看有干货的那些">${x.have}</td>
+          <td>${x.rate}%<span class="bar"><i style="width:${x.rate}%"></i></span></td>
+          <td>${x.avg_digg.toLocaleString()}</td>
+          <td><span class="vd ${x.verdict}">${VD[x.verdict]}</span></td>
+        </tr>`).join('')}</tbody>
+    </table>
+    ${fed.length ? `<div class="act">
+       <b>所以呢:</b>「${fed.map(x=>x.tag).join('、')}」这几个标签下,
+       干货率都低于 35% 而平均赞超过 8 万 —— 同一个话题被不同人反复讲,
+       你存了 ${fed.reduce((s,x)=>s+x.n,0)} 条,其中约 <b>${thin} 条没有实质内容</b>。
+       点上面的「有干货」列只看值得留的那些。</div>` : ''}`;
+}
+window.goTag = (t, content) => {
+  const q = new URLSearchParams({tag:t});
+  if(content) q.set('content', content);
+  location.href = '/?' + q;
+};
+
 /* ══ 结论卡 ═══════════════════════════════════════════════ */
 const KIND = {
   measured:{t:'实测',cls:'ok',   tip:'直接从库里算出来的数字'},
@@ -669,6 +747,7 @@ $('#askq').onkeydown = e => { if(e.key==='Enter') doAsk(); };
   }catch(e){
     $('#hero').outerHTML = `<div class="note">关联图加载失败:${esc(e.message)}</div>`;
   }
+  loadQuality();
   try{ await loadInsight(); }
   catch(e){ $('#cov').textContent = '分析失败:'+e.message; }
 })();

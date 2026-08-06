@@ -188,6 +188,16 @@ async def insight_graph(
     return await asyncio.to_thread(ki.tag_graph, min_count, min_edge, max_nodes)
 
 
+@app.get("/api/insight/quality")
+async def insight_quality(
+    min_n: int = Query(15, ge=3, le=100),
+    limit: int = Query(16, ge=3, le=60),
+) -> dict[str, Any]:
+    """每个标签的干货率 + 传播量 —— 这一层里唯一能直接行动的分析。"""
+    from knowledge import insight as ki
+    return await asyncio.to_thread(ki.tag_quality, min_n, limit)
+
+
 @app.get("/api/insight/history")
 async def insight_history(limit: int = Query(20, ge=1, le=100)) -> dict[str, Any]:
     """历史快照列表。两次之间的差就是时间信息 —— 抖音不给收藏时间,

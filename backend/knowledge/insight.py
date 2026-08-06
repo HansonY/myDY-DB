@@ -458,3 +458,66 @@ def tag_graph(min_count: int = 6, min_edge: int = 3,
                  f"只有最大的 {COLORED} 个簇上色 —— 网络图上所有簇同屏,"
                  "配色验证器在本页底色上实测第 4 色会与第 2 色在红绿色盲下无法区分。"),
     }
+
+
+# ── 值不值:每个标签的干货率 ────────────────────────────────
+
+def tag_quality(min_n: int = 15, limit: int = 16) -> dict[str, Any]:
+    """每个标签下「真的讲了内容」的比例,以及它的传播量。
+
+    **这是这一层里唯一能直接行动的分析。** 前面那些行为画像回答的是
+    「你是什么样的人」,看完了也不知道该干什么。这个回答的是
+    「你这 72 条英语口语里,哪 19 条值得留,哪 53 条可以清掉」。
+
+    判据:`content_state='have'` —— 抖音只给长视频/知识类生成内容总结,
+    所以「有总结」是「这条真的讲了东西」的可用代理(不完美,是代理)。
+
+    两个维度一起看才有意义:
+      干货率低 + 平均赞高  →  你被同一个话题的**爆款**反复喂。
+                              实测 #英语口语 72 条只 19 条有干货、平均 13 万赞。
+      干货率高 + 平均赞低  →  更像你自己找的。
+                              实测 #ai 87 条有 38 条干货、平均只 2 万赞。
+    单看干货率会把「小众但水」和「爆款但水」混成一类,而它们该做的处置不同。
+
+    刻意用**标签**而不是官方分类:上面的标签球和关联图都是标签,
+    换一套词汇会让人得在脑子里翻译一遍(这个毛病第一版犯过)。
+    """
+    with store.connect() as c:
+        rows = c.execute("""
+            SELECT LOWER(t.tag) tg,
+                   COUNT(DISTINCT t.aweme_id) n,
+                   SUM(v.content_state='have')    AS have,
+                   SUM(v.content_state='unknown') AS unknown,
+                   AVG(v.digg_count) AS digg
+            FROM tags t JOIN videos v ON v.aweme_id = t.aweme_id
+            GROUP BY LOWER(t.tag)
+            HAVING n >= ? ORDER BY n DESC LIMIT ?
+        """, (min_n, limit)).fetchall()
+
+    items = []
+    for r in rows:
+        n = r["n"]
+        rate = round((r["have"] or 0) * 100 / n)
+        digg = round(r["digg"] or 0)
+        # 阈值是看着实测分布定的,不是理论值 —— 所以要露出来让人自己判断
+        verdict = ("fed"   if rate < 35 and digg > 80000 else
+                   "keep"  if rate >= 45 else
+                   "quiet" if digg < 30000 else "mixed")
+        items.append({
+            "tag": r["tg"], "n": n, "have": r["have"] or 0,
+            "rate": rate, "unknown": r["unknown"] or 0,
+            "avg_digg": digg, "verdict": verdict,
+            "thin": n - (r["have"] or 0) - (r["unknown"] or 0),
+        })
+    return {
+        "items": items,
+        "verdicts": {
+            "fed":   "被爆款反复喂 —— 干货率低但传播量大,同一个话题换个人再讲一遍",
+            "keep":  "值得留 —— 干货率高",
+            "quiet": "小众 —— 传播量不大,更像你自己找的",
+            "mixed": "一般",
+        },
+        "note": ("「有干货」= 抖音给它生成过内容总结(平台只给长视频/知识类生成),"
+                 "是「真的讲了东西」的**代理指标**,不是精确判定。"
+                 "「未采全」那些还不知道有没有,补齐信息后这些数会变。"),
+    }
