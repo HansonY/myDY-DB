@@ -123,7 +123,9 @@ async def get_categories(limit: int = Query(30, ge=1, le=200)) -> dict[str, Any]
 async def get_coverage() -> dict[str, Any]:
     """各字段覆盖率。「数据到底全不全」要能一眼看到,不能靠推断 ——
     此前两次把「已采尽」判断错就是因为没有分母。"""
-    return await asyncio.to_thread(store.coverage)
+    cov = await asyncio.to_thread(store.coverage)
+    cov["fragments"] = await asyncio.to_thread(store.fragment_stats)
+    return cov
 
 
 @app.post("/api/tags/rebuild")

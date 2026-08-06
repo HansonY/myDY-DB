@@ -93,7 +93,7 @@ cli.py smart  /  POST /api/collect/smart  /  MCP collect_smart
 
 | 字段 | 覆盖 | 干什么用 |
 |---|---|---|
-| `chapter_list[].detail` | **25%** | 逐章节内容说明。**比 `chapter_abstract` 的 17% 还高** —— 有些条目有逐章说明但没有整段总结,之前只抓了后者 |
+| `chapter_list[].detail` | **23%** | 逐章节内容说明。之前只读了 `recommend_chapter_list`,漏掉了只有顶层 `chapter_list` 的那批 |
 | `suggest_words[].words[].word` | **62%** | 「大家都在搜」,平均 5.8 个词。**真人写的查询语句**,等于平台白送的 query→文档配对,对召回极有价值 |
 | `item_title` | **44%** | 干净标题,不含话题标签。比 `desc` 适合做嵌入和列表展示 |
 | `related_video_extra.tags` | 100% | 官方三级分类**带置信度**(如 0.98/0.95/0.94)。可以过滤低置信误分类 |

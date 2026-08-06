@@ -57,6 +57,12 @@ CREATE TABLE IF NOT EXISTS videos (
     cat1            TEXT,
     cat2            TEXT,
     cat3            TEXT,
+    -- 一级分类的置信度(来自 related_video_extra.tags.level1.prob)。
+    -- 官方分类偶尔会误判,有了它就能只信高置信的那批。
+    cat_conf        REAL,
+    -- 干净标题,不含话题标签(item_title,覆盖 44%)。desc 里混着一堆 #xxx,
+    -- 做嵌入和列表展示都不如这个。
+    item_title      TEXT,
     -- 抖音**自己生成的视频内容总结**(不是文案!)存在 transcripts(kind='summary'),
     -- 章节大纲存在 extractions。这里记状态,便于筛选与判断「数据全不全」。
     --
@@ -135,6 +141,34 @@ CREATE TABLE IF NOT EXISTS tags (
 );
 
 CREATE INDEX IF NOT EXISTS idx_tags_tag ON tags(tag);
+
+-- ── 知识片段:检索的最小单位 ─────────────────────────────────
+-- 为什么不直接检索 videos:一条作品的可用文本散在 5 个地方(干净标题、
+-- 文案、整段总结、逐章说明、搜索意图词),而且长度差两个数量级。
+-- 拼成等粒度的片段之后,关键词索引和向量索引才有一致的输入。
+--
+-- 三类段的分工:
+--   overview 标题+文案+整段总结+话题 —— 几乎每条都有,是兜底
+--   chapter  每章一段,带 start_sec —— 引用时能给出「第 12:30 处」
+--   queries  「大家都在搜」—— 真人写的查询语句,专门提升召回;
+--            它本身就是查询形态的文本,恰好补上向量对型号/专名召回差的短板
+--
+-- 这张表是**派生数据**,可以随时全量重建(scripts/fragments.py),
+-- 所以不怕改拼装策略 —— 源头永远是 raw_z。
+CREATE TABLE IF NOT EXISTS fragments (
+    aweme_id   TEXT    NOT NULL,
+    idx        INTEGER NOT NULL,       -- 同一作品内的序号
+    kind       TEXT    NOT NULL,       -- overview | chapter | queries
+    start_sec  INTEGER,                -- 只有 chapter 段有
+    text       TEXT    NOT NULL,
+    n_chars    INTEGER NOT NULL,       -- 冗余存一份,筛「太薄的段」不用算
+    built_at   TEXT    NOT NULL,
+    PRIMARY KEY (aweme_id, idx),
+    FOREIGN KEY (aweme_id) REFERENCES videos(aweme_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_frag_kind  ON fragments(kind);
+CREATE INDEX IF NOT EXISTS idx_frag_chars ON fragments(n_chars DESC);
 
 -- ── 采集游标:断点续跑 ───────────────────────────────────────
 CREATE TABLE IF NOT EXISTS cursors (

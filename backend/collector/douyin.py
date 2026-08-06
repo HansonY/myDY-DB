@@ -144,19 +144,35 @@ def _from_raw(aw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _ai_content_from_raw(aw: dict[str, Any]) -> dict[str, Any]:
-    """抖音**自己生成的 AI 内容总结**,以及官方分类。
+def _content_from_raw(aw: dict[str, Any]) -> dict[str, Any]:
+    """抖音自己给的**视频内容**相关文本,以及官方分类。
 
-    这是拿「视频内容」最划算的来源 —— 平台已经算好了,直接在响应里给,
+    这是拿「视频讲了什么」最划算的来源 —— 平台已经算好了,直接在响应里给,
     不用发评论 @AI(那要批量写操作,是封号主因)、不用下视频做 ASR、
-    也不用调视觉模型。实测 17% 的作品有(1400 条完整数据里 241 条 ——
-    抖音只给长视频/知识类生成,有总结的平均 291 秒 vs 无总结的 158 秒),
-    官方分类覆盖 98%(1375/1400)。
+    也不用调视觉模型。
 
-    返回 summary(整段总结)、chapters(带时间戳的章节大纲)、cat1/2/3。
+    字段位置和覆盖率是把 raw 里 228 个文本路径穷举一遍测出来的:
+
+      summary   chapter_abstract(两处并集)   22%  整段内容总结
+      chapters  chapter_list[].detail(两处)  23%  逐章说明,带时间戳
+      queries   suggest_words[].word          62%  「大家都在搜」,真人写的查询语句
+      title     item_title                    44%  干净标题,不含话题标签
+      cat1/2/3  video_tag                    ~98%  官方三级分类
+      cat_conf  related_video_extra.tags.prob      一级分类的置信度
+
+    ⚠️ 位置陷阱,实测出来的:`chapter_abstract` 在顶层和 `recommend_chapter_info`
+    里各有一个字段,但它们**基本互斥** —— 抖音对不同作品返回不同结构:
+
+        只在顶层 256 · 只在 recommend 298 · 两处都有 1 · 并集 555
+
+    所以必须两处都读。早期只读了嵌套那份,白丢了 256 条(覆盖 12% vs 22%)。
+    `chapter_list` / `recommend_chapter_list` 同理。
     """
     ci = aw.get("recommend_chapter_info") or {}
-    summary = (ci.get("chapter_abstract") or "").strip()
+    # 两处都要看:它们基本互斥,只读一处会漏掉另一批。
+    summary = (aw.get("chapter_abstract") or ci.get("chapter_abstract") or "").strip()
+
+    raw_chs = aw.get("chapter_list") or ci.get("recommend_chapter_list") or []
     chapters = [
         {
             # timestamp 是**毫秒**(实测:3384000 对应 56 分,该视频总长 3424370ms)。
@@ -164,19 +180,48 @@ def _ai_content_from_raw(aw: dict[str, Any]) -> dict[str, Any]:
             "t": ch.get("timestamp"),
             "desc": ch.get("desc"),
             "detail": ch.get("detail") or "",
-            "points": [p.get("desc") for p in (ch.get("points") or []) if p.get("desc")],
+            "points": [p.get("desc") for p in (ch.get("points") or [])
+                       if isinstance(p, dict) and p.get("desc")],
         }
-        for ch in (ci.get("recommend_chapter_list") or [])
+        for ch in raw_chs
         if isinstance(ch, dict) and ch.get("desc")
     ]
+
+    # 「大家都在搜」。这是**真人写的查询语句**,等于平台白送的 query→文档配对 ——
+    # 对检索召回极有价值,尤其能补向量对型号/专名召回差的短板。
+    queries: list[str] = []
+    groups = _dig(aw, "suggest_words.suggest_words")
+    for g in groups if isinstance(groups, list) else []:
+        if not isinstance(g, dict):
+            continue
+        for w in g.get("words") or []:
+            if isinstance(w, dict) and (word := (w.get("word") or "").strip()):
+                queries.append(word)
+
     cats = [t.get("tag_name") for t in (aw.get("video_tag") or [])
             if isinstance(t, dict) and t.get("tag_name")]
+    # 另一处分类**带置信度**,可用来过滤误分类(实测 level1 常在 0.9+)
+    conf = _dig(aw, "related_video_extra.tags")
+    if isinstance(conf, str):
+        try:
+            conf = json.loads(conf)
+        except ValueError:
+            conf = None
+    cat_conf = None
+    if isinstance(conf, dict):
+        lv1 = conf.get("level1")
+        if isinstance(lv1, dict) and isinstance(lv1.get("prob"), (int, float)):
+            cat_conf = float(lv1["prob"])
+
     return {
         "summary": summary,
         "chapters": chapters,
+        "queries": list(dict.fromkeys(queries)),      # 去重保序
+        "item_title": (aw.get("item_title") or "").strip() or None,
         "cat1": cats[0] if len(cats) > 0 else None,
         "cat2": cats[1] if len(cats) > 1 else None,
         "cat3": cats[2] if len(cats) > 2 else None,
+        "cat_conf": cat_conf,
     }
 
 
@@ -221,8 +266,10 @@ def _normalize(
     if raw:
         row.update(_from_raw(raw))
         row["hashtags"] = _hashtags_from_raw(raw)      # 供落库时写 tags 表
-        ai = _ai_content_from_raw(raw)
+        ai = _content_from_raw(raw)
         row["cat1"], row["cat2"], row["cat3"] = ai["cat1"], ai["cat2"], ai["cat3"]
+        row["cat_conf"] = ai["cat_conf"]
+        row["item_title"] = ai["item_title"]
         # 拿到了完整响应,所以「有没有内容总结」这件事是**确定**的:
         # 有就 have,没有就 none —— 不是 unknown。
         row["content_state"] = "have" if ai["summary"] else "none"

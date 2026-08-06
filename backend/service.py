@@ -62,6 +62,12 @@ def _persist_page(rows: list[dict[str, Any]]) -> tuple[int, int]:
                 r["aweme_id"], "summary", ai["summary"],
                 {"source": "douyin_chapter_abstract", "tier": 0},
             )
+        # 「大家都在搜」—— 真人写的查询语句,专门用来提升检索召回
+        if ai.get("queries"):
+            store.save_transcript(
+                r["aweme_id"], "queries", " / ".join(ai["queries"]),
+                {"source": "douyin_suggest_words", "tier": 0, "n": len(ai["queries"])},
+            )
         if ai.get("chapters"):
             store.save_extraction(
                 r["aweme_id"], category="chapters",

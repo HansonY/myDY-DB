@@ -29,7 +29,8 @@ _VIDEO_COLUMNS = (
     "video_width", "video_height", "play_url", "music_url",
     "poi_name", "mix_name",
     "is_subtitled", "is_deleted",
-    "cat1", "cat2", "cat3", "content_state", "has_ai_summary",
+    "cat1", "cat2", "cat3", "cat_conf", "item_title",
+    "content_state", "has_ai_summary",
 )
 
 # 内容总结的三态。这个区分是刚性的:
@@ -124,6 +125,7 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
             "poi_name": "TEXT", "mix_name": "TEXT",
             "is_subtitled": "INTEGER DEFAULT 0", "is_deleted": "INTEGER DEFAULT 0",
             "cat1": "TEXT", "cat2": "TEXT", "cat3": "TEXT",
+            "cat_conf": "REAL", "item_title": "TEXT",
             "content_state": "TEXT NOT NULL DEFAULT 'unknown'",
             "has_ai_summary": "INTEGER DEFAULT 0",
         },
@@ -293,6 +295,47 @@ def iter_raw(only_full: bool = False) -> Iterable[tuple[str, dict[str, Any]]]:
         if only_full and len(raw) <= 100:   # f2 的 31 字段结构,推不出新维度
             continue
         yield aid, raw
+
+
+# ── 知识片段 ────────────────────────────────────────────────
+
+def save_fragments(aweme_id: str, frags: list[dict[str, Any]]) -> int:
+    """整条替换某作品的片段。
+
+    先删后插,而不是 upsert —— 拼装策略一变,段数和顺序都会变,
+    留着旧段会混进检索结果里。片段是派生数据,重建成本为零。
+    """
+    with connect() as conn:
+        conn.execute("DELETE FROM fragments WHERE aweme_id = ?", (aweme_id,))
+        if not frags:
+            return 0
+        now = _now()
+        conn.executemany(
+            "INSERT INTO fragments (aweme_id, idx, kind, start_sec, text, n_chars, built_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [(aweme_id, i, f["kind"], f.get("start_sec"), f["text"], len(f["text"]), now)
+             for i, f in enumerate(frags)],
+        )
+    return len(frags)
+
+
+def fragment_stats() -> dict[str, Any]:
+    with connect() as conn:
+        total = conn.execute("SELECT COUNT(*) n FROM fragments").fetchone()["n"]
+        covered = conn.execute(
+            "SELECT COUNT(DISTINCT aweme_id) n FROM fragments").fetchone()["n"]
+        by_kind = {r["kind"]: r["n"] for r in conn.execute(
+            "SELECT kind, COUNT(*) n FROM fragments GROUP BY kind ORDER BY n DESC")}
+        # 按作品聚合后的可用度:一条作品的所有段加起来够不够撑起检索
+        buckets = conn.execute(
+            "SELECT SUM(t>=150) thick, SUM(t>=60 AND t<150) mid, SUM(t<60) thin "
+            "FROM (SELECT SUM(n_chars) t FROM fragments GROUP BY aweme_id)"
+        ).fetchone()
+    return {
+        "fragments": total, "videos_covered": covered, "by_kind": by_kind,
+        "thick": buckets["thick"] or 0, "mid": buckets["mid"] or 0,
+        "thin": buckets["thin"] or 0,
+    }
 
 
 def rebuild_tags() -> tuple[int, int]:

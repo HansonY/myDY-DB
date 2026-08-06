@@ -43,15 +43,17 @@ def main() -> None:
 
     store.init_db()
     n = skipped = 0
-    got = {"cat1": 0, "summary": 0, "chapters": 0, "hashtags": 0, "digg": 0}
+    got = {"cat1": 0, "summary": 0, "chapters": 0, "hashtags": 0,
+           "digg": 0, "queries": 0, "title": 0}
 
     for aid, raw in store.iter_raw(only_full=True):
         fields = douyin._from_raw(raw)
-        ai = douyin._ai_content_from_raw(raw)
+        ai = douyin._content_from_raw(raw)
         # 这里读的是**完整 raw**,所以结论是确定的:有就 have,没有就 none。
         # 绝不会写 unknown —— iter_raw(only_full=True) 已经把旧结构过滤掉了。
         fields.update(
             cat1=ai["cat1"], cat2=ai["cat2"], cat3=ai["cat3"],
+            cat_conf=ai["cat_conf"], item_title=ai["item_title"],
             content_state="have" if ai["summary"] else "none",
             has_ai_summary=1 if ai["summary"] else 0,
         )
@@ -70,6 +72,15 @@ def main() -> None:
                 summary=ai.get("summary") or None,
             )
             got["chapters"] += 1
+
+        if ai["queries"]:
+            store.save_transcript(
+                aid, "queries", " / ".join(ai["queries"]),
+                {"source": "douyin_suggest_words", "tier": 0, "n": len(ai["queries"])},
+            )
+            got["queries"] += 1
+        if ai["item_title"]:
+            got["title"] += 1
 
         tags = douyin._hashtags_from_raw(raw)
         if tags:
@@ -93,6 +104,8 @@ def main() -> None:
     print(f"  平台AI总结 {got['summary']}")
     print(f"  章节大纲   {got['chapters']}")
     print(f"  结构化话题 {got['hashtags']}")
+    print(f"  搜索意图词 {got['queries']}   ← 真人写的查询语句,用来提升召回")
+    print(f"  干净标题   {got['title']}")
 
     # 早期 31 字段结构里没有 statistics,所以 digg_count 缺失就等于「旧结构」
     c = store.coverage()

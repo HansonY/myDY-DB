@@ -417,6 +417,15 @@ def cmd_stats(_args) -> None:
     if c["db_bytes"]:
         print(f"  库文件       {c['db_bytes'] / 1024 / 1024:.1f} MB")
 
+    f = store.fragment_stats()
+    if f["fragments"]:
+        tot = f["thick"] + f["mid"] + f["thin"] or 1
+        print(f"\n知识片段(检索的最小单位,scripts/build_fragments.py 重建):")
+        print(f"  {f['fragments']} 段 / 覆盖 {f['videos_covered']} 条作品 · {f['by_kind']}")
+        print(f"  够用(≥150字) {f['thick']:>5}  {f['thick']*100/tot:.0f}%")
+        print(f"  能用(60-149) {f['mid']:>5}  {f['mid']*100/tot:.0f}%")
+        print(f"  太薄(<60)    {f['thin']:>5}  {f['thin']*100/tot:.0f}%   ← ASR 唯一该做的目标")
+
     cats = store.top_categories(8)
     if cats:
         print("\n官方分类 Top:")
