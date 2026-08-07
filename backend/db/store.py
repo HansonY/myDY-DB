@@ -39,6 +39,40 @@ _VIDEO_COLUMNS = (
 #   unknown 还没采到完整响应,不知道有没有 —— 该去补采,不是该认命
 CONTENT_HAVE, CONTENT_NONE, CONTENT_UNKNOWN = "have", "none", "unknown"
 
+# ── 来源轴:「我选的」 vs 「爬来的」──────────────────────────
+#
+# 加了「深挖关注者主页」之后,videos 里不再全是我主动选的东西了。
+# 这个区别是刚性的,搞混会同时坏掉两件事:
+#   分析:拿别人的全部产出去算「我的偏好」,分子分母一起废
+#   检索:问「怎么练口语」被某外教号 1093 条营销视频顶掉真结果
+#
+# 所以「什么算我的」只有**一处定义**,就是下面这个函数。
+# 之前 insight.py 里有 8 处裸 `FROM videos`,那种写法一旦散开就必然漏 ——
+# 漏掉的地方不会报错,只会静默给出错的数。
+SOURCE_FOLLOWING = "following"
+MINE_SOURCES = ("collection", "like", "post", "collects")
+
+
+def mine_pred(alias: str = "videos") -> str:
+    """SQL 片段:这条作品**是我主动选的**(收藏/点赞/我的作品/收藏夹)。
+
+    定义成「有任意一个非 following 的来源」而不是「白名单里的来源」,
+    因为一条作品可以既被我收藏、又出现在关注者主页里 —— 那它仍然算我的。
+    反过来,只从关注者主页爬来的就只有 following 一个来源。
+    """
+    return (f"EXISTS(SELECT 1 FROM video_sources s_m "
+            f"WHERE s_m.aweme_id = {alias}.aweme_id "
+            f"AND s_m.source <> '{SOURCE_FOLLOWING}')")
+
+
+def scope_pred(scope: str, alias: str = "videos") -> str:
+    """把 scope 翻成 SQL 条件。`mine` 是默认 —— 保持加关注功能之前的行为。"""
+    if scope == "all":
+        return "1=1"
+    if scope == SOURCE_FOLLOWING:      # 只看爬来的,不含我已经选过的
+        return f"NOT {mine_pred(alias)}"
+    return mine_pred(alias)
+
 # 列表/详情查询用的列。**不能用 `v.*`** —— 那会把 raw_z 也捞出来:
 # 一是 17 KB × 100 条 = 1.7 MB 白传给浏览器,二是 bytes 过不了 JSON 序列化。
 _SELECT_COLS = ", ".join(f"v.{c}" for c in _VIDEO_COLUMNS) + \
@@ -810,6 +844,107 @@ def list_collects_folders() -> list[dict[str, Any]]:
                 "SELECT * FROM collects_folders ORDER BY collects_name"
             )
         ]
+
+
+# ── 我关注的人 ──────────────────────────────────────────────
+
+def upsert_following(users: Iterable[dict[str, Any]]) -> tuple[int, int]:
+    """写入关注列表。返回 (处理数, 新增数)。
+
+    **不覆盖深挖状态** —— `crawl` / `crawl_cursor` / `crawled_n` 是本地决定和本地
+    进度,重新同步关注列表时不能被平台数据冲掉,否则「已经挖了一半」的进度
+    每次刷列表都会归零。
+    """
+    users = list(users)
+    if not users:
+        return 0, 0
+    now = _now()
+    with connect() as conn:
+        have = {
+            r["sec_user_id"]
+            for r in conn.execute(
+                f"SELECT sec_user_id FROM following WHERE sec_user_id IN "
+                f"({','.join('?' * len(users))})",
+                [u["sec_user_id"] for u in users])
+        }
+        conn.executemany(
+            "INSERT INTO following (sec_user_id, uid, nickname, signature, avatar,"
+            " aweme_count, follower_count, rank_recent, synced_at) "
+            "VALUES (:sec_user_id,:uid,:nickname,:signature,:avatar,"
+            " :aweme_count,:follower_count,:rank_recent,:synced_at) "
+            "ON CONFLICT(sec_user_id) DO UPDATE SET "
+            "  uid=excluded.uid, nickname=excluded.nickname,"
+            "  signature=excluded.signature, avatar=excluded.avatar,"
+            "  aweme_count=excluded.aweme_count,"
+            "  follower_count=excluded.follower_count,"
+            "  rank_recent=excluded.rank_recent, synced_at=excluded.synced_at",
+            [{"uid": None, "nickname": None, "signature": None, "avatar": None,
+              "aweme_count": None, "follower_count": None, "rank_recent": None,
+              **u, "synced_at": now} for u in users])
+        conn.commit()
+    return len(users), len(users) - len(have)
+
+
+def list_following(only_crawl: bool = False) -> list[dict[str, Any]]:
+    """关注列表 + 每位「我实际存过他几条」。
+
+    那个 saved 数字是决定要不要深挖的**唯一实证信号**:实测 97 位里 55 位
+    我一条都没存过,而存过 ≥3 条的只有 11 位 —— 后者才是真知识源。
+    """
+    sql = """
+      SELECT f.*,
+        (SELECT COUNT(*) FROM videos v
+          WHERE v.sec_user_id = f.sec_user_id AND {mine}) AS saved_n,
+        (SELECT COUNT(*) FROM videos v
+          WHERE v.sec_user_id = f.sec_user_id
+            AND v.content_state = 'have' AND {mine}) AS saved_with_summary
+      FROM following f
+    """.format(mine=mine_pred("v"))
+    if only_crawl:
+        sql += " WHERE f.crawl = 1"
+    sql += " ORDER BY saved_n DESC, COALESCE(f.rank_recent, 9999)"
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(sql)]
+
+
+def set_following_crawl(sec_user_ids: Iterable[str], crawl: bool) -> int:
+    """打开/关闭若干人的深挖开关。关掉时顺手清掉断点,下次开就从最新重走。"""
+    ids = list(sec_user_ids)
+    if not ids:
+        return 0
+    with connect() as conn:
+        if crawl:
+            conn.executemany(
+                "UPDATE following SET crawl=1 WHERE sec_user_id=?",
+                [(i,) for i in ids])
+        else:
+            conn.executemany(
+                "UPDATE following SET crawl=0, crawl_cursor=NULL WHERE sec_user_id=?",
+                [(i,) for i in ids])
+        conn.commit()
+        return conn.total_changes
+
+
+def save_following_progress(sec_user_id: str, done: bool = False) -> None:
+    """记一位关注者的深挖进度。
+
+    断点**从游标表现读**,不接受传参 —— 真进度由 `_run` 逐页写在
+    `cursors('following:<sec>')` 里,这张表上的 crawl_cursor 只是给人看的副本。
+    让副本自己去读源头,展示就不会和真进度漂移;传参的话调用方一旦拿错
+    (`_run` 的返回里其实没有 cursor 这个键),断点显示就悄悄变成空。
+
+    `crawled_n` 现算不累加 —— 累加会因为重跑而虚高。
+    """
+    with connect() as conn:
+        conn.execute(
+            "UPDATE following SET "
+            "  crawl_cursor=(SELECT max_cursor FROM cursors WHERE scope=?), "
+            "  crawl_done_at=CASE WHEN ? THEN ? ELSE crawl_done_at END, "
+            "  crawled_n=(SELECT COUNT(*) FROM videos v "
+            "             WHERE v.sec_user_id=following.sec_user_id) "
+            "WHERE sec_user_id=?",
+            (f"following:{sec_user_id}", 1 if done else 0, _now(), sec_user_id))
+        conn.commit()
 
 
 # ── 文本层 ──────────────────────────────────────────────────

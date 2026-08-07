@@ -383,6 +383,64 @@ async def collect_posts(
         yield out
 
 
+async def collect_creator_posts(
+    sec_user_id: str, max_items: int | None = None, start_cursor: int = 0
+) -> AsyncIterator[tuple[list[dict[str, Any]], Any]]:
+    """**关注者**主页的作品。和 collect_posts 走同一个接口,只是 source 不同。
+
+    source='following' 这个区别是刚性的 —— 这些不是我选的,是爬来的别人的
+    全部产出。混进「我的收藏」会同时坏掉行为分析和检索信噪比,
+    见 store.mine_pred()。
+    """
+    handler = _make_handler()
+    agen = handler.fetch_user_post_videos(
+        sec_user_id=sec_user_id,
+        max_cursor=start_cursor,
+        page_counts=settings.collect_page_size,
+        max_counts=max_items,
+    )
+    async for out in _iter_pages(agen, "following"):
+        yield out
+
+
+async def list_following(sec_user_id: str,
+                         max_users: int = 500) -> list[dict[str, Any]]:
+    """我关注的人。一次拉完(97 位只要 5 页),不做断点 —— 列表短且变化慢。
+
+    `source_type=1` 是「按最近关注排序」,所以返回顺序就是关注时间倒序,
+    位次记进 rank_recent 便于看「最近关注了谁」。
+
+    只从 `_to_raw()` 取 —— f2 的 `_to_list()` 会把 aweme_count 之类的字段丢掉,
+    而那正是决定「爬他要多久」的关键数字。
+    """
+    handler = _make_handler()
+    out: list[dict[str, Any]] = []
+    async for page in _end_on_empty(
+        handler.fetch_user_following(sec_user_id=sec_user_id,
+                                    source_type=1, max_counts=max_users)
+    ):
+        try:
+            raw = page._to_raw() or {}
+        except Exception:
+            break
+        for u in raw.get("followings") or []:
+            if not isinstance(u, dict) or not u.get("sec_uid"):
+                continue
+            out.append({
+                "sec_user_id": str(u["sec_uid"]),
+                "uid": str(u.get("uid") or "") or None,
+                "nickname": u.get("nickname"),
+                "signature": (u.get("signature") or "").strip() or None,
+                "avatar": _first_url(u, "avatar_thumb.url_list"),
+                "aweme_count": u.get("aweme_count"),
+                "follower_count": u.get("follower_count"),
+                "rank_recent": len(out) + 1,
+            })
+        if not raw.get("has_more") or len(out) >= max_users:
+            break
+    return out
+
+
 async def list_folders() -> list[dict[str, Any]]:
     """我的收藏夹清单。只靠 cookie —— 即使填别人的 URL 也只能拿到自己的。"""
     handler = _make_handler()

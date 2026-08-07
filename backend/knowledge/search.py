@@ -33,8 +33,14 @@ def _cosine(distance: float) -> float:
     return 1.0 - distance * distance / 2.0
 
 
+# scope != 'all' 时要在 KNN **之后**过滤,所以得多捞:只捞 k 段的话,
+# 万一前 k 段全来自关注者主页,过滤完就空了。实测某外教号一人 1093 条作品,
+# 这不是假想。
+SCOPED_OVERFETCH = 6
+
+
 def search(query: str, limit: int = 10,
-           include_maybe: bool = True) -> dict[str, Any]:
+           include_maybe: bool = True, scope: str = "mine") -> dict[str, Any]:
     """语义检索。
 
     返回三档分流后的结果,**分数一律带出去**:
@@ -45,16 +51,30 @@ def search(query: str, limit: int = 10,
     为什么不做静默过滤:阈值来自十几组样本,而且我给「库里没有」打的标注
     本身就错过一次(mortgage rate 其实找对了)。机器分不清的那一档,
     判断权该交回给人 —— 前提是分数看得见。
+
+    `scope` 是「深挖关注者主页」带来的必要参数:
+      mine       只搜我主动选的(收藏/点赞/我的作品)—— **默认**,等于加这功能之前的行为
+      following  只搜爬来的关注者作品(我自己没存过的那些)
+      all        两边一起搜
+
+    默认必须是 mine:关注者的全量产出比我的收藏多一个数量级,不设默认
+    就等于把「我的知识库」悄悄换成「他们的内容农场」。
     """
     emb = embed_mod.get()
     conn = vecdb.connect()
     try:
         vecdb.require_match(conn, emb.name, emb.dim)
         qv = emb.encode_query(query).tobytes()
-        k = max(limit * OVERFETCH, 20)
+        over = OVERFETCH if scope == "all" else SCOPED_OVERFETCH
+        k = max(limit * over, 20)
 
+        # 过滤放在物化之后的外层:vec0 的 MATCH 子句里塞不进 EXISTS 子查询。
+        where = "" if scope == "all" else \
+            f" WHERE {store.scope_pred(scope, 'hits')}"
+        # ⚠️ scope_pred 拿 hits.aweme_id 去比,而 hits 是 CTE 不是表 ——
+        # 能用是因为它只引用列名,不依赖表结构。
         # MATERIALIZED 是必须的,见文件头第 2 条
-        rows = conn.execute("""
+        rows = conn.execute(f"""
             WITH hits AS MATERIALIZED (
                 SELECT frag_id, aweme_id, kind, start_sec, distance
                 FROM frag_vec WHERE emb MATCH ? AND k = ?
@@ -68,7 +88,7 @@ def search(query: str, limit: int = 10,
                      ORDER BY h2.distance LIMIT 1)            AS best_kind,
                    (SELECT start_sec FROM hits h2 WHERE h2.aweme_id = hits.aweme_id
                      ORDER BY h2.distance LIMIT 1)            AS best_sec
-            FROM hits GROUP BY aweme_id ORDER BY best_d LIMIT ?
+            FROM hits{where} GROUP BY aweme_id ORDER BY best_d LIMIT ?
         """, (qv, k, limit)).fetchall()
 
         good, maybe, below = [], [], []
@@ -108,6 +128,7 @@ def search(query: str, limit: int = 10,
             # 而不是只得到一句「没有」
             "nearest_below": [x["score"] for x in below[:3]] if verdict == "nothing" else [],
             "thresholds": {"good": settings.search_good, "maybe": settings.search_maybe},
+            "scope": scope,
             "model": emb.name,
         }
     finally:

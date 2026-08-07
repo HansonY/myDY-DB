@@ -18,6 +18,11 @@ from typing import Any
 
 from db import store
 
+# 「这条是我主动选的」的唯一判据。加了「深挖关注者主页」之后 videos 里混着
+# 爬来的别人的全部产出 —— 拿那些去算「我的偏好」,分子分母一起废。
+# 这一行以前散成 8 处裸 `FROM videos`,漏掉的地方不报错、只静默给错的数。
+MINE = store.mine_pred("videos")
+
 
 # ── 数据指纹:决定要不要重算 ────────────────────────────────
 
@@ -31,7 +36,7 @@ def data_fingerprint() -> tuple[str, int, int]:
         r = c.execute("""
             SELECT COUNT(*) n, COALESCE(MAX(updated_at),'') mx,
                    SUM(cat1 IS NOT NULL AND TRIM(cat1)<>'') nc
-            FROM videos""").fetchone()
+            FROM videos WHERE """ + store.mine_pred("videos")).fetchone()
         srcs = c.execute(
             "SELECT source, COUNT(*) n FROM video_sources GROUP BY source ORDER BY source"
         ).fetchall()
@@ -123,15 +128,18 @@ def sourcing() -> dict[str, Any]:
                 mid_band = sum(1 for x in d if 10000 <= x < 1000000)
                 digg[src] = {"n": len(d), "median": d[len(d) // 2],
                              "mid_band_pct": round(mid_band * 100 / len(d), 1)}
-        au = c.execute("""SELECT COUNT(*) total, SUM(n=1) once FROM
+        au = c.execute(f"""SELECT COUNT(*) total, SUM(n=1) once FROM
             (SELECT COUNT(*) n FROM videos WHERE nickname IS NOT NULL
-             AND TRIM(nickname)<>'' GROUP BY nickname)""").fetchone()
-        top50 = c.execute("""SELECT SUM(n) s FROM
+             AND TRIM(nickname)<>'' AND {MINE} GROUP BY nickname)""").fetchone()
+        top50 = c.execute(f"""SELECT SUM(n) s FROM
             (SELECT COUNT(*) n FROM videos WHERE nickname IS NOT NULL
-             GROUP BY nickname ORDER BY n DESC LIMIT 50)""").fetchone()["s"] or 0
-        tot_v = c.execute("SELECT COUNT(*) n FROM videos WHERE nickname IS NOT NULL").fetchone()["n"] or 1
-        years = c.execute("""SELECT substr(create_time,1,4) y, COUNT(*) n FROM videos
-            WHERE create_time IS NOT NULL AND create_time<>'' GROUP BY y ORDER BY y DESC""").fetchall()
+             AND {MINE} GROUP BY nickname ORDER BY n DESC LIMIT 50)""").fetchone()["s"] or 0
+        tot_v = c.execute(
+            f"SELECT COUNT(*) n FROM videos WHERE nickname IS NOT NULL AND {MINE}"
+        ).fetchone()["n"] or 1
+        years = c.execute(f"""SELECT substr(create_time,1,4) y, COUNT(*) n FROM videos
+            WHERE create_time IS NOT NULL AND create_time<>'' AND {MINE}
+            GROUP BY y ORDER BY y DESC""").fetchall()
 
     ty = sum(x["n"] for x in years) or 1
     old = sum(x["n"] for x in years if x["y"] and x["y"] < "2024")
@@ -168,12 +176,13 @@ def sourcing() -> dict[str, Any]:
 def shape() -> dict[str, Any]:
     with store.connect() as c:
         d = sorted(x["video_duration"] / 1000 for x in c.execute(
-            "SELECT video_duration FROM videos WHERE video_duration>0"))
+            f"SELECT video_duration FROM videos WHERE video_duration>0 AND {MINE}"))
         with_sum = c.execute(
-            "SELECT COUNT(*) n FROM videos WHERE content_state='have'").fetchone()["n"]
+            f"SELECT COUNT(*) n FROM videos WHERE content_state='have' AND {MINE}"
+        ).fetchone()["n"]
         long_with_sum = c.execute(
-            "SELECT COUNT(*) n FROM videos WHERE content_state='have' "
-            "AND video_duration>300000").fetchone()["n"]
+            f"SELECT COUNT(*) n FROM videos WHERE content_state='have' "
+            f"AND video_duration>300000 AND {MINE}").fetchone()["n"]
     if not d:
         return {"id": "shape", "kind": "measured", "title": "长短偏好",
                 "headline": "还没有时长数据", "evidence": [], "why": ""}

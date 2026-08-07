@@ -106,7 +106,14 @@ CREATE INDEX IF NOT EXISTS idx_videos_summary     ON videos(content_state);
 -- 否则采完点赞会把收藏的 source 覆盖掉,信息静默丢失。
 CREATE TABLE IF NOT EXISTS video_sources (
     aweme_id      TEXT NOT NULL,
-    source        TEXT NOT NULL,              -- collection 收藏 | like 点赞 | post 我的作品 | collects 收藏夹
+    -- collection 收藏 | like 点赞 | post 我的作品 | collects 收藏夹 | following 关注者主页
+    --
+    -- ⚠️ `following` 和前四种有**本质区别**:前四种是「我主动选的」,
+    -- following 是「爬来的别人的全部产出」。混在一起会同时坏两件事:
+    --   「认识自己」的分子分母全废(拿别人的产出算我的偏好)
+    --   检索被淹(问「怎么练口语」被 1093 条外教营销视频顶掉真结果)
+    -- 所以判据统一走 store.mine_pred(),别在各处自己写 source 条件。
+    source        TEXT NOT NULL,
     collects_id   TEXT NOT NULL DEFAULT '',   -- 收藏夹 id;非收藏夹来源为空串(参与主键,不能用 NULL)
     collects_name TEXT,
     collected_at  TEXT NOT NULL,
@@ -116,6 +123,32 @@ CREATE TABLE IF NOT EXISTS video_sources (
 
 CREATE INDEX IF NOT EXISTS idx_vs_source   ON video_sources(source);
 CREATE INDEX IF NOT EXISTS idx_vs_collects ON video_sources(collects_id);
+
+-- ── 我关注的人 ─────────────────────────────────────────────
+-- 和 videos 里的「作者」是两回事:实测关注 97 位,而收藏/点赞里出现过 2122 位作者,
+-- 两者只重叠 42 位 —— 55 位关注了却一条没存过,1918 位存过一条却没关注。
+--
+-- 存这张表是为了能**选择性**深挖。实测这 97 位共发过 93747 条作品,全爬要
+-- 10.5 小时、1.5 GB,而其中 10 位高产号(小央视频 43451 条、董路 14401 条、
+-- DOU+小助手…)就占 77% —— 而我从他们那儿一条都没存过。
+-- 所以要按人开关,`crawl` 就是这个开关。
+CREATE TABLE IF NOT EXISTS following (
+    sec_user_id   TEXT PRIMARY KEY,
+    uid           TEXT,
+    nickname      TEXT,
+    signature     TEXT,
+    avatar        TEXT,
+    aweme_count   INTEGER,                  -- 他一共发了多少(决定爬他要多久)
+    follower_count INTEGER,
+    rank_recent   INTEGER,                  -- 在「按最近关注」列表里的位次,越小越新关注
+    crawl         INTEGER NOT NULL DEFAULT 0,   -- 1=深挖他的作品
+    crawl_cursor  TEXT,                     -- 深挖到哪了(断点续跑)
+    crawl_done_at TEXT,                     -- 上次走完全程的时间
+    crawled_n     INTEGER DEFAULT 0,        -- 已入库多少条他的作品
+    synced_at     TEXT NOT NULL             -- 这行是什么时候从平台刷的
+);
+
+CREATE INDEX IF NOT EXISTS idx_following_crawl ON following(crawl);
 
 -- ── 文本层(同一作品可有多个文本来源)───────────────────────
 --   desc     作者写的文案。**不是视频内容**,常是营销话术
