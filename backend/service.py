@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from collector import douyin
@@ -44,14 +45,95 @@ def guard_single_run() -> None:
         raise AlreadyCollecting(run)
 
 
-def _persist_page(rows: list[dict[str, Any]]) -> tuple[int, int]:
-    """落库一页:作品 + 文案 + 结构化话题 + 知识片段。
+# saved_at 只对「我主动存下来的」有意义。post 是我自己发的作品,
+# 它的时间就是 create_time,平台已经精确给了,不用游标去猜。
+_SAVED_SCOPES = ("collection", "like", "collects")
+
+
+def cursor_to_iso(cursor: Any) -> str | None:
+    """翻页游标 → ISO 时间。抖音不给「你什么时候收藏的」,但**游标本身就是那个时间戳**。
+
+    单位按量级判而不是按 scope 硬编码(实测收藏是微秒 16 位、点赞和作品是毫秒
+    13 位,26 次历史观测一致)—— 哪天抖音改了单位,这里自己就跟上了。
+
+    自校验:换算结果必须落在 2015 年之后、明天之前。落不进去就返回 None,
+    宁可没有也不要写一个 1970 年或 2255 年的假时间进库。
+    """
+    try:
+        n = int(cursor)
+    except (TypeError, ValueError):
+        return None
+    if n <= 0:
+        return None
+    upper = datetime.now(timezone.utc).timestamp() + 86400
+    for div in (1_000_000, 1000, 1):        # 微秒 → 毫秒 → 秒
+        t = n / div
+        if 1_420_070_400 < t < upper:       # 2015-01-01 ~ 明天
+            return datetime.fromtimestamp(t, timezone.utc).isoformat(timespec="seconds")
+    return None
+
+
+def _create_time_utc(text: Any) -> datetime | None:
+    """把 `videos.create_time` 解成带时区的时间。
+
+    ⚠️ 这个字段是**本机本地时间、且不带时区标记**(`2026-07-17 10:47:29`),
+    而 `saved_at` / `collected_at` / `updated_at` 都是 UTC 带 `+00:00`。
+    库里这两套格式并存是历史遗留 —— 直接拿去做字符串比较会差 8 小时(CST),
+    而且日期相同时 `'T'`(0x54)和 `' '`(0x20)还会让比较结果整个反过来。
+    所以任何跨这两个字段的比较都必须走这里,别用 SQL 直接比。
+    """
+    if not text or not isinstance(text, str):
+        return None
+    try:
+        dt = datetime.fromisoformat(text.strip())
+    except ValueError:
+        return None
+    return dt.astimezone(timezone.utc) if dt.tzinfo is None else dt
+
+
+def _stamp_saved_at(rows: list[dict[str, Any]], scope: str, max_cursor: Any) -> None:
+    """给这一页打上收藏时间(下界)。
+
+    游标是**本页最后一条**的收藏时间,而列表是按收藏时间倒序的,所以本页每条
+    都满足 `收藏时间 >= 游标`。于是:
+      * 最后一条  —— 时间精确,`saved_exact=1`
+      * 其余      —— 只是下界,`saved_exact=0`
+
+    再免费收紧一道:**你不可能收藏一个还没发布的作品**。所以作品发布时间比
+    游标晚时,发布时间才是更紧的下界。实测这一页 20 条里就有几条能往后推好几天,
+    对月级归属尤其要紧 —— 否则一条 7 月底发的会被算进 7 月初那个月。
+    只收紧非精确行:最后一条的时间是确定的,不该被推走(真出现矛盾也宁可留着,
+    好让一致性检查报出来)。
+
+    精度就到这儿了,别指望更多:实测相邻两页游标间隔收藏中位 5.3 天、
+    点赞中位 22.4 天。够做月级兴趣漂移,**做不了「几点刷的」**。
+    """
+    if scope not in _SAVED_SCOPES or not rows:
+        return
+    iso = cursor_to_iso(max_cursor)
+    if not iso:
+        return
+    floor = datetime.fromisoformat(iso)
+    for r in rows:
+        pub = _create_time_utc(r.get("create_time"))
+        best = pub if (pub and pub > floor) else floor
+        r["saved_at"] = best.isoformat(timespec="seconds")
+        r["saved_exact"] = 0
+    rows[-1]["saved_at"] = iso          # 最后一条是精确值,不收紧
+    rows[-1]["saved_exact"] = 1
+
+
+def _persist_page(
+    rows: list[dict[str, Any]], scope: str = "", max_cursor: Any = None
+) -> tuple[int, int]:
+    """落库一页:作品 + 文案 + 结构化话题 + 知识片段 + 收藏时间。
 
     片段在这里就地生成,而不是留给一个「记得跑」的脚本 —— 那种东西一定会忘,
     然后新采的作品在检索里永远查不到,而且没有任何报错提示。
     """
     from knowledge import fragments as frag
 
+    _stamp_saved_at(rows, scope, max_cursor)
     fetched, inserted = store.upsert_videos(rows)
     for r in rows:
         desc = (r.get("description") or "").strip()
@@ -140,7 +222,7 @@ async def _run(
             pages += 1
             new_here = 0
             if rows:
-                f, new_here = await asyncio.to_thread(_persist_page, rows)
+                f, new_here = await asyncio.to_thread(_persist_page, rows, scope, max_cursor)
                 fetched += f
                 inserted += new_here
             # 增量同步:这一页没带来新条目就累计,连续多页如此说明追上了。

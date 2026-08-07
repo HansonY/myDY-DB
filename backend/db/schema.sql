@@ -74,6 +74,18 @@ CREATE TABLE IF NOT EXISTS videos (
     -- 771 条「还不知道」全被标成 0,界面和检索根本分不出来,
     -- 于是「这条没内容」到底该去补采还是该认命,谁也说不清。
     content_state   TEXT NOT NULL DEFAULT 'unknown',
+    -- 你**大致什么时候收藏/点赞它**的。抖音不直接给这个字段(raw 里逐字段搜过
+    -- 两遍都没有),但**翻页游标本身就是收藏时间戳** —— 收藏是微秒、点赞和
+    -- 作品是毫秒。所以采集时按页记下来,不记就永久没有(和 x-expires 同性质)。
+    --
+    -- ⚠️ 精度只到「页」,而一页 ~19 条却能跨很久:实测相邻两页游标间隔
+    -- 收藏中位 5.3 天、点赞中位 22.4 天(最大 181 天)。
+    -- 所以语义是**下界**:这条不早于 saved_at 被收藏。
+    --   能做:月级/季度级的兴趣漂移
+    --   做不了:几点刷的、哪几天集中囤 —— 页粒度撑不住,别拿它算
+    -- saved_exact=1 的那条是每页最后一条,它的时间是精确的。
+    saved_at        TEXT,
+    saved_exact     INTEGER DEFAULT 0,
 
     collected_at    TEXT    NOT NULL,          -- 本地入库时间
     updated_at      TEXT    NOT NULL

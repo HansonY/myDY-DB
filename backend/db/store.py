@@ -30,7 +30,7 @@ _VIDEO_COLUMNS = (
     "poi_name", "mix_name",
     "is_subtitled", "is_deleted",
     "cat1", "cat2", "cat3", "cat_conf", "item_title",
-    "content_state",
+    "content_state", "saved_at", "saved_exact",
 )
 
 # 内容总结的三态。这个区分是刚性的:
@@ -127,6 +127,7 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
             "cat1": "TEXT", "cat2": "TEXT", "cat3": "TEXT",
             "cat_conf": "REAL", "item_title": "TEXT",
             "content_state": "TEXT NOT NULL DEFAULT 'unknown'",
+            "saved_at": "TEXT", "saved_exact": "INTEGER DEFAULT 0",
         },
         "collect_state": {
             "platform_total": "INTEGER",
@@ -251,6 +252,12 @@ def upsert_videos(items: Iterable[dict[str, Any]]) -> tuple[int, int]:
                 # 直接 excluded.raw_z 会把已经存好的完整响应清成 NULL —— 而它重采
                 # 才能拿回来,媒体地址还可能已经过期。宁可保旧。
                 return "raw_z=COALESCE(excluded.raw_z, videos.raw_z)"
+            if c == "saved_at":
+                # 只补不覆盖。已经记过的别被后来某轮的页级下界盖掉 ——
+                # 尤其 refill 会重走全程,它的分页边界和首采不一样。
+                return "saved_at=COALESCE(videos.saved_at, excluded.saved_at)"
+            if c == "saved_exact":
+                return "saved_exact=MAX(COALESCE(videos.saved_exact,0), COALESCE(excluded.saved_exact,0))"
             if c == "content_state":
                 # 只升不降:unknown 是「还不知道」,不能拿它覆盖已经确定的
                 # have/none。否则某一页 raw 配对失败,就把之前查清的结论抹掉,
