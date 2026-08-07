@@ -18,7 +18,7 @@ import _pyversion
 _pyversion.check()   # Python 版本不对就早失败,别让人撞 Rust 编译错误
 
 import httpx
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, Body, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -124,6 +124,7 @@ async def semantic_search(
     q: str,
     limit: int = Query(10, ge=1, le=50),
     include_maybe: bool = True,
+    scope: str = Query("mine", pattern="^(mine|following|all)$"),
 ) -> dict[str, Any]:
     """语义检索:换句话说也找得到。
 
@@ -133,10 +134,13 @@ async def semantic_search(
     出问题没法定位是哪一路的锅。
 
     分数一律带出来,三档:good(≥阈值)· maybe(可能相关)· 全没过就是库里没有。
+
+    `scope` 默认 **mine**(只搜我主动选的)。关注者的全量产出比我的收藏多一个
+    数量级,不设默认就等于把「我的知识库」悄悄换成「他们的内容农场」。
     """
     from knowledge import search as ks, vecdb
     try:
-        return await asyncio.to_thread(ks.search, q, limit, include_maybe)
+        return await asyncio.to_thread(ks.search, q, limit, include_maybe, scope)
     except vecdb.IndexMismatch as e:
         raise HTTPException(409, str(e)) from e
     except RuntimeError as e:      # 缺依赖 / 扩展加载不了
@@ -311,6 +315,57 @@ async def get_video_raw(aweme_id: str) -> dict[str, Any]:
 @app.get("/api/folders")
 async def get_folders() -> dict[str, Any]:
     return {"items": await asyncio.to_thread(store.list_collects_folders)}
+
+
+@app.get("/api/following")
+async def get_following(only_crawl: bool = False) -> dict[str, Any]:
+    """我关注的人 + 每位「我实际存过他几条」。
+
+    `saved_n` 是决定要不要深挖的唯一实证信号,所以它必须和列表一起给出去 ——
+    否则页面上只能看到「他发了 43451 条」,看不到「我一条都没存过」。
+    """
+    items = await asyncio.to_thread(store.list_following, only_crawl)
+    return {
+        "items": items,
+        "total": len(items),
+        # 把「全爬要多久」摆在脸上:这是不做全量深挖的理由
+        "sum_aweme": sum(u["aweme_count"] or 0 for u in items),
+        "picked": sum(1 for u in items if u["crawl"]),
+        "picked_aweme": sum(u["aweme_count"] or 0 for u in items if u["crawl"]),
+        "never_saved": sum(1 for u in items if not u["saved_n"]),
+    }
+
+
+@app.post("/api/following/sync")
+async def post_following_sync() -> dict[str, Any]:
+    """刷新关注列表(不采作品)。97 位约 5 页,很轻。"""
+    try:
+        return await service.sync_following()
+    except service.AlreadyCollecting as e:
+        raise HTTPException(409, str(e))
+
+
+@app.post("/api/following/crawl-flag")
+async def post_following_flag(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """打开/关闭若干人的深挖开关。"""
+    ids = body.get("sec_user_ids") or []
+    if not isinstance(ids, list) or not ids:
+        raise HTTPException(422, "要给 sec_user_ids(数组)")
+    n = await asyncio.to_thread(
+        store.set_following_crawl, ids, bool(body.get("crawl", True)))
+    return {"updated": n, "crawl": bool(body.get("crawl", True))}
+
+
+@app.post("/api/following/crawl")
+async def post_following_crawl(
+    max_pages_each: int = Query(0, ge=0, le=500),
+) -> dict[str, Any]:
+    """深挖所有已勾选的关注者。一个人 403 就整体停手。"""
+    try:
+        return await service.crawl_followed(
+            max_pages_each=max_pages_each, on_progress=_track)
+    except service.AlreadyCollecting as e:
+        raise HTTPException(409, str(e))
 
 
 @app.get("/api/runs")

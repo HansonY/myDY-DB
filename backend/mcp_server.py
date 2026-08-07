@@ -51,6 +51,7 @@ SERVER_INSTRUCTIONS = (
         "也能查看采集完整度并触发采集。\n"
         "两种检索分工:search_videos 字面匹配(找专名/作者/按分类筛选排序);"
         "search_library 语义匹配(问「关于怎么…的内容」用它,换句话说也找得到)。"
+        "search_library 默认只搜用户主动收藏的;问「我关注的人讲过吗」才传 scope。"
         "回答「我收藏过的关于X」用 search_library,它返回的分数一定要看 —— "
         "verdict=nothing 就是库里真没有,verdict=only_maybe 是只有猜测 —— "
         "两种都别拿低分结果硬答、也别用自己的知识补。\n"
@@ -136,7 +137,8 @@ async def search_videos(
 
 
 async def search_library(query: str, limit: int = 10,
-                         include_maybe: bool = True) -> dict[str, Any]:
+                         include_maybe: bool = True,
+                         scope: str = "mine") -> dict[str, Any]:
     """**语义**检索我的抖音收藏 —— 换句话说也找得到。
 
     和 search_videos 的分工:
@@ -151,11 +153,24 @@ async def search_library(query: str, limit: int = 10,
     每条都带 score。英文查询比中文弱(实测会出硬错),分数低的更要谨慎。
 
     每条带 at_sec(命中的是哪一章、第几秒),引用时给出来。
+
+    **scope** 决定搜哪一侧,默认 mine:
+      mine       只搜用户**主动收藏/点赞**的 —— 默认,几乎总是对的
+      following  只搜从关注者主页爬来的、用户自己**没存过**的作品
+      all        两边一起
+
+    什么时候该用 following/all:用户明确说「我关注的人有没有讲过…」
+    「不限于我收藏的」时。**不要**自己擅自换成 all 来凑答案 ——
+    关注者的全量产出比用户的收藏多一个数量级,混进来就等于拿别人的内容农场
+    冒充「我的收藏」,而用户分辨不出来。返回体里带 scope,答的时候说清是哪一侧。
     """
     from knowledge import search as ks, vecdb
     store.init_db()
     try:
-        return await asyncio.to_thread(ks.search, query, max(1, min(limit, 50)), include_maybe)
+        if scope not in ("mine", "following", "all"):
+            return {"error": f"scope 只能是 mine / following / all,收到 {scope!r}"}
+        return await asyncio.to_thread(
+            ks.search, query, max(1, min(limit, 50)), include_maybe, scope)
     except (vecdb.IndexMismatch, RuntimeError) as e:
         return {"error": str(e),
                 "hint": "先跑 scripts/build_index.py 建向量索引"}
@@ -530,6 +545,16 @@ _TOOLS: list[Tool] = [
                 "limit": {"type": "integer", "default": 10, "maximum": 50},
                 "include_maybe": {"type": "boolean", "default": True,
                                   "description": "是否带上「可能相关」那一档"},
+                "scope": {
+                    "type": "string", "enum": ["mine", "following", "all"],
+                    "default": "mine",
+                    "description":
+                        "搜哪一侧。mine=用户主动收藏/点赞的(默认,几乎总是对的);"
+                        "following=从关注者主页爬来、用户自己没存过的;all=两边。"
+                        "只有用户明确说「我关注的人有没有讲过…」时才换 —— "
+                        "关注者的全量产出比收藏多一个数量级,擅自用 all 凑答案"
+                        "等于拿别人的内容农场冒充「我的收藏」,用户分辨不出来。",
+                },
             },
             "required": ["query"],
         },
