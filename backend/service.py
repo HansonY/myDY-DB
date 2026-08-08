@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from collector import douyin
@@ -532,6 +532,121 @@ async def sync_following() -> dict[str, Any]:
     users = await douyin.list_following(await own_sec_user_id())
     n, new = await asyncio.to_thread(store.upsert_following, users)
     return {"fetched": n, "new": new}
+
+
+async def crawl_recent(
+    sec_user_id: str,
+    days: int = 3,
+    hard_page_cap: int = 5,
+    on_progress: Callable[[dict], None] | None = None,
+) -> dict[str, Any]:
+    """抓**一位**博主最近 N 天的新作品。这是日常该用的,不是 `crawl_creator`。
+
+    主页按发布时间倒序,所以从第一页往下翻,**碰到第一条超过 N 天的就停**。
+    实测这些博主每天发 0.1–0.5 条,一页 20 条 → 绝大多数人第一页就够。
+
+    为什么不用全量深挖:
+      全量  4345 条 / 221 页 / 29 分钟,而且实测第 20 页就被 403
+      三天    约 9 条 /  11 页 / 1.5 分钟,零 403 风险
+    拿到的东西也不同 —— 全量给的是陈年老作品,这个给的是「今天他们讲了什么」。
+
+    不碰任何游标:每天都从最新开始,本来就该这样。`hard_page_cap` 是兜底,
+    防止某人时间戳异常导致一直翻下去。
+    """
+    store.init_db()
+    guard_single_run()
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+    run_id = store.start_run("recent", origin=ORIGIN)
+    fetched = inserted = pages = 0
+    fresh_ids: list[str] = []
+    try:
+        agen = douyin.collect_creator_posts(sec_user_id=sec_user_id,
+                                            max_items=None, start_cursor=0)
+        async for rows, _cursor in agen:
+            pages += 1
+            keep, done = [], False
+            for r in rows:
+                pub = _create_time_utc(r.get("create_time"))
+                # 拿不到发布时间就先留着 —— 宁可多存一条,也别因为解析失败漏掉新内容
+                if pub is None or pub >= cutoff:
+                    keep.append(r)
+                else:
+                    done = True     # 已经翻到 N 天之前了,这一页剩下的更旧
+            if keep:
+                f, new_here = await asyncio.to_thread(
+                    _persist_page, keep, "following", None)
+                fetched += f
+                inserted += new_here
+                fresh_ids.extend(r["aweme_id"] for r in keep)
+            info = {"scope": "recent", "pages": pages,
+                    "fetched": fetched, "inserted": inserted}
+            await asyncio.to_thread(store.beat_run, run_id, info)
+            if on_progress:
+                on_progress(info)
+            if done or pages >= hard_page_cap:
+                break
+
+        store.finish_run(run_id, "done", fetched, inserted)
+        await _refresh_tags(inserted)
+        return {"sec_user_id": sec_user_id, "days": days, "pages": pages,
+                "fetched": fetched, "inserted": inserted,
+                "aweme_ids": fresh_ids,
+                "hit_cap": pages >= hard_page_cap and not done}
+    except Exception as e:
+        store.finish_run(run_id, "failed", fetched, inserted, f"{type(e).__name__}: {e}")
+        await _refresh_tags(inserted)
+        raise
+
+
+async def daily_round(
+    days: int = 3,
+    role: str | None = None,
+    on_creator: Callable[[dict], None] | None = None,
+) -> dict[str, Any]:
+    """每日一轮:把所有已分类的博主的最近 N 天新作品抓回来。
+
+    `role=None` 两类都抓;传 'info' 或 'rival' 就只抓那一类。
+    和 `crawl_followed` 一样,**一个人 403 就整体停手** —— 但这里几乎不会发生,
+    每人只翻 1 页。
+    """
+    store.init_db()
+    picked = await asyncio.to_thread(store.list_following, True)
+    if role:
+        picked = [u for u in picked if u.get("role") == role]
+    else:
+        picked = [u for u in picked if u.get("role")]
+    if not picked:
+        return {"creators": [], "new_ids": [], "stopped_on_403": False,
+                "note": "没有已分类的博主 —— 先在关注页给人打上「信息价值」或「竞品」"}
+
+    out, new_ids, stopped = [], [], False
+    for u in picked:
+        try:
+            r = await crawl_recent(u["sec_user_id"], days=days)
+            new_ids.extend(r["aweme_ids"])
+            item = {"nickname": u["nickname"], "role": u.get("role"),
+                    "status": "ok", "found": r["fetched"],
+                    "new": r["inserted"], "pages": r["pages"]}
+        except Exception as e:
+            msg = str(e)
+            item = {"nickname": u["nickname"], "role": u.get("role"),
+                    "status": "failed", "error": msg[:200]}
+            out.append(item)
+            if on_creator:
+                on_creator(item)
+            if "403" in msg:
+                stopped = True
+                break
+            continue
+        out.append(item)
+        if on_creator:
+            on_creator(item)
+
+    return {"creators": out, "new_ids": new_ids, "days": days,
+            "found": sum(x.get("found", 0) for x in out),
+            "new": sum(x.get("new", 0) for x in out),
+            "stopped_on_403": stopped}
 
 
 async def crawl_creator(

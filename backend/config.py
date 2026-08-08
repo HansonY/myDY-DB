@@ -1,6 +1,23 @@
 """集中配置。所有机密只从环境变量 / .env 读取,绝不硬编码。"""
 
+import os
 from pathlib import Path
+
+# ⚠️ 这一句必须在**任何**会拉起 huggingface_hub 的 import 之前。
+# huggingface_hub 在自己被 import 时就把 HF_ENDPOINT 读进 constants.ENDPOINT,
+# 之后再改环境变量**完全没有效果** —— 实测在函数里 setdefault 之后
+# `constants.ENDPOINT` 仍是 huggingface.co,然后下载报 SSL EOF。
+# 放在 config.py 是因为它是所有模块最先导入的那个:knowledge/embed.py 拉
+# sentence-transformers、knowledge/asr.py 拉 faster-whisper,两条路都会连带
+# 导入 huggingface_hub,谁先谁后不好保证,只有堵在最上游才可靠。
+# 用 setdefault:已经显式配过 HF_ENDPOINT 的环境不覆盖。
+os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+# 关掉 Xet(HF 2025 年换的 CAS 内容寻址后端)。镜像站只代理了经典的
+# resolve/download 路径,不支持 Xet —— 走 Xet 会绕回 us.aws.cdn.hf.co,
+# 于是又撞回被墙的官方 CDN,报 `CAS Client Error: error sending request`。
+# 实测症状很迷惑:小文件(config/tokenizer)能下,唯独最大的 model.bin 失败,
+# 看起来像「网络不稳」,其实是这一个文件走了不同的通道。
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -53,6 +70,18 @@ class Settings(BaseSettings):
     # 而且分数一律露给人看,不做静默过滤。
     search_good: float = 0.64
     search_maybe: float = 0.52
+
+    # ── 语音转写 ──
+    # 抖音不给字幕文本(raw 里逐字段翻过两遍:只有 is_subtitled 标记,
+    # 既无字幕文本也无字幕 URL),而平台自己的内容总结只覆盖 34% ——
+    # 剩下 66% 只有营销文案。逐字稿是补齐它们的唯一办法。
+    # 选型实测(M5 Pro,int8,同 3 条素材):
+    #   small(480MB) 9.4× 实时 —— 英文干净,**中文基本不能用**:
+    #     「打开雷达刺控管 OK 雷达一起动 Passie 你的零食一碗在设备盘了」
+    #     (原视频讲微波炉)。日常量只有每 3 天 11 分钟音频,
+    #     用 small 换来的那点速度毫无意义 —— 该换准确度。
+    #   large-v3-turbo(1.6GB) 接近 large-v3 的准确度,比它快 8 倍。
+    asr_model: str = "large-v3-turbo"
 
     # ── 存储 ────────────────────────────────────
     db_path: str = "data/douyin.db"

@@ -28,6 +28,10 @@ MIN_CHARS = 12
 # 嵌入时会被主题稀释;但也不硬切 —— 文案本来就是一个整体。
 OVERVIEW_SOFT_MAX = 1200
 
+# 逐字稿分块大小。一条 60–120 秒的视频大约 200–500 字,多数一块装得下;
+# 长视频切开,让每块都能独立命中(向量对整段取平均,一块太长就什么都不像)。
+ASR_CHUNK = 420
+
 
 def _join(parts: list[str | None]) -> str:
     """去重保序地拼接,**包含式去重**而不只是精确去重。
@@ -100,5 +104,20 @@ def build(video: dict[str, Any], content: dict[str, Any],
         text = " / ".join(qs)
         if len(text) >= MIN_CHARS:
             frags.append({"kind": "queries", "text": text})
+
+    # ── asr:自己转出来的逐字稿 ─────────────────────────────
+    # 和 summary 是**互补不是替代**:总结是抽象的要点(「依恋半衰期约 4.18 年」),
+    # 逐字稿是原话和细节。问「大意」时总结更准,问「他原话怎么说的」
+    # 「有没有提到某个具体名词」时只有逐字稿能答。
+    #
+    # 单独成段而不是拼进 overview:一段几百上千字的逐字稿混进 overview 会把
+    # 标题和总结冲淡 —— 向量是整段取平均,长文本会把短而准的信号淹掉。
+    # 太长就切块,每块都能独立命中。
+    asr = (content.get("asr") or "").strip()
+    if len(asr) >= MIN_CHARS:
+        for i in range(0, len(asr), ASR_CHUNK):
+            piece = asr[i:i + ASR_CHUNK]
+            if len(piece) >= MIN_CHARS:
+                frags.append({"kind": "asr", "text": piece})
 
     return frags

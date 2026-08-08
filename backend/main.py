@@ -268,7 +268,12 @@ async def get_cover(aweme_id: str):
         raise HTTPException(404, "没有封面")
 
     try:
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as cli:
+        # trust_env=False 绕开系统代理。抖音 CDN 走本机代理(实测这台机器有
+        # HTTP_PROXY=127.0.0.1:6152)必然 `SSL: UNEXPECTED_EOF_WHILE_READING` ——
+        # 流量被绕出国再回来。同一时刻直连是好的,实测 1.6MB 音轨 1.7 秒下完。
+        # 症状是缩略图整片裂掉,而日志里只有一堆 httpx 堆栈,看不出根因在代理。
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True,
+                                     trust_env=False) as cli:
             r = await cli.get(
                 url,
                 headers={
@@ -366,6 +371,85 @@ async def post_following_crawl(
             max_pages_each=max_pages_each, on_progress=_track)
     except service.AlreadyCollecting as e:
         raise HTTPException(409, str(e))
+
+
+@app.post("/api/following/role")
+async def post_following_role(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """给博主打标:info=信息价值 / rival=竞品 / null=取消。
+
+    打标同时打开每日抓取 —— 分类的意思就是「我要跟这个人」。
+    """
+    ids = body.get("sec_user_ids") or []
+    if not isinstance(ids, list) or not ids:
+        raise HTTPException(422, "要给 sec_user_ids(数组)")
+    try:
+        n = await asyncio.to_thread(store.set_following_role, ids, body.get("role"))
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    return {"updated": n, "role": body.get("role")}
+
+
+# ── 每日简报 ────────────────────────────────────────────────
+
+@app.get("/api/digest")
+async def get_digest(days: int = Query(3, ge=1, le=90)) -> dict[str, Any]:
+    """两类博主最近 N 天的简报。纯本地查询,不碰抖音接口。"""
+    from knowledge import digest as kd
+    ov, info, rival = await asyncio.gather(
+        asyncio.to_thread(kd.overview, days),
+        asyncio.to_thread(kd.info_digest, days),
+        asyncio.to_thread(kd.rival_report, days),
+    )
+    return {"overview": ov, "info": info, "rival": rival}
+
+
+@app.post("/api/digest/refresh")
+async def post_digest_refresh(
+    days: int = Query(3, ge=1, le=30),
+    role: str | None = Query(None, pattern="^(info|rival)$"),
+) -> dict[str, Any]:
+    """抓一轮:所有已分类博主最近 N 天的新作品。
+
+    实测每人 1 页就够(他们每天发 0.1–0.5 条),11 位约 1.5 分钟,零 403 风险。
+    """
+    try:
+        return await service.daily_round(days=days, role=role,
+                                         on_creator=lambda x: _track(x))
+    except service.AlreadyCollecting as e:
+        raise HTTPException(409, str(e))
+
+
+# ── 语音转写 ────────────────────────────────────────────────
+
+@app.get("/api/asr/pending")
+async def get_asr_pending(
+    limit: int = Query(50, ge=1, le=500),
+    scope: str = Query("following", pattern="^(mine|following|all)$"),
+) -> dict[str, Any]:
+    """还没有任何真实内容的作品 —— 没抖音总结、也没转过。"""
+    from knowledge import asr as ka
+    items = await asyncio.to_thread(ka.pending, limit, scope)
+    secs = sum((i.get("video_duration") or 0) / 1000 for i in items)
+    return {
+        "items": items, "total": len(items),
+        "audio_seconds": round(secs),
+        # 实测 large-v3-turbo 在这台机器上的吞吐,让人知道要等多久
+        "estimate_minutes": round(secs / 60 / 3.0, 1),
+        "model": settings.asr_model,
+    }
+
+
+@app.post("/api/asr/run")
+async def post_asr_run(
+    limit: int = Query(10, ge=1, le=200),
+    scope: str = Query("following", pattern="^(mine|following|all)$"),
+) -> dict[str, Any]:
+    """批量转写。**首次会下模型(1.6GB)**,先跑 scripts/fetch_asr_model.py 预热。"""
+    from knowledge import asr as ka
+    try:
+        return await asyncio.to_thread(ka.run_batch, limit, scope, None, None)
+    except RuntimeError as e:      # 没装依赖 / 模型下不下来
+        raise HTTPException(501, str(e)) from e
 
 
 @app.get("/api/runs")

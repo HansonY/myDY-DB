@@ -226,6 +226,110 @@ async def video_raw(aweme_id: str, path: str | None = None) -> dict[str, Any]:
     }
 
 
+async def creators(role: str | None = None) -> dict[str, Any]:
+    """我关注的人 + 他们的分类。
+
+    `role` 过滤:info=信息价值主播 · rival=竞品主播 · 不传=全部。
+
+    每位都带 **saved_n**(我实际存过他几条作品)—— 那是判断值不值得跟的
+    唯一实证信号。实测关注的 97 位里有 55 位我一条都没存过。
+    """
+    store.init_db()
+    items = await asyncio.to_thread(store.list_following, False)
+    if role:
+        items = [u for u in items if u.get("role") == role]
+    return {
+        "items": [{k: u[k] for k in
+                   ("sec_user_id", "nickname", "signature", "aweme_count",
+                    "follower_count", "saved_n", "saved_with_summary",
+                    "role", "crawled_n") if k in u} for u in items],
+        "total": len(items),
+        "n_info": sum(1 for u in items if u.get("role") == "info"),
+        "n_rival": sum(1 for u in items if u.get("role") == "rival"),
+    }
+
+
+async def set_creator_role(sec_user_ids: list[str],
+                           role: str | None = None) -> dict[str, Any]:
+    """给博主分类,并开始每天跟他。
+
+    role:
+      info   信息价值主播 —— 要的是他**讲了什么**,进知识库能检索能问答
+      rival  竞品主播     —— 要的是他的**打法**,选题/时长/节奏/互动和上期对比
+      null   不跟了
+
+    分类之后 `daily_round` 才会抓他。**别替用户决定谁是竞品** ——
+    那是业务判断,不是数据能推出来的;用户没说就先问。
+    """
+    store.init_db()
+    if role not in (None, "info", "rival"):
+        return {"error": f"role 只能是 info / rival / null,收到 {role!r}"}
+    if not sec_user_ids:
+        return {"error": "要给 sec_user_ids(数组),用 creators 拿 id"}
+    try:
+        n = await asyncio.to_thread(store.set_following_role, sec_user_ids, role)
+    except ValueError as e:
+        return {"error": str(e)}
+    return {"updated": n, "role": role}
+
+
+async def daily_digest(days: int = 3) -> dict[str, Any]:
+    """**他们这几天讲了什么** —— 这是回答「我关注的人最近有什么新内容」的主入口。
+
+    只读本地库,不联网。要先抓新作品的话用 `collect_recent`。
+
+    返回两块:
+      info   信息价值主播的新内容。每条带 **content_src**:
+               summary = 抖音自己生成的内容总结
+               asr     = 我本地转写的逐字稿
+               desc    = **只有作者文案,不是视频内容** —— 这条其实什么都没说,
+                         别拿它当内容回答用户,要说「这条还没转写」
+      rival  竞品主播的打法,每个数字都配了上一个同长度周期的对比
+    """
+    from knowledge import digest as kd
+    store.init_db()
+    days = max(1, min(days, 90))
+    ov, info, rival = await asyncio.gather(
+        asyncio.to_thread(kd.overview, days),
+        asyncio.to_thread(kd.info_digest, days),
+        asyncio.to_thread(kd.rival_report, days),
+    )
+    return {"overview": ov, "info": info, "rival": rival}
+
+
+async def collect_recent(days: int = 3, role: str | None = None) -> dict[str, Any]:
+    """抓已分类博主最近 N 天的新作品。**这是日常该用的采集**。
+
+    每人翻一页左右(他们每天发 0.1–0.5 条),十来位约一分半,几乎不会触发限流。
+    对比:全量爬他们的历史要 10 小时,而且实测第 20 页就被 403。
+    """
+    store.init_db()
+    try:
+        return await service.daily_round(days=max(1, min(days, 30)), role=role)
+    except service.AlreadyCollecting as e:
+        return {"error": str(e)}
+    except RuntimeError as e:      # f2 加载不了(网络)
+        return {"error": str(e)}
+
+
+async def transcribe(limit: int = 10, scope: str = "following") -> dict[str, Any]:
+    """把没有内容的作品转成文字(本地 Whisper,不联网问抖音)。
+
+    为什么需要:**抖音的响应里没有字幕文本**(逐字段翻过两遍,只有一个
+    is_subtitled 标记),而平台自己的内容总结只覆盖三分之一 ——
+    剩下的在库里只有营销文案。转写是补齐它们的唯一办法。
+
+    转完会自动重建片段并可被检索。首次调用要下模型(1.6GB),会比较久。
+    """
+    from knowledge import asr as ka
+    store.init_db()
+    try:
+        return await asyncio.to_thread(
+            ka.run_batch, max(1, min(limit, 100)), scope, None, None)
+    except RuntimeError as e:
+        return {"error": str(e)}
+
+
 async def library_stats(top_tags: int = 20) -> dict[str, Any]:
     """知识库概览:总条数、各来源分布、作者数、官方分类、热门话题标签,
     以及各字段的实际覆盖率。
@@ -453,7 +557,9 @@ async def auth_status() -> dict[str, Any]:
     web_up = False
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=2) as c:
+        # 探本机服务也要绕代理:NO_PROXY 里虽然有 127.0.0.1,但不是每个环境
+        # 都配了,漏配时这个 2 秒探测会走代理然后超时,把「服务没起」误报出来。
+        async with httpx.AsyncClient(timeout=2, trust_env=False) as c:
             web_up = (await c.get("http://127.0.0.1:8000/api/health")).status_code == 200
     except Exception:
         pass
@@ -557,6 +663,92 @@ _TOOLS: list[Tool] = [
                 },
             },
             "required": ["query"],
+        },
+    ),
+    Tool(
+        name="daily_digest",
+        description=(
+            "**我关注的人这几天讲了什么** —— 回答「最近有什么新内容」「竞品在做什么」"
+            "的主入口。只读本地,不联网。"
+            "返回 info(信息价值主播的新内容)和 rival(竞品的打法,每个数字都配"
+            "上一周期对比)。"
+            "⚠️ info 里每条带 content_src:summary=抖音总结 · asr=本地转写的逐字稿 · "
+            "**desc=只有作者文案,不是视频内容** —— desc 的那条其实什么都没说,"
+            "不要拿它当内容回答,要说「这条还没转写」。"
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "days": {"type": "integer", "default": 3, "minimum": 1, "maximum": 90,
+                         "description": "看最近几天,默认 3"},
+            },
+        },
+    ),
+    Tool(
+        name="creators",
+        description=(
+            "我关注的人 + 分类。每位带 saved_n(我实际存过他几条作品)—— "
+            "那是判断值不值得跟的唯一实证信号(实测关注的 97 位里 55 位一条都没存过)。"
+            "要给人分类前先用这个拿 sec_user_id。"
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "role": {"type": "string", "enum": ["info", "rival"],
+                         "description": "只看某一类;不传=全部"},
+            },
+        },
+    ),
+    Tool(
+        name="set_creator_role",
+        description=(
+            "给博主分类并开始每天跟他。info=信息价值(要他讲的内容,进知识库)· "
+            "rival=竞品(要他的打法,和上期对比)· null=不跟了。"
+            "⚠️ **谁是竞品是业务判断,数据推不出来** —— 用户没明说就先问,别替他决定。"
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "sec_user_ids": {"type": "array", "items": {"type": "string"},
+                                 "description": "从 creators 拿"},
+                "role": {"type": ["string", "null"], "enum": ["info", "rival", None],
+                         "description": "info / rival / null(取消)"},
+            },
+            "required": ["sec_user_ids"],
+        },
+    ),
+    Tool(
+        name="collect_recent",
+        description=(
+            "抓已分类博主最近 N 天的新作品。**这是日常该用的采集** —— "
+            "每人翻一页左右,十来位约一分半,几乎不触发限流。"
+            "(对比:全量爬他们的历史要 10 小时,实测第 20 页就被 403。)"
+            "抓完用 daily_digest 看结果。"
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "days": {"type": "integer", "default": 3, "minimum": 1, "maximum": 30},
+                "role": {"type": "string", "enum": ["info", "rival"],
+                         "description": "只抓某一类;不传=两类都抓"},
+            },
+        },
+    ),
+    Tool(
+        name="transcribe",
+        description=(
+            "把没有内容的作品转成文字(本地 Whisper,不联网问抖音)。"
+            "抖音的响应里**没有字幕文本**,而它自己的内容总结只覆盖三分之一 —— "
+            "剩下的在库里只有营销文案,转写是补齐的唯一办法。"
+            "转完自动进检索。首次要下模型(1.6GB),会比较久。"
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "default": 10, "minimum": 1, "maximum": 100},
+                "scope": {"type": "string", "enum": ["mine", "following", "all"],
+                          "default": "following"},
+            },
         },
     ),
     Tool(
@@ -671,6 +863,11 @@ _HANDLERS = {
     "search_videos": lambda a: search_videos(**a),
     "library_stats": lambda a: library_stats(**a),
     "search_library": lambda a: search_library(**a),
+    "daily_digest": lambda a: daily_digest(**a),
+    "creators": lambda a: creators(**a),
+    "set_creator_role": lambda a: set_creator_role(**a),
+    "collect_recent": lambda a: collect_recent(**a),
+    "transcribe": lambda a: transcribe(**a),
     "ask_library": lambda a: ask_library(**a),
     "video_raw": lambda a: video_raw(**a),
     "collect_status": lambda a: collect_status(),

@@ -14,8 +14,33 @@ from __future__ import annotations
 import json
 from typing import Any, AsyncIterator
 
-from f2.apps.douyin.handler import DouyinHandler
-from f2.apps.douyin.utils import ClientConfManager, SecUserIdFetcher
+# ⚠️ **不能在模块顶层 import f2。**
+# f2 在被 import 时就会发网络请求:`f2/apps/douyin/model.py` 的类定义体里
+# 直接写了 `msToken: str = TokenManager.gen_real_msToken()`,那是 import
+# 期间执行的。网络一抖(实测 mssdk.bytedance.com 报 SSL EOF)整个 import
+# 就抛 APIConnectionError —— 于是**连不需要 f2 的功能也一起瘫**:
+# 网页打不开、检索用不了、简报和 ASR 全废,而它们纯本地、和抖音毫无关系。
+#
+# 所以延迟到真正要采集时才 import。代价是每次调用多一次模块查表(可忽略),
+# 换来的是「离线也能用知识库」。
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:      # 只给类型检查器看,运行时不执行
+    from f2.apps.douyin.handler import DouyinHandler
+
+
+def _f2():
+    """按需拿 f2 的三个符号。网络不通时给一句人能看懂的话,而不是一堆堆栈。"""
+    try:
+        from f2.apps.douyin.handler import DouyinHandler
+        from f2.apps.douyin.utils import ClientConfManager, SecUserIdFetcher
+    except Exception as e:      # noqa: BLE001 —— f2 import 期就可能抛网络异常
+        raise RuntimeError(
+            f"f2 加载失败({type(e).__name__})。f2 在 import 时会请求 "
+            "mssdk.bytedance.com 取 msToken,网络不通就会失败。\n"
+            "只影响「采集」,本地的检索/简报/分析照常可用。"
+        ) from e
+    return DouyinHandler, ClientConfManager, SecUserIdFetcher
 
 from config import settings
 
@@ -44,6 +69,7 @@ def build_kwargs() -> dict[str, Any]:
             "DOUYIN_COOKIE 未配置。请复制 .env.example 为 .env 并填入你自己的 cookie。"
         )
 
+    _, ClientConfManager, _sec = _f2()
     conf = ClientConfManager.client()
     headers = dict(conf.get("headers") or {})
 
@@ -60,13 +86,14 @@ def build_kwargs() -> dict[str, Any]:
     }
 
 
-def _make_handler() -> DouyinHandler:
+def _make_handler() -> "DouyinHandler":
     """建 handler,并关掉 f2 自带的 Bark 推送。
 
     f2 每次采集结束会往 https://api.day.app/ 发一条通知(它自带的 conf.yaml
     默认开着)。对本项目是纯负担:多一次不必要的外部请求 + 失败时刷一屏 ERROR。
     不去改 f2 的配置文件 —— 升级依赖就没了,改实例属性才稳。
     """
+    DouyinHandler, _, _ = _f2()
     handler = DouyinHandler(build_kwargs())
     handler.enable_bark = False
     return handler
@@ -484,4 +511,5 @@ async def collect_folder(
 
 async def resolve_sec_user_id(profile_url: str) -> str:
     """从主页 URL 解析 sec_user_id(点赞采集需要)。"""
+    _, _, SecUserIdFetcher = _f2()
     return await SecUserIdFetcher.get_sec_user_id(profile_url)

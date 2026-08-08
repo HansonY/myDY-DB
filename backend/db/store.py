@@ -163,6 +163,7 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
             "content_state": "TEXT NOT NULL DEFAULT 'unknown'",
             "saved_at": "TEXT", "saved_exact": "INTEGER DEFAULT 0",
         },
+        "following": {"role": "TEXT"},
         "collect_state": {
             "platform_total": "INTEGER",
             "platform_total_at": "TEXT",
@@ -172,6 +173,8 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
     }
     for table, cols in wanted.items():
         have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if not have:
+            continue        # 表还不存在(新库)—— 建表脚本会带上全部列
         for col, decl in cols.items():
             if col not in have:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
@@ -208,8 +211,13 @@ def init_db() -> None:
     """建表 + 迁移(幂等)。"""
     with connect() as conn:
         _drop_stale_indexes(conn)      # 必须在 executescript 之前
-        conn.executescript(SCHEMA_FILE.read_text(encoding="utf-8"))
+        # 补列也必须**先**跑一次:schema 里可能有建在新列上的索引
+        # (`CREATE INDEX idx_following_role ON following(role)`),而老库那张表
+        # 还没有那一列 —— executescript 会直接抛 `no such column: role`。
+        # 表不存在时这个函数会跳过,所以新库照常由建表脚本一次建全。
         _add_missing_columns(conn)
+        conn.executescript(SCHEMA_FILE.read_text(encoding="utf-8"))
+        _add_missing_columns(conn)     # 再跑一次:这一轮才轮到新建的表
         # 老库迁移:从已废弃的 has_ai_summary 布尔推出三态。
         # 只在那一列还存在时跑(新库根本没有它),幂等,只补还是默认值的行。
         # digg_count 是「有完整响应」的判据 —— 早期那 31 个字段里没有 statistics。
@@ -907,6 +915,29 @@ def list_following(only_crawl: bool = False) -> list[dict[str, Any]]:
         return [dict(r) for r in conn.execute(sql)]
 
 
+ROLE_INFO, ROLE_RIVAL = "info", "rival"
+ROLES = (ROLE_INFO, ROLE_RIVAL)
+
+
+def set_following_role(sec_user_ids: Iterable[str], role: str | None) -> int:
+    """给博主打标:info=信息价值 / rival=竞品 / None=取消。
+
+    打标同时打开每日抓取开关 —— 分类的意思就是「我要跟这个人」,
+    还要再点一次开关是多余步骤。取消分类则关掉。
+    """
+    ids = list(sec_user_ids)
+    if not ids:
+        return 0
+    if role is not None and role not in ROLES:
+        raise ValueError(f"role 只能是 {ROLES} 或 None,收到 {role!r}")
+    with connect() as conn:
+        conn.executemany(
+            "UPDATE following SET role=?, crawl=? WHERE sec_user_id=?",
+            [(role, 1 if role else 0, i) for i in ids])
+        conn.commit()
+        return conn.total_changes
+
+
 def set_following_crawl(sec_user_ids: Iterable[str], crawl: bool) -> int:
     """打开/关闭若干人的深挖开关。关掉时顺手清掉断点,下次开就从最新重走。"""
     ids = list(sec_user_ids)
@@ -980,6 +1011,48 @@ def save_extraction(aweme_id: str, category: str, fields: Any,
              json.dumps(fields, ensure_ascii=False, default=str),
              model, tier, _now()),
         )
+
+
+def get_transcript(aweme_id: str, kind: str) -> str | None:
+    with connect() as conn:
+        r = conn.execute(
+            "SELECT content FROM transcripts WHERE aweme_id=? AND kind=?",
+            (aweme_id, kind)).fetchone()
+    return r["content"] if r else None
+
+
+def video_tags(aweme_id: str) -> list[str]:
+    with connect() as conn:
+        return [r["tag"] for r in conn.execute(
+            "SELECT tag FROM tags WHERE aweme_id=? ORDER BY tag", (aweme_id,))]
+
+
+def content_bundle(aweme_id: str) -> dict[str, Any]:
+    """把一条作品的全部文本层凑成 `fragments.build()` 要的形状。
+
+    采集时那份 content 来自 `_content_from_raw()`;**事后**补的东西
+    (逐字稿、以后的知识卡)只在库里,raw 里没有。所以重建片段时
+    必须从库里重新凑一份,否则新转的逐字稿进不了检索。
+    """
+    out: dict[str, Any] = {}
+    with connect() as conn:
+        for r in conn.execute(
+                "SELECT kind, content FROM transcripts WHERE aweme_id=?", (aweme_id,)):
+            if r["kind"] == "summary":
+                out["summary"] = r["content"]
+            elif r["kind"] == "asr":
+                out["asr"] = r["content"]
+            elif r["kind"] == "queries":
+                out["queries"] = [x for x in r["content"].split(" / ") if x]
+        ex = conn.execute(
+            "SELECT fields_json FROM extractions WHERE aweme_id=? AND category='chapters'",
+            (aweme_id,)).fetchone()
+    if ex and ex["fields_json"]:
+        try:
+            out["chapters"] = json.loads(ex["fields_json"])
+        except ValueError:
+            pass
+    return out
 
 
 # ── 游标(断点续跑)─────────────────────────────────────────

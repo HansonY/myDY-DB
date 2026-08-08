@@ -141,7 +141,13 @@ CREATE TABLE IF NOT EXISTS following (
     aweme_count   INTEGER,                  -- 他一共发了多少(决定爬他要多久)
     follower_count INTEGER,
     rank_recent   INTEGER,                  -- 在「按最近关注」列表里的位次,越小越新关注
-    crawl         INTEGER NOT NULL DEFAULT 0,   -- 1=深挖他的作品
+    crawl         INTEGER NOT NULL DEFAULT 0,   -- 1=每天抓他的新作品
+    -- 这个人对我意味着什么。两类的用法完全不同,不能混:
+    --   info   信息价值主播 —— 我要的是他讲的**内容**(进知识库、能被检索问答)
+    --   rival  竞品主播     —— 我要的是他的**打法**(选题/时长/发布节奏/互动效果),
+    --                        内容本身次要,重点是可比的统计
+    -- NULL = 还没分类,不参与每日抓取
+    role          TEXT,
     crawl_cursor  TEXT,                     -- 深挖到哪了(断点续跑)
     crawl_done_at TEXT,                     -- 上次走完全程的时间
     crawled_n     INTEGER DEFAULT 0,        -- 已入库多少条他的作品
@@ -149,6 +155,7 @@ CREATE TABLE IF NOT EXISTS following (
 );
 
 CREATE INDEX IF NOT EXISTS idx_following_crawl ON following(crawl);
+CREATE INDEX IF NOT EXISTS idx_following_role  ON following(role);
 
 -- ── 文本层(同一作品可有多个文本来源)───────────────────────
 --   desc     作者写的文案。**不是视频内容**,常是营销话术

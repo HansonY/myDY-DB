@@ -1,0 +1,313 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>他们讲了什么 · Douyin-DB</title>
+<style>
+:root{
+  --bg:#0b0d11; --surface:#11141a; --surface2:#161a21; --line:#20252e;
+  --fg:#e7ebf0; --dim:#78808c; --dim2:#565e69;
+  --accent:#5b9dd9; --accent-dim:rgba(91,157,217,.13); --accent-line:rgba(91,157,217,.3);
+  --warn:#c9a153; --warn-dim:rgba(201,161,83,.1);
+  --ok:#6b9e73;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono","JetBrains Mono",Menlo,monospace;
+  --ease:cubic-bezier(.16,1,.3,1);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+  font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB",sans-serif;
+  -webkit-font-smoothing:antialiased}
+.wrap{max-width:1000px;margin:0 auto;padding:26px 20px 90px}
+a{color:var(--accent);text-decoration:none}
+
+.top{display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap;
+  padding-bottom:16px;border-bottom:1px solid var(--line);margin-bottom:20px}
+h1{margin:0;font-size:21px;font-weight:600;letter-spacing:-.2px}
+.sub{color:var(--dim);font-size:13px;display:block;margin-top:3px}
+.navs{margin-left:auto;display:flex;gap:8px}
+.navs a{font-size:13px;color:var(--dim);border:1px solid var(--line);
+  border-radius:7px;padding:6px 12px;transition:.15s var(--ease)}
+.navs a:hover{color:var(--fg);border-color:var(--accent-line)}
+
+.bar{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-bottom:16px}
+.btn{background:var(--surface2);color:var(--fg);border:1px solid var(--line);
+  border-radius:7px;padding:7px 13px;font-size:13px;cursor:pointer;
+  transition:.15s var(--ease);font-family:inherit}
+.btn:hover:not(:disabled){border-color:var(--accent-line);background:#1b2029}
+.btn:disabled{opacity:.4;cursor:default}
+.btn.go{background:var(--accent-dim);border-color:var(--accent-line);color:#a9cdf0}
+select{background:var(--surface2);color:var(--fg);border:1px solid var(--line);
+  border-radius:7px;padding:7px 10px;font-size:13px;font-family:inherit}
+.spacer{flex:1}
+.hint{color:var(--dim2);font-size:12px}
+
+/* 覆盖率条:多少条真有内容 */
+.cov{border:1px solid var(--line);border-radius:9px;padding:13px 15px;
+  background:var(--surface);margin-bottom:20px}
+.cov h3{margin:0 0 9px;font-size:13px;font-weight:600}
+.covbar{display:flex;height:9px;border-radius:5px;overflow:hidden;background:#0d1015}
+.covbar i{display:block;height:100%}
+.covleg{display:flex;gap:16px;flex-wrap:wrap;margin-top:9px;font-size:12px;color:var(--dim)}
+.covleg b{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px}
+.covnote{color:var(--dim2);font-size:12px;margin-top:9px;line-height:1.6}
+
+/* 分区 */
+.sec{margin:30px 0 12px;display:flex;align-items:baseline;gap:10px}
+.sec h2{margin:0;font-size:15px;font-weight:600}
+.sec em{font-style:normal;color:var(--dim);font-size:12.5px}
+
+.who{border:1px solid var(--line);border-radius:9px;background:var(--surface);
+  margin-bottom:12px;overflow:hidden}
+.whohead{display:flex;align-items:center;gap:11px;padding:11px 15px;
+  border-bottom:1px solid var(--line);background:var(--surface2)}
+.whohead b{font-size:14px;font-weight:600}
+.whohead span{color:var(--dim2);font-size:12px}
+.whohead .r{margin-left:auto;font:12px/1 var(--mono);color:var(--dim)}
+
+.item{padding:13px 15px;border-top:1px solid var(--line)}
+.who .item:first-of-type{border-top:0}
+.imeta{display:flex;align-items:center;gap:9px;flex-wrap:wrap;
+  font-size:11.5px;color:var(--dim2);margin-bottom:6px}
+.src{border-radius:4px;padding:2px 7px;font-size:11px;font-weight:500}
+.src.summary{background:var(--accent-dim);color:#a9cdf0;border:1px solid var(--accent-line)}
+.src.asr{background:rgba(107,158,115,.13);color:#8fc296;border:1px solid rgba(107,158,115,.3)}
+.src.desc{background:var(--warn-dim);color:var(--warn);border:1px solid rgba(201,161,83,.3)}
+.itxt{font-size:14px;line-height:1.7}
+.itxt.thin{color:var(--dim);font-style:italic}
+.more{background:none;border:0;color:var(--accent);cursor:pointer;
+  font-size:12px;padding:2px 0;font-family:inherit}
+.tags{margin-top:6px;font-size:11.5px;color:var(--dim2)}
+
+/* 竞品表 */
+.rival{border:1px solid var(--line);border-radius:9px;background:var(--surface);
+  margin-bottom:12px;padding:13px 15px}
+.rhead{display:flex;align-items:baseline;gap:10px;margin-bottom:11px}
+.rhead b{font-size:14px}
+.rhead span{color:var(--dim2);font-size:12px}
+.mets{display:grid;grid-template-columns:repeat(auto-fit,minmax(112px,1fr));gap:10px}
+.met{background:#0d1015;border:1px solid var(--line);border-radius:7px;padding:9px 11px}
+.met b{display:block;font:600 17px/1.2 var(--mono);letter-spacing:-.3px}
+.met span{color:var(--dim2);font-size:11px;display:block;margin-top:2px}
+.met i{font-style:normal;font:11.5px/1 var(--mono);margin-left:5px}
+.up{color:var(--ok)} .down{color:var(--warn)} .flat{color:var(--dim2)}
+.topics{margin-top:11px;font-size:12.5px;color:var(--dim)}
+.topics b{color:var(--fg);font-weight:500}
+.best{margin-top:10px;padding:9px 11px;background:#0d1015;border-radius:7px;
+  border-left:2px solid var(--accent-line);font-size:13px}
+.best span{color:var(--dim2);font-size:11.5px;display:block;margin-bottom:3px}
+
+.empty{padding:36px;text-align:center;color:var(--dim);
+  border:1px dashed var(--line);border-radius:9px}
+.empty b{display:block;color:var(--fg);margin-bottom:6px;font-weight:600}
+@media(max-width:640px){
+  .whohead{flex-wrap:wrap}
+  .whohead .r{margin-left:0;width:100%}
+}
+</style>
+
+<div class="wrap">
+  <div class="top">
+    <div>
+      <h1>他们讲了什么</h1>
+      <span class="sub">信息价值主播的新内容 · 竞品主播的打法</span>
+    </div>
+    <div class="navs">
+      <a href="/following.html">选人 →</a>
+      <a href="/insight.html">认识自己 →</a>
+      <a href="/">浏览 →</a>
+    </div>
+  </div>
+
+  <div class="bar">
+    <select id="days">
+      <option value="3" selected>最近 3 天</option>
+      <option value="7">最近 7 天</option>
+      <option value="14">最近 14 天</option>
+      <option value="30">最近 30 天</option>
+      <option value="90">最近 90 天</option>
+    </select>
+    <button class="btn go" id="fetch">抓新作品</button>
+    <button class="btn" id="asr">转写没内容的</button>
+    <span class="spacer"></span>
+    <span class="hint" id="msg"></span>
+  </div>
+
+  <div id="body"><div class="empty">读取中…</div></div>
+</div>
+
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const esc = s => String(s == null ? '' : s)
+  .replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+const fmt = n => n == null ? '—' : Number(n).toLocaleString('en-US');
+const mmss = ms => { const s = Math.round((ms||0)/1000);
+  return s >= 60 ? `${Math.floor(s/60)}分${String(s%60).padStart(2,'0')}秒` : `${s}秒`; };
+
+/* 内容来源的可信度是刚性区别,不能只靠颜色 —— 文字也说清楚 */
+const SRC = {
+  summary: {cls:'summary', label:'抖音总结'},
+  asr:     {cls:'asr',     label:'我转的逐字稿'},
+  desc:    {cls:'desc',    label:'只有文案'},
+};
+
+let DATA = null;
+
+function delta(n, suffix) {
+  if (!n) return `<i class="flat">±0</i>`;
+  return `<i class="${n > 0 ? 'up' : 'down'}">${n > 0 ? '+' : ''}${fmt(n)}${suffix||''}</i>`;
+}
+
+function itemHtml(i) {
+  const s = SRC[i.content_src] || SRC.desc;
+  const thin = i.content_src === 'desc';
+  const text = i.content || '(没有任何文字)';
+  const long = text.length > 200;
+  return `<div class="item">
+    <div class="imeta">
+      <span class="src ${s.cls}">${s.label}</span>
+      <span>${esc((i.create_time||'').slice(0,10))}</span>
+      <span>${mmss(i.video_duration)}</span>
+      <span>赞 ${fmt(i.digg_count)}</span>
+      ${i.cat1 ? `<span>${esc(i.cat1)}</span>` : ''}
+      ${i.share_url ? `<a href="${esc(i.share_url)}" target="_blank" rel="noopener">打开 ↗</a>` : ''}
+    </div>
+    <div class="itxt ${thin ? 'thin' : ''}" data-full="${esc(text)}">${
+      esc(long ? text.slice(0,200) + '…' : text)}</div>
+    ${long ? '<button class="more">展开全文</button>' : ''}
+    ${thin ? '<div class="tags">↑ 这是作者写的文案,不是视频内容 —— 点上面「转写没内容的」才能知道他讲了什么</div>'
+           : (i.tags||[]).length ? `<div class="tags">${i.tags.slice(0,6).map(t=>'#'+esc(t)).join(' ')}</div>` : ''}
+  </div>`;
+}
+
+function render() {
+  const d = DATA, ov = d.overview, info = d.info, rival = d.rival;
+  const total = info.n_items;
+  const bySrc = {summary:0, asr:0, desc:0};
+  info.creators.forEach(c => c.items.forEach(i => bySrc[i.content_src]++));
+
+  const pct = n => total ? (n * 100 / total) : 0;
+  const cov = total ? `
+    <div class="cov">
+      <h3>这 ${ov.days} 天的 ${total} 条里,有多少条真能知道讲了什么</h3>
+      <div class="covbar">
+        <i style="width:${pct(bySrc.summary)}%;background:#5b9dd9"></i>
+        <i style="width:${pct(bySrc.asr)}%;background:#6b9e73"></i>
+        <i style="width:${pct(bySrc.desc)}%;background:#c9a153"></i>
+      </div>
+      <div class="covleg">
+        <span><b style="background:#5b9dd9"></b>抖音总结 ${bySrc.summary}</span>
+        <span><b style="background:#6b9e73"></b>我转的逐字稿 ${bySrc.asr}</span>
+        <span><b style="background:#c9a153"></b>只有文案 ${bySrc.desc}</span>
+      </div>
+      <div class="covnote">抖音只给约三分之一的作品生成内容总结,剩下的在库里只有营销文案 ——
+        看起来有字,其实什么都没说。转写能把它们补上。</div>
+    </div>` : '';
+
+  const infoHtml = info.creators.length ? info.creators.map(c => `
+    <div class="who">
+      <div class="whohead">
+        <b>${esc(c.nickname)}</b>
+        <span>${c.n} 条新作品</span>
+        <span class="r">真有内容 ${c.with_content}/${c.n}</span>
+      </div>
+      ${c.items.map(itemHtml).join('')}
+    </div>`).join('') : `<div class="empty"><b>这 ${ov.days} 天没有新作品</b>
+      ${ov.n_info ? '已跟 ' + ov.n_info + ' 位,他们最近没发' : '还没有标记「信息价值」的博主 —— 去<a href="/following.html">选人</a>'}</div>`;
+
+  const rivalHtml = rival.creators.length ? rival.creators.map(c => `
+    <div class="rival">
+      <div class="rhead"><b>${esc(c.nickname)}</b>
+        <span>粉丝 ${fmt(c.follower_count)} · 共发 ${fmt(c.aweme_count)}</span></div>
+      <div class="mets">
+        <div class="met"><b>${c.now.n}${delta(c.delta.n, ' 条')}</b><span>发布条数</span></div>
+        <div class="met"><b>${c.now.avg_sec}s${delta(c.delta.avg_sec, 's')}</b><span>平均时长</span></div>
+        <div class="met"><b>${fmt(c.now.avg_digg)}${delta(c.delta.avg_digg)}</b><span>平均点赞</span></div>
+        <div class="met"><b>${fmt(c.now.avg_comment)}${delta(c.delta.avg_comment)}</b><span>平均评论</span></div>
+      </div>
+      ${c.topics.length ? `<div class="topics">选题:${
+        c.topics.map(t => `<b>${esc(t.cat)}</b> ${t.n}`).join(' · ')}</div>` : ''}
+      ${c.best ? `<div class="best"><span>这期最好的一条 · 赞 ${fmt(c.best.digg_count)}</span>
+        ${esc((c.best.item_title || c.best.description || '').slice(0,90))}
+        ${c.best.share_url ? `<a href="${esc(c.best.share_url)}" target="_blank" rel="noopener">↗</a>` : ''}</div>` : ''}
+    </div>`).join('') : `<div class="empty"><b>还没有标记「竞品」的博主</b>
+      去<a href="/following.html">选人</a>,把要盯的对手标成竞品</div>`;
+
+  $('#body').innerHTML = cov
+    + `<div class="sec"><h2>信息价值主播</h2><em>${ov.n_info} 位 · 他们讲了什么${
+        info.silent.length ? ' · ' + info.silent.length + ' 位这期没发' : ''}</em></div>`
+    + infoHtml
+    + `<div class="sec"><h2>竞品主播</h2><em>${ov.n_rival} 位 · 每个数字都对比上一个同长度周期</em></div>`
+    + rivalHtml;
+}
+
+async function api(url, opt) {
+  const r = await fetch(url, opt);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const d = j.detail;
+    throw new Error(Array.isArray(d) ? d.map(x => x.msg || JSON.stringify(x)).join('; ')
+      : typeof d === 'string' ? d : JSON.stringify(j));
+  }
+  return j;
+}
+function say(t, warn) {
+  $('#msg').textContent = t || '';
+  $('#msg').style.color = warn ? 'var(--warn)' : 'var(--dim2)';
+}
+
+async function load() {
+  try {
+    DATA = await api('/api/digest?days=' + $('#days').value);
+    render();
+    const n = DATA.overview.need_asr;
+    $('#asr').textContent = n ? `转写没内容的 ${n} 条` : '转写没内容的';
+    $('#asr').disabled = !n;
+  } catch (e) {
+    $('#body').innerHTML = `<div class="empty"><b>读取失败</b>${esc(e.message)}</div>`;
+  }
+}
+
+$('#days').addEventListener('change', load);
+
+$('#body').addEventListener('click', ev => {
+  const b = ev.target.closest('.more');
+  if (!b) return;
+  const t = b.previousElementSibling;
+  const full = t.dataset.full;
+  if (b.textContent === '展开全文') { t.textContent = full; b.textContent = '收起'; }
+  else { t.textContent = full.slice(0, 200) + '…'; b.textContent = '展开全文'; }
+});
+
+$('#fetch').addEventListener('click', async () => {
+  const d = $('#days').value;
+  const b = $('#fetch');
+  b.disabled = true; b.textContent = '抓取中…';
+  say(`在抓每位博主最近 ${d} 天的新作品。每人翻 1 页左右,很快。`);
+  try {
+    const r = await api(`/api/digest/refresh?days=${Math.min(d, 30)}`, {method: 'POST'});
+    say(r.note ? r.note
+      : r.stopped_on_403 ? `被限流打断,已入库 ${r.new} 条新作品。过一阵再点。`
+      : `抓完了:${r.creators.length} 位 · 发现 ${r.found} 条 · 新增 ${r.new} 条`,
+      !!r.stopped_on_403);
+    await load();
+  } catch (e) { say(e.message, true); }
+  b.disabled = false; b.textContent = '抓新作品';
+});
+
+$('#asr').addEventListener('click', async () => {
+  const n = DATA ? DATA.overview.need_asr : 0;
+  if (!confirm(`要把 ${n} 条没有内容的作品转成文字。\n\n`
+    + '全部本地跑,不联网问抖音。首次会下模型(1.6GB),之后每条几秒。\n\n继续?')) return;
+  const b = $('#asr');
+  b.disabled = true; b.textContent = '转写中…';
+  say('在本地转写。可以关掉这页,结果会存进库里。');
+  try {
+    const r = await api('/api/asr/run?limit=20&scope=all', {method: 'POST'});
+    say(`转了 ${r.attempted} 条,成功 ${r.ok} 条,共 ${fmt(r.chars)} 字,用时 ${r.seconds}s`
+      + (r.failed.length ? ` · ${r.failed.length} 条失败` : ''), r.failed.length > 0);
+    await load();
+  } catch (e) { say(e.message, true); }
+  b.disabled = false;
+});
+
+load();
+</script>
