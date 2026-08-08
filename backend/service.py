@@ -540,7 +540,7 @@ async def crawl_recent(
     hard_page_cap: int = 5,
     on_progress: Callable[[dict], None] | None = None,
 ) -> dict[str, Any]:
-    """抓**一位**博主最近 N 天的新作品。这是日常该用的,不是 `crawl_creator`。
+    """抓**一位**博主最近 N 天的新作品。
 
     主页按发布时间倒序,所以从第一页往下翻,**碰到第一条超过 N 天的就停**。
     实测这些博主每天发 0.1–0.5 条,一页 20 条 → 绝大多数人第一页就够。
@@ -607,8 +607,7 @@ async def daily_round(
     """每日一轮:把所有已分类的博主的最近 N 天新作品抓回来。
 
     `role=None` 两类都抓;传 'info' 或 'rival' 就只抓那一类。
-    和 `crawl_followed` 一样,**一个人 403 就整体停手** —— 但这里几乎不会发生,
-    每人只翻 1 页。
+    **一个人 403 就整体停手** —— 但这里几乎不会发生,每人只翻 1 页。
     """
     store.init_db()
     picked = await asyncio.to_thread(store.list_following, True)
@@ -649,91 +648,12 @@ async def daily_round(
             "stopped_on_403": stopped}
 
 
-async def crawl_creator(
-    sec_user_id: str,
-    max_items: int | None = None,
-    max_pages: int = 0,
-    on_progress: Callable[[dict], None] | None = None,
-) -> dict[str, Any]:
-    """深挖**一位**关注者的主页作品。
-
-    每人一套独立游标 `following:<sec_uid>` —— 直接复用 `_run(cursor_key=...)`,
-    那套断点续跑是为回补写的、已经验证过:被 403 打断后下轮从断点接着走,
-    而不是把前几页再刷一遍。走完全程自动清零,下轮从最新重来(顺带发现新作品)。
-
-    注意 scope 传 "following",所以 `_stamp_saved_at` 不会给这些作品打收藏时间
-    —— 我没收藏过它们,「我什么时候存的」对它们没有意义。
-    """
-    try:
-        out = await _run(
-            "following",
-            lambda cur: douyin.collect_creator_posts(
-                sec_user_id=sec_user_id,
-                max_items=max_items if max_items is not None else settings.max_items,
-                start_cursor=cur,
-            ),
-            resume=False,           # 从最新开始,靠 cursor_key 记进度
-            on_progress=on_progress,
-            stop_after_known_pages=0,
-            max_pages=max_pages,
-            persist_cursor=False,   # 绝不碰 scope 级游标
-            cursor_key=f"following:{sec_user_id}",
-        )
-    except Exception:
-        # 被 403 掐断时也要把进度落到展示层:已采的页都进库了,
-        # 断点也在游标表里,不刷这一行的话页面上会显示成「还没开始」。
-        await asyncio.to_thread(store.save_following_progress, sec_user_id, False)
-        raise
-    done = out.get("exhausted", False)
-    await asyncio.to_thread(store.save_following_progress, sec_user_id, done)
-    return {**out, "sec_user_id": sec_user_id, "walked_all": done}
-
-
-async def crawl_followed(
-    max_pages_each: int = 0,
-    on_creator: Callable[[dict], None] | None = None,
-    on_progress: Callable[[dict], None] | None = None,
-) -> dict[str, Any]:
-    """把所有 `crawl=1` 的关注者挖一遍。
-
-    **一个人 403 就整体停手**,不接着试下一个:403 说明这个账号此刻已经被盯上了,
-    继续打只会把冷却拉长。已经采到的都已落库(逐页写),下次接着走。
-    """
-    store.init_db()
-    picked = await asyncio.to_thread(store.list_following, True)
-    if not picked:
-        return {"creators": [], "stopped_on_403": False,
-                "note": "没有人被标记深挖 —— 先在关注页勾选"}
-
-    done: list[dict[str, Any]] = []
-    stopped = False
-    for u in picked:
-        try:
-            r = await crawl_creator(u["sec_user_id"], max_pages=max_pages_each,
-                                   on_progress=on_progress)
-            item = {"nickname": u["nickname"], "inserted": r.get("inserted", 0),
-                    "pages": r.get("pages", 0), "walked_all": r.get("walked_all"),
-                    "status": "ok"}
-        except Exception as e:
-            msg = str(e)
-            item = {"nickname": u["nickname"], "status": "failed", "error": msg[:200]}
-            done.append(item)
-            if on_creator:
-                on_creator(item)
-            if "403" in msg:
-                stopped = True
-                break
-            continue
-        done.append(item)
-        if on_creator:
-            on_creator(item)
-
-    return {
-        "creators": done,
-        "inserted": sum(x.get("inserted", 0) for x in done),
-        "stopped_on_403": stopped,
-    }
-
+# 这里原来有 crawl_creator / crawl_followed —— 「把关注者的全部历史爬下来」。
+# **已删除,那是错的方向。** 实测:11 位共 4345 条要 221 页 / 29 分钟,
+# 而且第 20 页就被 403;拿回来的还全是陈年老作品。
+# 用户要的是「每天知道他们发了什么」,那是 crawl_recent / daily_round ——
+# 每人 1 页、1.5 分钟、零风险。想补一点历史就把 days 调大(上限 30 天),
+# 按他们 0.1–0.5 条/天的发布频率,30 天也就一两页。
 
 async def sync_folders() -> list[dict[str, Any]]:
     store.init_db()

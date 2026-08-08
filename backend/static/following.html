@@ -190,15 +190,17 @@ function render() {
     <div class="fact on"><b>${nRival}</b><span>竞品主播</span></div>`;
 
   $('#note').innerHTML =
+    `<b>只跟你选的人。</b>没打标的人一次请求都不会发 —— 关注列表有 ${ALL.length} 位,` +
+    `但只采你标了的那几位,简报里也只有他们。<br>` +
     `<b>不爬历史,只跟最新。</b>标了的人每天只抓最近三天的新作品 —— 每人翻一页左右,` +
-    `一分多钟跑完,几乎不会触发限流。全量爬他们的历史要 ${costOf(allItems).text},而且第 20 页就会被拒。<br>` +
+    `一分多钟跑完。全量爬他们的历史要 ${costOf(allItems).text},而且第 20 页就会被拒,所以不做。<br>` +
     `<b>两类的用途完全不同:</b>「信息价值」要的是他<b>讲了什么</b>(进知识库,能检索能问答);` +
     `「竞品」要的是他的<b>打法</b>(选题/时长/发布节奏/互动效果,每期和上期对比)。<br>` +
     `挑人看「我存过他几条」—— 这 ${ALL.length} 位里 ${never.length} 位我一条都没存过,那是最实的价值信号。` +
     `抓来的作品单独归类,<b>不会混进「认识自己」的分析,也不会淹掉你自己收藏的检索结果</b>。`;
 
   const head = `<div class="head"><span>作者</span>
-    <span>我存过</span><span>他共发</span><span>跟不跟</span><span>状态</span></div>`;
+    <span>我存过</span><span>他共发</span><span>跟不跟 · 跟哪种</span><span>状态</span></div>`;
   $('#body').innerHTML =
     `<div class="grp"><h2>我存过他作品的</h2><em>${saved.length} 位 · 值得考虑</em></div>
      ${head}<div class="list">${saved.map(rowHtml).join('') || '<div class="empty">还没有</div>'}</div>

@@ -230,6 +230,11 @@ def init_db() -> None:
                 "  ELSE 'unknown' END "
                 "WHERE content_state IS NULL OR content_state = 'unknown'"
             )
+        # role 是「跟不跟这个人」的唯一开关。早先还有个独立的 crawl 开关,
+        # 两者会各走各的:实测 8 位 crawl=1 却没打标,一点「深挖」就去爬他们
+        # 的全部历史。把不一致的抹平,以后读的地方一律只看 role。
+        conn.execute("UPDATE following SET crawl=0 WHERE role IS NULL AND crawl=1")
+        conn.execute("UPDATE following SET crawl=1 WHERE role IS NOT NULL AND crawl=0")
         # 把早期只存在 videos.source 的归属关系补进 video_sources。
         # 幂等,可反复执行。
         conn.execute(
@@ -893,7 +898,7 @@ def upsert_following(users: Iterable[dict[str, Any]]) -> tuple[int, int]:
     return len(users), len(users) - len(have)
 
 
-def list_following(only_crawl: bool = False) -> list[dict[str, Any]]:
+def list_following(only_tagged: bool = False) -> list[dict[str, Any]]:
     """关注列表 + 每位「我实际存过他几条」。
 
     那个 saved 数字是决定要不要深挖的**唯一实证信号**:实测 97 位里 55 位
@@ -908,8 +913,11 @@ def list_following(only_crawl: bool = False) -> list[dict[str, Any]]:
             AND v.content_state = 'have' AND {mine}) AS saved_with_summary
       FROM following f
     """.format(mine=mine_pred("v"))
-    if only_crawl:
-        sql += " WHERE f.crawl = 1"
+    if only_tagged:
+        # **只认 role**。曾经还有个独立的 crawl 开关,结果两个开关各走各的:
+        # 8 位 crawl=1 却没打标,一点「深挖」就会去爬他们的全部历史 ——
+        # 那不是用户要的。两个必须一致的标志位,迟早会不一致。
+        sql += " WHERE f.role IS NOT NULL"
     sql += " ORDER BY saved_n DESC, COALESCE(f.rank_recent, 9999)"
     with connect() as conn:
         return [dict(r) for r in conn.execute(sql)]
@@ -922,8 +930,10 @@ ROLES = (ROLE_INFO, ROLE_RIVAL)
 def set_following_role(sec_user_ids: Iterable[str], role: str | None) -> int:
     """给博主打标:info=信息价值 / rival=竞品 / None=取消。
 
-    打标同时打开每日抓取开关 —— 分类的意思就是「我要跟这个人」,
-    还要再点一次开关是多余步骤。取消分类则关掉。
+    **role 是唯一的开关** —— 打上标就等于「每天跟他」,取消就是不跟。
+    不再有独立的 crawl 开关:两个必须保持一致的标志位一定会不一致
+    (实测过:8 位 crawl=1 却没打标,一点深挖就去爬他们的全部历史)。
+    `crawl` 列还在写,只是为了老数据不至于自相矛盾,读的地方一律看 role。
     """
     ids = list(sec_user_ids)
     if not ids:
@@ -934,24 +944,6 @@ def set_following_role(sec_user_ids: Iterable[str], role: str | None) -> int:
         conn.executemany(
             "UPDATE following SET role=?, crawl=? WHERE sec_user_id=?",
             [(role, 1 if role else 0, i) for i in ids])
-        conn.commit()
-        return conn.total_changes
-
-
-def set_following_crawl(sec_user_ids: Iterable[str], crawl: bool) -> int:
-    """打开/关闭若干人的深挖开关。关掉时顺手清掉断点,下次开就从最新重走。"""
-    ids = list(sec_user_ids)
-    if not ids:
-        return 0
-    with connect() as conn:
-        if crawl:
-            conn.executemany(
-                "UPDATE following SET crawl=1 WHERE sec_user_id=?",
-                [(i,) for i in ids])
-        else:
-            conn.executemany(
-                "UPDATE following SET crawl=0, crawl_cursor=NULL WHERE sec_user_id=?",
-                [(i,) for i in ids])
         conn.commit()
         return conn.total_changes
 

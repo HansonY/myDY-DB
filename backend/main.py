@@ -323,13 +323,13 @@ async def get_folders() -> dict[str, Any]:
 
 
 @app.get("/api/following")
-async def get_following(only_crawl: bool = False) -> dict[str, Any]:
+async def get_following(only_tagged: bool = False) -> dict[str, Any]:
     """我关注的人 + 每位「我实际存过他几条」。
 
     `saved_n` 是决定要不要深挖的唯一实证信号,所以它必须和列表一起给出去 ——
     否则页面上只能看到「他发了 43451 条」,看不到「我一条都没存过」。
     """
-    items = await asyncio.to_thread(store.list_following, only_crawl)
+    items = await asyncio.to_thread(store.list_following, only_tagged)
     return {
         "items": items,
         "total": len(items),
@@ -350,34 +350,12 @@ async def post_following_sync() -> dict[str, Any]:
         raise HTTPException(409, str(e))
 
 
-@app.post("/api/following/crawl-flag")
-async def post_following_flag(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    """打开/关闭若干人的深挖开关。"""
-    ids = body.get("sec_user_ids") or []
-    if not isinstance(ids, list) or not ids:
-        raise HTTPException(422, "要给 sec_user_ids(数组)")
-    n = await asyncio.to_thread(
-        store.set_following_crawl, ids, bool(body.get("crawl", True)))
-    return {"updated": n, "crawl": bool(body.get("crawl", True))}
-
-
-@app.post("/api/following/crawl")
-async def post_following_crawl(
-    max_pages_each: int = Query(0, ge=0, le=500),
-) -> dict[str, Any]:
-    """深挖所有已勾选的关注者。一个人 403 就整体停手。"""
-    try:
-        return await service.crawl_followed(
-            max_pages_each=max_pages_each, on_progress=_track)
-    except service.AlreadyCollecting as e:
-        raise HTTPException(409, str(e))
-
-
 @app.post("/api/following/role")
 async def post_following_role(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     """给博主打标:info=信息价值 / rival=竞品 / null=取消。
 
-    打标同时打开每日抓取 —— 分类的意思就是「我要跟这个人」。
+    **role 是唯一的开关** —— 打上标就等于「每天跟他」。曾经还有个独立的
+    crawl 开关,结果两者各走各的(实测 8 位 crawl=1 却没打标),已经删掉。
     """
     ids = body.get("sec_user_ids") or []
     if not isinstance(ids, list) or not ids:
@@ -393,7 +371,10 @@ async def post_following_role(body: dict[str, Any] = Body(...)) -> dict[str, Any
 
 @app.get("/api/digest")
 async def get_digest(days: int = Query(3, ge=1, le=90)) -> dict[str, Any]:
-    """两类博主最近 N 天的简报。纯本地查询,不碰抖音接口。"""
+    """**已打标博主**最近 N 天的简报。纯本地查询,不碰抖音接口。
+
+    没打标的人不会出现在这里 —— 关注列表有 97 位,但只跟你选的那几位。
+    """
     from knowledge import digest as kd
     ov, info, rival = await asyncio.gather(
         asyncio.to_thread(kd.overview, days),
@@ -408,15 +389,18 @@ async def post_digest_refresh(
     days: int = Query(3, ge=1, le=30),
     role: str | None = Query(None, pattern="^(info|rival)$"),
 ) -> dict[str, Any]:
-    """抓一轮:所有已分类博主最近 N 天的新作品。
+    """抓一轮:**只抓已打标的博主**最近 N 天的新作品。
 
-    实测每人 1 页就够(他们每天发 0.1–0.5 条),11 位约 1.5 分钟,零 403 风险。
+    实测每人 1 页就够(他们每天发 0.1–0.5 条),零 403 风险。
+    没打标的人一次请求都不会发 —— 有单元测试盯着这条。
     """
     try:
         return await service.daily_round(days=days, role=role,
                                          on_creator=lambda x: _track(x))
     except service.AlreadyCollecting as e:
         raise HTTPException(409, str(e))
+    except RuntimeError as e:      # f2 加载不了(网络)
+        raise HTTPException(503, str(e)) from e
 
 
 # ── 语音转写 ────────────────────────────────────────────────
@@ -433,7 +417,7 @@ async def get_asr_pending(
     return {
         "items": items, "total": len(items),
         "audio_seconds": round(secs),
-        # 实测 large-v3-turbo 在这台机器上的吞吐,让人知道要等多久
+        # 实测 large-v3-turbo 在这台机器上约 3× 实时
         "estimate_minutes": round(secs / 60 / 3.0, 1),
         "model": settings.asr_model,
     }
