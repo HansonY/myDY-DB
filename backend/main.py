@@ -204,6 +204,21 @@ async def insight_graph(
     return await asyncio.to_thread(ki.tag_graph, min_count, min_edge, max_nodes)
 
 
+@app.get("/api/insight/themes")
+async def insight_themes(
+    min_n: int = Query(8, ge=2, le=100),
+    max_tags: int = Query(120, ge=20, le=400),
+    threshold: float = Query(0.65, ge=0.4, le=0.9),
+) -> dict[str, Any]:
+    """兴趣主题:把碎标签语义聚类成主题(认识自己 第 01 段)。
+
+    比抖音官方一级分类有信息量得多 —— 那套排前几的是「个人管理」「随拍」,
+    看完不知道你在看什么;这里给的是「英语口语 307 条 / AI 197 条」。
+    """
+    from knowledge import insight as ki
+    return await asyncio.to_thread(ki.tag_themes, min_n, max_tags, threshold)
+
+
 @app.get("/api/insight/aspects")
 async def insight_aspects() -> dict[str, Any]:
     """我关注的人都是做什么的 + 「关注了却没在看」的缺口(认识自己 第 02 段)。"""

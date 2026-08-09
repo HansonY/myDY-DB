@@ -535,6 +535,114 @@ def tag_quality(min_n: int = 15, limit: int = 16) -> dict[str, Any]:
     }
 
 
+_THEME_CACHE: dict[str, Any] = {}
+
+
+def tag_themes(min_n: int = 8, max_tags: int = 120,
+               threshold: float = 0.65) -> dict[str, Any]:
+    """把碎标签聚成**兴趣主题**。这是「我在乎什么」的正确口径。
+
+    为什么不用抖音官方一级分类:那套太粗,而且标签本身没信息量 ——
+    实测排前几的是「个人管理 18%」「随拍 16%」,看完根本不知道你在看什么。
+    真实信号在话题标签里(#英语口语 297、#外教英语 271、#英语词汇 194)。
+
+    为什么不用共现聚类:实测**并查集会把 120 个标签里的 90 个塌进同一簇**
+    (英语口语 + AI + 情感全混在一起)—— 单链聚类的经典毛病,
+    一条桥接边就把所有东西串成一坨。
+
+    所以用**语义聚类**:bge-m3 把每个标签编码成向量,按热度降序贪心归并 ——
+    和已有簇的**质心**够像就并进去,否则自立门户。用质心而不是最近邻,
+    就是为了避免上面那种链式坍塌。阈值 0.65 是扫出来的:
+      0.55 → 最大簇 85 个标签(还是坨)
+      0.60 → 最大簇 52 个
+      0.65 → 最大簇 12 个,分出 英语/AI/科普/情感/程序员/财经/心理学 ✓
+      0.70 → 更碎,同义词开始被拆开
+
+    条数按**去重后的作品数**算,不是标签计数之和 —— 一条作品同时挂
+    #英语口语 和 #英语学习 只能算一条,否则占比会超过 100%。
+    """
+    fp = data_fingerprint()[0]
+    key = f"{fp}:{min_n}:{max_tags}:{threshold}"
+    if key in _THEME_CACHE:
+        return {**_THEME_CACHE[key], "from_cache": True}
+
+    with store.connect() as c:
+        rows = c.execute(f"""
+            SELECT LOWER(t.tag) tg, COUNT(DISTINCT t.aweme_id) n
+            FROM tags t JOIN videos v ON v.aweme_id = t.aweme_id
+            WHERE {store.mine_pred('v')}
+            GROUP BY LOWER(t.tag) HAVING n >= ? ORDER BY n DESC LIMIT ?
+        """, (min_n, max_tags)).fetchall()
+        tags = [(r["tg"], r["n"]) for r in rows]
+        if not tags:
+            return {"themes": [], "n_tags": 0, "covered": 0, "total": 0, "note": "还没有标签"}
+        # 每个标签覆盖哪些作品 —— 主题条数要去重,不能把标签计数相加
+        marks = c.execute(
+            "SELECT LOWER(tag) tg, aweme_id FROM tags WHERE LOWER(tag) IN "
+            f"({','.join('?' * len(tags))})", [t for t, _ in tags]).fetchall()
+        total = c.execute(
+            f"SELECT COUNT(*) n FROM videos v WHERE {store.mine_pred('v')}").fetchone()["n"]
+
+    ids: dict[str, set[str]] = {}
+    for m in marks:
+        ids.setdefault(m["tg"], set()).add(m["aweme_id"])
+
+    try:
+        import numpy as np
+        from knowledge import embed as embed_mod
+        emb = embed_mod.get()
+    except Exception as e:      # noqa: BLE001 —— 没模型就退回「不聚类」,别让整页挂掉
+        return {"themes": [{"name": t, "tags": [t], "n": n,
+                            "share": round(n * 100 / max(total, 1), 1)}
+                           for t, n in tags[:12]],
+                "n_tags": len(tags), "covered": 0, "total": total,
+                "degraded": f"{type(e).__name__}: 没能加载嵌入模型,退回按单个标签排行",
+                "note": "聚类需要本地嵌入模型"}
+
+    vecs = np.stack([emb.encode_query(t) for t, _ in tags])
+    vecs = vecs / np.linalg.norm(vecs, axis=1, keepdims=True)
+
+    cents: list[Any] = []
+    members: list[list[int]] = []
+    for i, (_t, n) in enumerate(tags):
+        best, bi = -1.0, -1
+        for j, cn in enumerate(cents):
+            s = float(vecs[i] @ (cn / np.linalg.norm(cn)))
+            if s > best:
+                best, bi = s, j
+        if best >= threshold:
+            members[bi].append(i)
+            cents[bi] = cents[bi] + vecs[i] * n      # 按热度加权,大标签定调
+        else:
+            cents.append(vecs[i] * n)
+            members.append([i])
+
+    themes = []
+    for m in members:
+        m.sort(key=lambda i: -tags[i][1])
+        names = [tags[i][0] for i in m]
+        vids: set[str] = set()
+        for t in names:
+            vids |= ids.get(t, set())
+        themes.append({
+            "name": names[0], "tags": names, "n": len(vids),
+            "share": round(len(vids) * 100 / max(total, 1), 1),
+        })
+    themes.sort(key=lambda x: -x["n"])
+
+    covered = len(set().union(*[ids.get(t, set()) for t, _ in tags])) if tags else 0
+    out = {
+        "themes": themes, "n_tags": len(tags), "n_themes": len(themes),
+        "covered": covered, "total": total, "threshold": threshold,
+        "note": (f"从 {len(tags)} 个话题标签聚成 {len(themes)} 个主题(语义相近的合并,"
+                 f"比如 #英语口语 #英语学习 #外教英语 算一个)。"
+                 f"占比的分母是全部 {total} 条,{covered} 条带话题标签、其余没有。"),
+    }
+    _THEME_CACHE.clear()        # 只留最新一份,指纹一变就重算
+    _THEME_CACHE[key] = out
+    return out
+
+
 def following_aspects() -> dict[str, Any]:
     """我关注的人都是做什么的,以及「关注了却没在看」的缺口。
 

@@ -1,7 +1,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>认识自己 · Douyin-DB</title>
-<link rel="stylesheet" href="/shell.css?v=1786286777">
+<link rel="stylesheet" href="/shell.css?v=1786291075">
 <style>
 .hero{margin:22px 0 6px;font-size:26px;line-height:1.4;font-weight:600;letter-spacing:-.4px}
 .hero b{color:var(--accent-text);font-weight:600}
@@ -26,13 +26,17 @@
 .sphere .pause{position:absolute;right:0;bottom:0;font-size:12px;color:var(--dim)}
 
 /* 构成条 */
-.compo{display:flex;flex-direction:column;gap:8px;margin-top:6px}
-.compo .row{display:grid;grid-template-columns:96px 1fr 96px;gap:10px;align-items:center;font-size:13px}
+.compo{display:grid;grid-template-columns:1fr;gap:0;margin-top:6px}
+.compo .row{display:grid;grid-template-columns:110px 1fr 104px;gap:10px;align-items:center;font-size:13px}
 .compo .bar{height:8px;border-radius:4px;background:var(--surface2);overflow:hidden}
 .compo .bar i{display:block;height:100%;background:var(--accent)}
 .compo .row:nth-child(2) .bar i{background:var(--violet)}
 .compo .row:nth-child(3) .bar i{background:var(--warn)}
 .compo .n{text-align:right;color:var(--dim);font-family:var(--mono);font-size:12px}
+/* 主题下面列出它到底合并了哪些标签 —— 不然「英语口语 439 条」看着像凭空来的 */
+.compo .subtags{grid-column:1/-1;margin:-2px 0 6px;padding-left:2px;
+  font-size:11px;color:var(--dim2);line-height:1.6}
+.compo .row{margin-bottom:2px}
 
 /* 通用表 */
 table.t{width:100%;border-collapse:collapse;margin-top:8px;font-size:13px}
@@ -96,7 +100,7 @@ table.t tr:last-child td{border-bottom:0}
   <div id="body"><div class="skel">正在分析…</div></div>
 </div>
 
-<script src="/shell.js?v=1786286777"></script>
+<script src="/shell.js?v=1786291075"></script>
 <script>
 'use strict';
 mountNav('insight');
@@ -105,13 +109,14 @@ const PALETTE = ['#4c8dff', '#a78bfa', '#ff7a45', '#5cb87a', '#e8b04b', '#5b6675
 
 async function load() {
   try {
-    const [ins, asp, qual, graph] = await Promise.all([
+    const [ins, asp, qual, graph, themes] = await Promise.all([
       api('/api/insight'),
       api('/api/insight/aspects'),
       api('/api/insight/quality?min_n=15&limit=6'),
       api('/api/insight/graph?min_count=5&max_nodes=80'),
+      api('/api/insight/themes'),
     ]);
-    render(ins.stats || ins, asp, qual, graph);
+    render(ins.stats || ins, asp, qual, graph, themes);
   } catch (e) {
     $('#body').innerHTML = `<div class="empty"><b>分析失败</b>${esc(e.message)}</div>`;
   }
@@ -119,7 +124,7 @@ async function load() {
 
 function part(stats, id) { return (stats.parts || []).find(p => p.id === id) || {}; }
 
-function render(stats, asp, qual, graph) {
+function render(stats, asp, qual, graph, themes) {
   const contrast = part(stats, 'contrast');
   const shape = part(stats, 'shape');
   const drift = part(stats, 'drift');
@@ -132,12 +137,12 @@ function render(stats, asp, qual, graph) {
   const heroText = (stats.narrative && stats.narrative.split('\n')[0])
     || (tension.headline) || '看看你都存了些什么。';
 
-  // 01 构成:contrast.table 里 fav+lik 求和 = 我的收藏点赞总构成
-  const comp = (contrast.table || []).map(r => ({cat: r.cat, n: r.fav + r.lik}))
-    .sort((a, b) => b.n - a.n);
-  const compTotal = comp.reduce((s, r) => s + r.n, 0) || 1;
-  const top3 = comp.slice(0, 3), rest = comp.slice(3);
-  const top3pct = Math.round(top3.reduce((s, r) => s + r.n, 0) * 100 / compTotal);
+  // 01 构成:用**语义聚类出的兴趣主题**,不是抖音官方一级分类。
+  // 官方那套排前几的是「个人管理 18%」「随拍 16%」—— 看完不知道你在看什么。
+  const TH = (themes && themes.themes) || [];
+  const top3 = TH.slice(0, 3);
+  const top3pct = Math.round(top3.reduce((s, t) => s + t.n, 0) * 100 /
+    Math.max(TH.reduce((s, t) => s + t.n, 0), 1));
 
   // 02 关注的人:真实故事 = 97 位里多少从没看过
   const seen = asp.categorizable, unknown = asp.unknown;
@@ -151,15 +156,20 @@ function render(stats, asp, qual, graph) {
       <div class="seghd"><span class="no">01</span><h2>我的兴趣构成</h2>
         <span class="cap">拖动球体可以转 · 每个点是一个话题,越大存得越多</span></div>
       <div class="sphere"><canvas id="sph"></canvas><button class="pause" id="sphpause">暂停旋转</button></div>
-      <div class="compo">${comp.slice(0, 5).map(r => {
-        const pct = Math.round(r.n * 100 / compTotal);
-        return `<div class="row"><span>${esc(r.cat)}</span>
-          <span class="bar"><i style="width:${pct}%"></i></span>
-          <span class="n">${pct}% · ${r.n} 条</span></div>`;
+      <div class="compo">${TH.slice(0, 6).map(t => {
+        const w = Math.round(t.n * 100 / Math.max(TH[0].n, 1));
+        return `<div class="row"><span title="${esc(t.tags.join(' '))}">${esc(t.name)}</span>
+          <span class="bar"><i style="width:${w}%"></i></span>
+          <span class="n">${t.n} 条 · ${t.share}%</span></div>
+          <div class="subtags">${t.tags.slice(0, 8).map(x => '#' + esc(x)).join(' ')}${
+            t.tags.length > 8 ? ` 等 ${t.tags.length} 个标签` : ''}</div>`;
       }).join('')}</div>
-      <div class="soo"><span class="lbl">所以呢</span>前三个话题占了 ${top3pct}%,
-        剩下的加起来才 ${100 - top3pct}%。你不是什么都存 —— 兴趣其实很窄,
-        窄到可以直接把这几条当知识库主线来经营。</div>
+      <div class="soo"><span class="lbl">所以呢</span>${
+        TH.length ? `${TH.length} 个兴趣主题里,前三个就占了 ${top3pct}% ——
+        <b>${top3.map(t => esc(t.name)).join('、')}</b>。
+        你不是什么都存,兴趣其实很窄,窄到可以直接把这几条当知识库主线来经营。`
+        : '还没有足够的话题标签来归纳主题。'}</div>
+      <div class="why">${esc((themes && themes.note) || '')}</div>
     </section>
 
     <!-- 02 关注的人分方面 -->
