@@ -1,0 +1,260 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>竞品 · Douyin-DB</title>
+<link rel="stylesheet" href="/shell.css?v=1786286126">
+<style>
+.top{display:flex;align-items:flex-start;gap:14px;margin-bottom:20px}
+.top h1{margin:0;font-size:26px;font-weight:600;color:var(--fg-hi);letter-spacing:-.5px}
+.top .sub{margin-top:5px;font-size:12.5px;color:#626c7c}
+.top .gap{flex:1}
+.days{display:flex;gap:2px;padding:3px;background:var(--surface);border-radius:9px;
+  border:1px solid var(--line)}
+.days button{background:none;border:0;border-radius:7px;padding:7px 14px;cursor:pointer;
+  font-size:12px;font-weight:500;color:var(--dim)}
+.days button.on{background:#232b36;color:var(--fg-hi)}
+.pickbtn{background:#151a21;border:1px solid var(--line);border-radius:9px;padding:8px 14px;
+  font-size:12px;font-weight:500;color:#c4cbd5;cursor:pointer;white-space:nowrap}
+.pickbtn:hover{border-color:var(--line2)}
+
+/* 最该注意的变化 —— 一句话说清「这几天发生了什么」 */
+.headline{border:1px solid var(--line);border-radius:14px;padding:16px 18px;
+  background:var(--surface);margin-bottom:16px}
+.headline .hd{font-size:10px;font-weight:500;color:var(--dim2);letter-spacing:.6px;margin-bottom:9px}
+.headline .body{font-size:15px;line-height:1.8;color:#d5dae2}
+.headline .body b{color:var(--fg-hi);font-weight:600}
+.headline .body .up{color:var(--ok)} .headline .body .down{color:var(--warn-text)}
+
+/* 4 个对比指标卡 */
+.mets{display:grid;grid-template-columns:repeat(auto-fit,minmax(178px,1fr));gap:12px;margin-bottom:20px}
+.met{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 15px}
+.met .k{font-size:11px;color:var(--dim2)}
+.met .v{margin-top:6px;font-size:26px;font-weight:600;letter-spacing:-.6px;
+  color:var(--fg-hi);line-height:1.1;display:flex;align-items:baseline;gap:7px}
+.met .v i{font-style:normal;font-size:12px;font-weight:500}
+.met .d{margin-top:3px;font-size:11px;color:var(--dim2)}
+.up{color:var(--ok)} .down{color:var(--warn-text)} .flat{color:var(--dim2)}
+/* 迷你柱:每个竞品一根,直观看谁在拉高/拉低 */
+.spark{display:flex;align-items:flex-end;gap:4px;height:26px;margin-top:11px}
+.spark i{flex:1;background:#232b36;border-radius:2px;min-height:3px;display:block}
+.spark i.hi{background:var(--accent)}
+.spark i.warm{background:var(--warn)}
+
+/* 竞品对照表 */
+.tbl{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--surface)}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{text-align:left;font-size:10px;font-weight:500;color:var(--dim2);letter-spacing:.6px;
+  padding:10px 14px;background:#0f1217;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:12px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+tr.on td{background:rgba(76,141,255,.05)}
+tr.on td:first-child{box-shadow:inset 2px 0 0 var(--accent)}
+td.num{text-align:right;font-family:var(--mono);white-space:nowrap}
+td .nm{font-size:13px;font-weight:500;color:var(--fg)}
+td .sub2{font-size:11px;color:var(--dim2);margin-top:2px}
+td .dd{font-size:11px;margin-left:5px}
+.topics{color:var(--dim);font-size:12px;line-height:1.6}
+.topics b{color:var(--fg);font-weight:500}
+
+/* 最好的一条 */
+.best{margin-top:16px;background:var(--surface);border:1px solid var(--line);
+  border-radius:12px;padding:14px 16px}
+.best .hd{font-size:10px;font-weight:500;color:var(--dim2);letter-spacing:.6px;margin-bottom:8px}
+.best .row{display:flex;align-items:baseline;gap:10px;padding:7px 0;
+  border-top:1px solid var(--line)}
+.best .row:first-of-type{border-top:0}
+.best .who{font-size:12px;color:var(--dim);width:110px;flex:none;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.best .t{font-size:13px;color:#d5dae2;flex:1;line-height:1.6}
+.best .n{font-family:var(--mono);font-size:12px;color:var(--accent-text);flex:none}
+
+.skel{color:var(--dim2);text-align:center;padding:60px 0;font-size:13px}
+@media(max-width:760px){
+  .top{flex-wrap:wrap} .top h1{font-size:21px}
+  .tbl{overflow-x:auto} table{min-width:640px}
+}
+</style>
+
+<div class="wrap narrow">
+  <div id="body"><div class="skel">读取中…</div></div>
+</div>
+
+<script src="/shell.js?v=1786286126"></script>
+<script>
+'use strict';
+mountNav('rival');
+
+let DAYS = 3, DATA = null;
+
+/* 涨跌的方向盘:多数指标涨=好(绿),但**平均时长**没有好坏,
+   所以它一律用中性色 —— 给中性指标涂红绿是在暗示一个不存在的judgment。 */
+function delta(n, unit, neutral) {
+  if (!n) return `<i class="flat">±0</i>`;
+  const cls = neutral ? 'flat' : (n > 0 ? 'up' : 'down');
+  return `<i class="${cls}">${n > 0 ? '↑' : '↓'}${fmt(Math.abs(n))}${unit || ''}</i>`;
+}
+
+function pct(now, prev) {
+  if (!prev) return null;
+  return Math.round((now - prev) * 100 / prev);
+}
+
+/* 一句话变化。**不调模型** —— 用规则从真实数字里挑出最值得说的那件事,
+   宁可朴素也不编。有 LLM 时可以替换成更好的表述,但没有也能用。 */
+function headline(cs, days) {
+  const sum = k => cs.reduce((s, c) => s + (c.now[k] || 0), 0);
+  const sumP = k => cs.reduce((s, c) => s + (c.prev[k] || 0), 0);
+  const nNow = sum('n'), nPrev = sumP('n');
+  const dNow = sum('total_digg'), dPrev = sumP('total_digg');
+  const avgNow = nNow ? Math.round(dNow / nNow) : 0;
+  const avgPrev = nPrev ? Math.round(dPrev / nPrev) : 0;
+  const volP = pct(nNow, nPrev), engP = pct(avgNow, avgPrev);
+
+  if (!nNow) return `这 ${days} 天 ${cs.length} 个竞品一条都没发。`;
+  const parts = [];
+  parts.push(`${cs.length} 个竞品这 ${days} 天共发 <b>${nNow}</b> 条,上期 ${nPrev} 条` +
+    (volP != null ? `(<span class="${volP >= 0 ? 'up' : 'down'}">${volP > 0 ? '+' : ''}${volP}%</span>)` : '') + '。');
+  if (engP != null && avgPrev) {
+    // 「量涨但互动跌」是最值得点破的一种模式 —— 铺量不等于赢
+    if (volP > 10 && engP < -5) {
+      parts.push(`但平均互动掉了 <span class="down">${Math.abs(engP)}%</span> —— <b>是在铺量,不是在赢。</b>`);
+    } else if (volP < -10 && engP > 5) {
+      parts.push(`发得少了,平均互动却涨了 <span class="up">${engP}%</span> —— 在做减法,而且有效。`);
+    } else {
+      parts.push(`平均互动 ${avgNow}(上期 ${avgPrev},<span class="${engP >= 0 ? 'up' : 'down'}">${engP > 0 ? '+' : ''}${engP}%</span>)。`);
+    }
+  }
+  // 选题变化:谁的主打类目和上期不同
+  const topics = cs.flatMap(c => c.topics || []);
+  if (topics.length) {
+    const m = {};
+    topics.forEach(t => m[t.cat] = (m[t.cat] || 0) + t.n);
+    const top = Object.entries(m).sort((a, b) => b[1] - a[1])[0];
+    if (top) parts.push(`选题集中在 <b>${esc(top[0])}</b>(${top[1]} 条)。`);
+  }
+  return parts.join(' ');
+}
+
+function render() {
+  const r = DATA.rival, cs = r.creators || [];
+  const active = cs.filter(c => c.now.n > 0);
+
+  let html = `
+    <div class="top">
+      <div>
+        <h1>${cs.length} 个竞品 · 最近 ${r.days} 天</h1>
+        <div class="sub">每个数字都对比上一个同长度周期${
+          active.length < cs.length ? ` · ${cs.length - active.length} 位这期没发` : ''}</div>
+      </div>
+      <span class="gap"></span>
+      <div class="days">
+        ${[3, 7, 14, 30].map(d => `<button class="${d === DAYS ? 'on' : ''}" data-days="${d}">${d} 天</button>`).join('')}
+      </div>
+      <button class="pickbtn" id="pick">挑竞品 · 打标</button>
+    </div>`;
+
+  if (!cs.length) {
+    html += `<div class="empty"><b>还没有标记「竞品」的博主</b>
+      去关注列表里,把要盯的对手标成竞品 —— 之后这里会按周期对比他们的打法。
+      <br><a class="btn" href="/creators.html">挑竞品 · 打标 →</a></div>`;
+    $('#body').innerHTML = html; wire(); return;
+  }
+
+  // ── 一句话变化 ──
+  html += `<div class="headline">
+    <div class="hd">最该注意的变化</div>
+    <div class="body">${headline(cs, r.days)}</div></div>`;
+
+  // ── 4 个对比指标 ──
+  const agg = k => cs.reduce((s, c) => s + (c.now[k] || 0), 0);
+  const aggP = k => cs.reduce((s, c) => s + (c.prev[k] || 0), 0);
+  const nNow = agg('n'), nPrev = aggP('n');
+  const secNow = active.length ? Math.round(cs.reduce((s, c) => s + c.now.avg_sec * c.now.n, 0) / (nNow || 1)) : 0;
+  const secPrev = nPrev ? Math.round(cs.reduce((s, c) => s + c.prev.avg_sec * c.prev.n, 0) / nPrev) : 0;
+  const digNow = nNow ? Math.round(agg('total_digg') / nNow) : 0;
+  const digPrev = nPrev ? Math.round(aggP('total_digg') / nPrev) : 0;
+  const cmtNow = nNow ? Math.round(cs.reduce((s, c) => s + c.now.avg_comment * c.now.n, 0) / nNow) : 0;
+  const cmtPrev = nPrev ? Math.round(cs.reduce((s, c) => s + c.prev.avg_comment * c.prev.n, 0) / nPrev) : 0;
+
+  // 迷你柱是「谁在拉高拉低」的对比图 —— 只有一个竞品时没有可比性,不画。
+  // 画一根铺满的柱子只会让人以为它代表某种比例。
+  const spark = (vals, warm) => {
+    if (vals.length < 2) return '';
+    const max = Math.max(...vals, 1);
+    return `<div class="spark">${vals.map(v =>
+      `<i class="${v === max && max > 0 ? (warm ? 'warm' : 'hi') : ''}" style="height:${Math.max(3, v * 26 / max)}px"></i>`).join('')}</div>`;
+  };
+
+  html += `<div class="mets">
+    <div class="met"><div class="k">发布条数</div>
+      <div class="v">${nNow}${delta(nNow - nPrev, ' 条')}</div>
+      <div class="d">上一个 ${r.days} 天 ${nPrev} 条</div>
+      ${spark(cs.map(c => c.now.n))}</div>
+    <div class="met"><div class="k">平均时长</div>
+      <div class="v">${dur(secNow * 1000)}${delta(secNow - secPrev, 's', true)}</div>
+      <div class="d">上期 ${dur(secPrev * 1000)}</div>
+      ${spark(cs.map(c => c.now.avg_sec))}</div>
+    <div class="met"><div class="k">平均点赞</div>
+      <div class="v">${fmt(digNow)}${delta(digNow - digPrev)}</div>
+      <div class="d">上期 ${fmt(digPrev)}</div>
+      ${spark(cs.map(c => c.now.avg_digg))}</div>
+    <div class="met"><div class="k">平均评论</div>
+      <div class="v">${fmt(cmtNow)}${delta(cmtNow - cmtPrev)}</div>
+      <div class="d">上期 ${fmt(cmtPrev)}</div>
+      ${spark(cs.map(c => c.now.avg_comment))}</div>
+  </div>`;
+
+  // ── 对照表 ──
+  const most = Math.max(...cs.map(c => c.now.n));
+  html += `<div class="tbl"><table>
+    <thead><tr><th>竞品</th><th style="text-align:right">发布条数</th>
+      <th style="text-align:right">平均时长</th><th style="text-align:right">平均互动</th>
+      <th>这几天在讲什么</th></tr></thead><tbody>
+    ${cs.map(c => `<tr class="${c.now.n === most && most > 0 ? 'on' : ''}">
+      <td><div class="nm">${esc(c.nickname)}</div>
+        <div class="sub2">粉丝 ${fmt(c.follower_count)}</div></td>
+      <td class="num">${c.now.n}<span class="dd">${delta(c.delta.n, '')}</span></td>
+      <td class="num">${c.now.n ? dur(c.now.avg_sec * 1000) : '—'}
+        ${c.now.n ? `<span class="dd">${delta(c.delta.avg_sec, 's', true)}</span>` : ''}</td>
+      <td class="num">${c.now.n ? fmt(c.now.avg_digg) : '—'}
+        ${c.now.n ? `<span class="dd">${delta(c.delta.avg_digg)}</span>` : ''}</td>
+      <td class="topics">${(c.topics || []).length
+        ? c.topics.slice(0, 3).map(t => `<b>${esc(t.cat)}</b> ${t.n}`).join(' · ')
+        : '<span style="color:var(--dim2)">这期没发</span>'}</td></tr>`).join('')}
+  </tbody></table></div>`;
+
+  // ── 每家最好的一条 ──
+  const bests = cs.filter(c => c.best);
+  if (bests.length) {
+    html += `<div class="best"><div class="hd">这期各家最好的一条</div>
+      ${bests.map(c => `<div class="row">
+        <span class="who">${esc(c.nickname)}</span>
+        <span class="t">${esc((c.best.item_title || c.best.description || '').slice(0, 60))}</span>
+        <span class="n">${fmt(c.best.digg_count)} 赞</span></div>`).join('')}</div>`;
+  }
+
+  $('#body').innerHTML = html;
+  wire();
+}
+
+function wire() {
+  $$('[data-days]').forEach(b => b.onclick = () => { DAYS = +b.dataset.days; load(); });
+  const p = $('#pick'); if (p) p.onclick = () => location.href = '/creators.html';
+}
+
+async function load() {
+  $('#body').innerHTML = '<div class="skel">读取中…</div>';
+  try {
+    DATA = await api('/api/digest?days=' + DAYS);
+    render();
+  } catch (e) {
+    $('#body').innerHTML = `<div class="empty"><b>读取失败</b>${esc(e.message)}</div>`;
+  }
+}
+
+api('/api/runs?limit=1').then(r => {
+  const it = r.items && r.items[0];
+  navSync(it && (it.finished_at || it.started_at));
+}).catch(() => {});
+
+load();
+</script>

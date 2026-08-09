@@ -708,8 +708,7 @@ async def collect_folder(
 # 老地址重定向。这个项目是自部署的,书签会失效 —— 三行代码的事,不要让人撞 404。
 #   /daily.html      → /            简报成了首页
 #   /following.html  → /creators.html
-_MOVED = {"/daily.html": "/", "/following.html": "/creators.html",
-          "/rival.html": "/digest.html"}  # 竞品暂并在简报页,待拆
+_MOVED = {"/daily.html": "/", "/following.html": "/creators.html"}
 
 
 @app.get("/{old_path:path}.html", include_in_schema=False)
