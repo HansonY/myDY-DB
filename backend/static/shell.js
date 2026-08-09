@@ -24,26 +24,26 @@ function mountNav(current) {
   const el = document.createElement('nav');
   el.className = 'nav';
   el.innerHTML =
-    `<a class="brand" href="/">Douyin<span>-DB</span></a>` +
+    // local only:数据只在本机,是这个产品的核心承诺,常驻显示
+    `<a class="brand" href="/"><b>Douyin-DB</b><span>local only</span></a>` +
+    `<div class="tabs">` +
     NAV.map(n =>
-      `<a class="n" href="${n.href}" title="${n.title}"` +
+      `<a href="${n.href}" title="${n.title}"` +
       `${n.key === current ? ' aria-current="page"' : ''}>${n.label}</a>`).join('') +
+    `</div>` +
     `<span class="gap"></span>` +
-    // 只读模式是这个产品的安全承诺(绝不评论/点赞/关注),常驻显示。
-    // 同步时间由页面按需填(navSync),没有就先不显示,不写死假数据。
-    `<span class="status" id="nav-status" hidden><span class="dot"></span>` +
+    // 只读模式是安全承诺(绝不评论/点赞/关注)。同步时间由页面按需填(navSync),
+    // 拿不到就只显示「只读模式」,不写死假时间。
+    `<span class="status" id="nav-status"><span class="dot"></span>` +
     `<span id="nav-sync">只读模式</span></span>` +
-    `<a class="n maint" href="/data.html" title="采集、补齐、转写、索引"` +
-    `${current === 'data' ? ' aria-current="page"' : ''}>维护</a>`;
+    `<a class="maint" href="/data.html" title="采集、补齐、转写、索引">维护</a>`;
   document.body.insertBefore(el, document.body.firstChild);
 }
 
 /** 在顶栏显示「只读模式 · N 小时前同步」。传入最近一次采集时间(ISO)。 */
 function navSync(lastIso) {
   const box = document.getElementById('nav-status');
-  if (!box) return;
-  box.hidden = false;
-  if (!lastIso) return;
+  if (!box || !lastIso) return;
   const t = new Date(lastIso), now = new Date();
   const h = Math.round((now - t) / 3.6e6);
   const ago = h < 1 ? '刚刚' : h < 24 ? h + ' 小时前' : Math.round(h / 24) + ' 天前';
