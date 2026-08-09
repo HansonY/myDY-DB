@@ -1,7 +1,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>数据 · Douyin-DB</title>
-<link rel="stylesheet" href="/shell.css?v=1786286777">
+<link rel="stylesheet" href="/shell.css?v=1786293531">
 <style>
 /* 这一页集中了所有「有代价」的操作,所以设计目标只有一个:
    点之前就知道会发生什么、要多久、有没有风险。
@@ -49,6 +49,24 @@
   .act .cost{order:3;text-align:left;min-width:0}
   .act .btn{order:2}
 }
+
+/* 设置项 */
+.st{display:grid;grid-template-columns:150px 1fr auto;gap:10px;align-items:center;
+  padding:10px 0;border-top:1px solid var(--line)}
+.st:first-child{border-top:0;padding-top:0}
+.st .k{font-size:12.5px}
+.st .k i{display:block;font-style:normal;font-size:10.5px;color:var(--dim2);
+  margin-top:2px;line-height:1.5}
+.st input{background:var(--bg);border:1px solid var(--line);border-radius:7px;
+  padding:7px 10px;color:var(--fg);font-size:12px;width:100%;font-family:var(--mono)}
+.st input:focus{outline:none;border-color:var(--accent-line)}
+.st .now{font-size:11px;color:var(--dim2);white-space:nowrap;font-family:var(--mono)}
+.st .now.on{color:var(--ok)}
+.feat{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.feat span{font-size:11px;padding:4px 9px;border-radius:6px;border:1px solid var(--line);
+  color:var(--dim2)}
+.feat span.on{border-color:var(--ok-line);background:var(--ok-dim);color:var(--ok)}
+.feat span.off{border-color:var(--warn-line);background:var(--warn-dim);color:var(--warn-text)}
 </style>
 
 <div class="wrap narrow">
@@ -58,6 +76,15 @@
   </div>
 
   <div id="alert"></div>
+
+  <!-- ⓪ 设置:先配好这些,后面的功能才跑得起来 -->
+  <div class="grp">
+    <h2>设置</h2>
+    <p>密钥写进本机的 <code id="envpath">.env</code>,**不会上传任何地方**。
+      页面上永远只显示尾四位。</p>
+    <div class="card"><div class="body" id="settings">读取中…</div></div>
+  </div>
+
 
   <!-- ① 先看现状,再决定要不要动 -->
   <div class="grp">
@@ -98,10 +125,58 @@
   </div>
 </div>
 
-<script src="/shell.js?v=1786286777"></script>
+<script src="/shell.js?v=1786293531"></script>
 <script>
 'use strict';
 mountNav('data');
+
+/* ── 设置 ── */
+async function loadSettings() {
+  const box = document.querySelector('#settings');
+  try {
+    const d = await api('/api/settings');
+    document.querySelector('#envpath').textContent = d.env_path;
+    const F = d.features;
+    box.innerHTML = `
+      <div class="feat">
+        <span class="${F.search ? 'on' : 'off'}">检索 ${F.search ? '可用' : '不可用'}</span>
+        <span class="${F.asr ? 'on' : 'off'}">语音转写 ${F.asr ? '可用' : '不可用'}</span>
+        <span class="${F.collect ? 'on' : 'off'}">采集 ${F.collect ? '可用' : '要填 cookie'}</span>
+        <span class="${F.ask ? 'on' : 'off'}">AI 问答 ${F.ask ? '可用' : '要填千问 Key'}</span>
+      </div>
+      ${d.items.map(it => `<div class="st">
+        <span class="k">${esc(it.key)}<i>${esc(it.desc)}</i></span>
+        <input data-k="${esc(it.key)}" type="${it.secret ? 'password' : 'text'}"
+          value="${esc(it.value)}" placeholder="${it.secret && it.set ? '已设置,留空则不改' : '未设置'}"
+          autocomplete="off">
+        <span class="now ${it.set ? 'on' : ''}">${it.set ? (it.hint || '已设置') : '未设置'}</span>
+      </div>`).join('')}
+      <div class="bar" style="margin:14px 0 0">
+        <button class="btn go" id="st-save">保存</button>
+        <span class="hint" id="st-msg">检索和语音转写全在本机跑,不需要任何 Key</span>
+      </div>`;
+    document.querySelector('#st-save').onclick = async () => {
+      const body = {};
+      box.querySelectorAll('input[data-k]').forEach(i => {
+        // 密钥留空 = 不改(不能把「没输入」当成「清空」)
+        const isSecret = i.type === 'password';
+        if (isSecret && !i.value.trim()) return;
+        body[i.dataset.k] = i.value.trim();
+      });
+      if (!Object.keys(body).length) { say('#st-msg', '没有要改的'); return; }
+      try {
+        const r = await api('/api/settings', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(body)});
+        say('#st-msg', `已保存:${r.saved.join(' / ')}`);
+        loadSettings();
+      } catch (e) { say('#st-msg', '保存失败:' + e.message, true); }
+    };
+  } catch (e) {
+    box.innerHTML = `<div class="dim">读取设置失败:${esc(e.message)}</div>`;
+  }
+}
+loadSettings();
 
 /* 采集动作。**代价写在行里,不写在 tooltip 里** —— tooltip 等于没有。 */
 const COLLECT = [

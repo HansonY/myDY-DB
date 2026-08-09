@@ -226,6 +226,61 @@ async def video_raw(aweme_id: str, path: str | None = None) -> dict[str, Any]:
     }
 
 
+async def about_me(dimension: str = "all") -> dict[str, Any]:
+    """**我是个什么样的人** —— 从我主动收藏/点赞的内容里分析。
+
+    回答「我的收藏说明我什么」「我为什么老收藏不看」「我兴趣在哪」这类问题时用它。
+    只算用户**主动选的**内容(收藏/点赞/自己发的),不含从博主主页爬来的 ——
+    拿别人的产出算他的偏好是错的。
+
+    dimension:
+      all       全部(默认)
+      themes    兴趣主题:碎标签语义聚类后的真实兴趣,比平台分类有信息量得多
+      gap       想学 vs 真正在看:收藏和点赞的分布落差 = 理想 vs 实际,**信息量最大的一刀**
+      quality   干货率:每个话题里「真有内容」的比例,哪些是干货哪些只是刷
+      creators  关注了却没在看:关注的人分方面,以及缺口
+
+    数值都是实测的,**时间只到月级**(抖音不给收藏的精确时间)——
+    不要用它回答「我几点刷抖音」,那个答不了。
+    """
+    from knowledge import insight as ki
+
+    store.init_db()
+    d = (dimension or "all").lower()
+    out: dict[str, Any] = {"dimension": d}
+    if d in ("all", "themes"):
+        out["themes"] = await asyncio.to_thread(ki.tag_themes)
+    if d in ("all", "gap"):
+        st = await asyncio.to_thread(ki.analyze, False, False)
+        parts = (st.get("stats") or st).get("parts") or []
+        out["gap"] = next((p for p in parts if p.get("id") == "contrast"), None)
+        out["tension"] = next((p for p in parts if p.get("id") == "tension"), None)
+        out["shape"] = next((p for p in parts if p.get("id") == "shape"), None)
+        out["n_videos"] = (st.get("stats") or st).get("n_videos")
+    if d in ("all", "quality"):
+        out["quality"] = await asyncio.to_thread(ki.tag_quality, 15, 12)
+    if d in ("all", "creators"):
+        out["creators"] = await asyncio.to_thread(ki.following_aspects)
+    if d not in ("all", "themes", "gap", "quality", "creators"):
+        return {"error": f"dimension 只能是 all/themes/gap/quality/creators,收到 {dimension!r}"}
+    return out
+
+
+async def sync_creators() -> dict[str, Any]:
+    """把**关注列表**从抖音同步下来(只拉名单,不采他们的作品)。
+
+    97 位约 5 页,很轻。第一次用或者新关注了人之后跑一次;
+    之后用 `creators` 看名单、`set_creator_role` 打标。
+    """
+    store.init_db()
+    try:
+        return await service.sync_following()
+    except service.AlreadyCollecting as e:
+        return {"error": str(e)}
+    except RuntimeError as e:
+        return {"error": f"{e}"}
+
+
 async def creators(role: str | None = None) -> dict[str, Any]:
     """我关注的人 + 他们的分类。
 
@@ -685,6 +740,32 @@ _TOOLS: list[Tool] = [
         },
     ),
     Tool(
+        name="about_me",
+        description=(
+            "分析「我是个什么样的人」—— 从用户主动收藏/点赞的内容里看他自己。"
+            "回答「我的收藏说明我什么」「我为什么老收藏不看」「我兴趣在哪」用这个。"
+            "dimension 可选 themes(兴趣主题)/ gap(想学vs在看,信息量最大)/ "
+            "quality(干货率)/ creators(关注了却没在看)/ all。"
+            "⚠️ 时间只到月级,答不了「我几点刷抖音」——问到就直说做不了,别编。"
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "dimension": {"type": "string",
+                              "enum": ["all", "themes", "gap", "quality", "creators"],
+                              "default": "all"},
+            },
+        },
+    ),
+    Tool(
+        name="sync_creators",
+        description=(
+            "把用户的关注列表从抖音同步下来(只拉名单,不采作品,约 5 页很轻)。"
+            "第一次用、或者用户说「我新关注了几个人」时跑一次。"
+        ),
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    Tool(
         name="creators",
         description=(
             "我关注的人 + 分类。每位带 saved_n(我实际存过他几条作品)—— "
@@ -864,6 +945,8 @@ _HANDLERS = {
     "library_stats": lambda a: library_stats(**a),
     "search_library": lambda a: search_library(**a),
     "daily_digest": lambda a: daily_digest(**a),
+    "about_me": lambda a: about_me(**a),
+    "sync_creators": lambda a: sync_creators(),
     "creators": lambda a: creators(**a),
     "set_creator_role": lambda a: set_creator_role(**a),
     "collect_recent": lambda a: collect_recent(**a),
@@ -904,5 +987,67 @@ async def _main() -> None:
         await app.run(read, write, app.create_initialization_options())
 
 
+def _selftest() -> int:
+    """`--selftest`:不进 stdio 循环,只检查「这个 MCP 服务现在能不能用」。
+
+    配 MCP 最难受的是失败没有回声 —— Claude Desktop 里工具不出现,
+    你不知道是路径写错、依赖没装、还是库是空的。这个命令把这几件事分开报。
+    """
+    import config
+
+    ok = True
+    print("Douyin-DB MCP 自检\n")
+
+    print(f"  Python      {sys.version.split()[0]}")
+    print(f"  库文件      {config.settings.db_file}")
+
+    # 1) 工具声明与实现是否一一对应 —— 少一个,AI 调用时才会炸
+    names = [t.name for t in _TOOLS]
+    miss = [n for n in names if n not in _HANDLERS]
+    extra = [k for k in _HANDLERS if k not in names]
+    if miss or extra:
+        ok = False
+        print(f"  ✗ 工具表不一致:缺实现 {miss} · 多余实现 {extra}")
+    else:
+        print(f"  ✓ 工具 {len(names)} 个,声明与实现一致")
+
+    # 2) 库在不在、有没有东西
+    try:
+        store.init_db()
+        st = store.stats()
+        n = st.get("total") or st.get("videos") or 0
+        print(f"  {'✓' if n else '·'} 作品 {n} 条"
+              + ("" if n else "  —— 库是空的,先跑 ./go.sh"))
+    except Exception as e:      # noqa: BLE001
+        ok = False
+        print(f"  ✗ 打不开库:{type(e).__name__}: {e}")
+
+    # 3) 各功能当前能不能用。检索/转写不需要任何 Key,单独说清楚,
+    #    免得人以为「没配 Key 就什么都用不了」
+    print(f"  {'✓' if config.settings.has_cookie else '·'} 采集      "
+          + ("cookie 已配" if config.settings.has_cookie else "没有 cookie —— 只影响采集"))
+    print(f"  {'✓' if config.settings.dashscope_api_key.strip() else '·'} AI 问答   "
+          + ("千问 Key 已配" if config.settings.dashscope_api_key.strip()
+             else "没配千问 Key —— 只影响问答和 AI 画像,检索照常"))
+    try:
+        from knowledge import index as ki
+        s = ki.status()
+        v, pend = s.get("vectors", 0), s.get("pending", 0)
+        print(f"  {'✓' if v else '·'} 语义检索  {v} 条向量 · {s.get('model', '?')}")
+        # 「没同步」是会静默出错的那种问题:新片段搜不到,而且没有任何报错。
+        # 自检的价值就在于把这种事说出来。
+        if not s.get("in_sync"):
+            print(f"      ⚠ 有 {pend} 段还没进索引"
+                  + (f"、{s['orphans']} 条孤儿向量" if s.get("orphans") else "")
+                  + " —— 跑 scripts/build_index.py 或网页「维护 → 建索引」")
+    except Exception as e:      # noqa: BLE001
+        print(f"  · 语义检索  暂不可用:{str(e)[:60]}")
+
+    print("\n" + ("全部就绪。" if ok else "有问题,见上面的 ✗。"))
+    return 0 if ok else 1
+
+
 if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        raise SystemExit(_selftest())
     asyncio.run(_main())

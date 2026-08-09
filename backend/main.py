@@ -401,6 +401,98 @@ async def post_following_role(body: dict[str, Any] = Body(...)) -> dict[str, Any
     return {"updated": n, "role": body.get("role")}
 
 
+# ── 设置 ────────────────────────────────────────────────────
+#
+# 密钥写在 .env,这里给个页面入口,免得每次都要手改文件。
+# 三条铁律:
+#   1. **绝不回传明文** —— 只回「配没配」和尾四位,页面上永远看不到完整密钥
+#   2. 只动这几个白名单键,不让页面变成任意写文件的口子
+#   3. 写回时保留 .env 里其它行和注释,不整个重写
+
+_EDITABLE = {
+    "DASHSCOPE_API_KEY": "通义千问 API Key(问答、AI 画像用;不填这些功能就空着,不影响检索)",
+    "DOUYIN_COOKIE": "抖音 cookie(采集必需)。⚠️ 等同账号控制权,只存本机",
+    "DOUYIN_SEC_USER_ID": "我自己的 sec_user_id(采点赞/我的作品要)",
+    "ASR_MODEL": "语音转写模型(默认 large-v3-turbo)",
+    "EMBED_MODEL": "嵌入模型(默认 BAAI/bge-m3,中英互通)",
+}
+_SECRET_KEYS = {"DASHSCOPE_API_KEY", "DOUYIN_COOKIE"}
+
+
+def _mask(v: str) -> str:
+    v = (v or "").strip()
+    if not v:
+        return ""
+    return f"…{v[-4:]}" if len(v) > 8 else "已设置"
+
+
+@app.get("/api/settings")
+async def get_settings() -> dict[str, Any]:
+    """当前配置。**密钥只回尾四位**,不回明文。"""
+    config.reload()
+    cur = {
+        "DASHSCOPE_API_KEY": settings.dashscope_api_key,
+        "DOUYIN_COOKIE": settings.douyin_cookie,
+        "DOUYIN_SEC_USER_ID": settings.douyin_sec_user_id,
+        "ASR_MODEL": settings.asr_model,
+        "EMBED_MODEL": settings.embed_model,
+    }
+    items = []
+    for k, desc in _EDITABLE.items():
+        v = (cur.get(k) or "").strip()
+        secret = k in _SECRET_KEYS
+        items.append({
+            "key": k, "desc": desc, "secret": secret,
+            "set": bool(v),
+            "value": "" if secret else v,        # 非密钥的才回真值
+            "hint": _mask(v) if secret else "",
+        })
+    return {
+        "items": items,
+        "env_path": str(ROOT / ".env"),
+        # 各功能当前能不能用 —— 比单看「key 填没填」有用
+        "features": {
+            "collect": bool(settings.has_cookie),
+            "ask": bool(settings.dashscope_api_key.strip()),
+            "search": True,        # 本地向量,不需要任何 key
+            "asr": True,           # 本地 whisper,不需要任何 key
+        },
+    }
+
+
+@app.post("/api/settings")
+async def post_settings(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """写回 .env。只认白名单键,保留文件里其它行和注释。"""
+    updates = {k: str(v) for k, v in (body or {}).items()
+               if k in _EDITABLE and v is not None}
+    if not updates:
+        raise HTTPException(422, f"没有可写的键。可写:{sorted(_EDITABLE)}")
+
+    path = ROOT / ".env"
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    seen = set()
+    out = []
+    for ln in lines:
+        m = ln.split("=", 1)
+        k = m[0].strip()
+        if k in updates:
+            # 空字符串 = 清空这一项,但保留键,免得下次看不到它存在过
+            out.append(f"{k}={updates[k]}")
+            seen.add(k)
+        else:
+            out.append(ln)
+    for k, v in updates.items():
+        if k not in seen:
+            out.append(f"{k}={v}")
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")
+    try:
+        path.chmod(0o600)      # 里面有 cookie 和密钥,别让同机其它用户读到
+    except OSError:
+        pass
+    config.reload()
+    return {"saved": sorted(updates), "env_path": str(path)}
+
+
 @app.get("/api/creators/pending")
 async def get_creators_pending(
     days: int = Query(3, ge=1, le=90),
