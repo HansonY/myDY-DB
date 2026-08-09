@@ -1,7 +1,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>浏览 · Douyin-DB</title>
-<link rel="stylesheet" href="/shell.css?v=1786271636">
+<link rel="stylesheet" href="/shell.css?v=1786272435">
 <style>
 /* 搜索 + 模式切换 */
 .search{display:flex;gap:10px;align-items:stretch;margin-bottom:14px}
@@ -85,6 +85,7 @@
   <div class="filters">
     <div class="frow" id="f-source"><span class="lab">来源</span></div>
     <div class="frow" id="f-cred"><span class="lab">可信度</span></div>
+    <div class="frow" id="f-tag"><span class="lab">话题</span></div>
   </div>
 
   <div class="meta">
@@ -101,7 +102,7 @@
   <div id="tail"></div>
 </div>
 
-<script src="/shell.js?v=1786271636"></script>
+<script src="/shell.js?v=1786272435"></script>
 <script>
 'use strict';
 mountNav('browse');
@@ -123,7 +124,9 @@ const CREDS = [
 ];
 
 let mode = 'lit';           // lit=字面 | sem=语义
-let source = '', cred = '', sort = 'collected', q = '';
+let source = '', cred = '', sort = 'collected', q = '', tag = '';
+let TAGS = [], tagsOpen = false;
+const TAG_FOLD = 14;        // 默认露这么多,其余折起来 —— 全展开有 100+ 个,会淹掉卡片
 let offset = 0, total = 0, loading = false;
 const LIMIT = 60;
 let counts = {};            // 各来源/可信度的条数,填在 chip 上
@@ -143,6 +146,18 @@ function chips() {
   $('#f-cred').innerHTML = '<span class="lab">可信度</span>' + CREDS.map(c =>
     `<button class="chip${cred === c.v ? ' on' : ''}" data-cred="${c.v}">${c.label}` +
     `${counts.cred && counts.cred[c.v] != null ? `<b>${fmt(counts.cred[c.v])}</b>` : ''}</button>`).join('');
+
+  // 话题标签。默认只露前 14 个 —— 全部有 100+,铺开会把卡片挤到屏幕外。
+  const shown = tagsOpen ? TAGS : TAGS.slice(0, TAG_FOLD);
+  const restN = TAGS.length - shown.length;
+  $('#f-tag').innerHTML = '<span class="lab">话题</span>'
+    + `<button class="chip${!tag ? ' on' : ''}" data-tag="">不限</button>`
+    + shown.map(t =>
+        `<button class="chip${tag === t.tag ? ' on' : ''}" data-tag="${esc(t.tag)}">` +
+        `#${esc(t.tag)}<b>${fmt(t.n)}</b></button>`).join('')
+    + (restN > 0
+        ? `<button class="chip" data-more="1">+${restN} 个话题</button>`
+        : TAGS.length > TAG_FOLD ? `<button class="chip" data-more="1">收起</button>` : '');
 }
 
 function card(v) {
@@ -206,6 +221,7 @@ async function run(reset) {
     if (q) p.set('q', q);
     if (source) p.set('source', source);
     if (cred) p.set('content', cred);
+    if (tag) p.set('tag', tag);
     const r = await api('/api/videos?' + p);
     total = r.total;
     $('#count').textContent = `${fmt(total)} 条` + (q ? ` · 含「${q}」` : '');
@@ -244,6 +260,12 @@ $('#f-cred').addEventListener('click', e => {
   const b = e.target.closest('[data-cred]'); if (!b) return;
   cred = b.dataset.cred; chips(); run(true);
 });
+$('#f-tag').addEventListener('click', e => {
+  const more = e.target.closest('[data-more]');
+  if (more) { tagsOpen = !tagsOpen; chips(); return; }
+  const b = e.target.closest('[data-tag]'); if (!b) return;
+  tag = b.dataset.tag; chips(); run(true);
+});
 $('#sort').addEventListener('change', e => { sort = e.target.value; run(true); });
 $('#m-lit').onclick = () => { mode = 'lit'; $('#m-lit').classList.add('on'); $('#m-sem').classList.remove('on'); run(true); };
 $('#m-sem').onclick = () => { mode = 'sem'; $('#m-sem').classList.add('on'); $('#m-lit').classList.remove('on'); if (q) run(true); };
@@ -263,5 +285,6 @@ api('/api/runs?limit=1').then(r => {
 
 chips();
 loadCounts();
+api('/api/tags?limit=120').then(r => { TAGS = r.items || []; chips(); }).catch(() => {});
 run(true);
 </script>

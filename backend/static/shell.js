@@ -20,7 +20,16 @@ const NAV = [
   {key: 'rival',   href: '/rival.html',   label: '竞品',     title: '竞品博主的打法,对比上期'},
 ];
 
+/* 建外壳:导航固定在顶,其余内容全部塞进一个自己滚动的容器。
+   页面只管写自己的内容,不用关心这层结构 —— 调一次 mountNav 就位。 */
 function mountNav(current) {
+  // 把 body 现有内容(页面自己的 .wrap 等)搬进滚动容器
+  const app = document.createElement('div');
+  app.className = 'app';
+  const scroll = document.createElement('div');
+  scroll.className = 'scroll';
+  while (document.body.firstChild) scroll.appendChild(document.body.firstChild);
+
   const el = document.createElement('nav');
   el.className = 'nav';
   el.innerHTML =
@@ -37,7 +46,10 @@ function mountNav(current) {
     `<span class="status" id="nav-status"><span class="dot"></span>` +
     `<span id="nav-sync">只读模式</span></span>` +
     `<a class="maint" href="/data.html" title="采集、补齐、转写、索引">维护</a>`;
-  document.body.insertBefore(el, document.body.firstChild);
+
+  app.appendChild(el);
+  app.appendChild(scroll);
+  document.body.appendChild(app);
 }
 
 /** 在顶栏显示「只读模式 · N 小时前同步」。传入最近一次采集时间(ISO)。 */

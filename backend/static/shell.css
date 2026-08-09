@@ -52,13 +52,23 @@
 }
 
 *{box-sizing:border-box}
-html{scroll-padding-top:calc(var(--nav-h) + 16px)}
+/* 整页**不滚动**,滚动发生在内容区里面 —— 这是导航栏「一直在」的做法。
+   不是 position:sticky:sticky 仍然参与文档流,长页面下滚时会有位移抖动,
+   而且和页面内的滚动锚点互相打架。稿子用的是固定高度的 flex 列:
+     html/body 100% + overflow:hidden
+     .app      flex column,占满视口
+     .nav      flex:0 0 auto,永远在那儿
+     .scroll   flex:1 + overflow-y:auto,只有它动
+   代价是页面内的锚点跳转要作用在 .scroll 上,不是 window —— 值得。 */
+html,body{height:100%;overflow:hidden}
 body{
   margin:0;background:var(--bg);color:var(--fg);
   font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",
        "Hiragino Sans GB","Microsoft YaHei",sans-serif;
   -webkit-font-smoothing:antialiased;
 }
+.app{display:flex;flex-direction:column;height:100%}
+.scroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
 a{color:var(--accent);text-decoration:none}
 button,select,input{font-family:inherit}
 
@@ -72,7 +82,7 @@ button,select,input{font-family:inherit}
    2) 「维护」用**橙色虚线框** —— 虚线在这套语言里表示「非日常、要小心」,
       它是唯一会去打抖音接口的入口,和普通按钮必须长得不一样。 */
 .nav{
-  position:sticky;top:0;z-index:60;height:56px;
+  flex:0 0 auto;z-index:5;height:56px;
   display:flex;align-items:center;gap:24px;
   padding:0 26px;background:rgba(15,18,23,.92);
   backdrop-filter:blur(12px);
