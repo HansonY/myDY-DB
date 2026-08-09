@@ -1,111 +1,119 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>认识自己 · Douyin-DB</title>
-<link rel="stylesheet" href="/shell.css?v=1786291075">
+<link rel="stylesheet" href="/shell.css?v=1786292809">
 <style>
-.hero{margin:22px 0 6px;font-size:26px;line-height:1.4;font-weight:600;letter-spacing:-.4px}
-.hero b{color:var(--accent-text);font-weight:600}
+/* 两栏:主内容 + 常驻问答。
+   不做成一长条 —— 六段竖着堆等于逼人一直滚,滚到第四段就忘了第一段说什么。
+   结论压成卡片网格,一屏之内看得完;问答固定在右边,随时能问。 */
+.cols{display:grid;grid-template-columns:minmax(0,1fr) 316px;gap:22px;align-items:start}
+.side{position:sticky;top:0}
+
+.scopeline{font-size:11.5px;color:var(--dim2);margin-bottom:10px}
+.hero{margin:0 0 6px;font-size:23px;line-height:1.45;font-weight:600;letter-spacing:-.4px}
 .hero .warm{color:var(--warn-text)}
-.herosub{color:var(--dim);font-size:13.5px;margin-bottom:26px}
+.herosub{color:var(--dim2);font-size:12px;margin-bottom:14px}
 
-/* 每段:序号 + 标题 + 图/表 + 大结论 */
-.seg{border-top:1px solid var(--line);padding:26px 0}
-.seg:first-of-type{border-top:0}
-.seghd{display:flex;align-items:baseline;gap:12px;margin-bottom:4px}
-.seghd .no{font:600 13px/1 var(--mono);color:var(--dim2);letter-spacing:1px}
-.seghd h2{margin:0;font-size:17px;font-weight:600}
-.seghd .cap{margin-left:auto;font-size:12px;color:var(--dim2)}
-/* 「所以呢」结论块 —— 每段的灵魂,视觉要重 */
-.soo{background:var(--surface);border:1px solid var(--line);border-left:2px solid var(--accent);
-  border-radius:9px;padding:13px 16px;margin:14px 0 2px;font-size:14.5px;line-height:1.75}
-.soo .lbl{color:var(--accent-text);font-weight:600;font-size:12px;margin-right:6px}
+/* ── 球 ── 大一点才看得清标签,340 太挤会互相压 */
+.sphere{position:relative;height:clamp(400px,48vh,560px);margin:2px 0 4px}
+.sphere canvas{width:100%;height:100%;display:block;cursor:grab;touch-action:none}
+.sphere canvas.hit{cursor:pointer}
+.sphere .pause{position:absolute;right:0;bottom:0;font-size:11.5px;color:var(--dim);
+  background:var(--surface);border:1px solid var(--line);border-radius:7px;
+  padding:5px 11px;cursor:pointer}
+.sphere .pause:hover{color:var(--fg);border-color:var(--line2)}
+.sphere .tip{position:absolute;left:0;bottom:2px;font-size:11px;color:var(--dim2)}
 
-/* 标签球 */
-.sphere{position:relative;height:340px;margin:6px 0}
-.sphere canvas{width:100%;height:100%;display:block;cursor:grab}
-.sphere .pause{position:absolute;right:0;bottom:0;font-size:12px;color:var(--dim)}
+/* 点中标签后出现:这个标签下都是些什么 */
+.picked{border:1px solid var(--accent-line);background:var(--accent-dim);
+  border-radius:12px;padding:12px 14px;margin-bottom:14px}
+.picked .hd{display:flex;align-items:baseline;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+.picked .hd b{font-size:15px;font-weight:600;color:var(--accent-text)}
+.picked .hd span{font-size:11.5px;color:var(--dim)}
+.picked .hd .gap{flex:1}
+.picked .hd a,.picked .hd button{font-size:11.5px;background:none;border:0;
+  color:var(--dim2);cursor:pointer;padding:0}
+.picked .hd a:hover,.picked .hd button:hover{color:var(--fg)}
+.pvs{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:9px}
+.pv{background:var(--bg);border:1px solid var(--line);border-radius:9px;
+  overflow:hidden;display:block;color:inherit}
+.pv:hover{border-color:var(--accent-line)}
+.pv .th{aspect-ratio:3/4;background:var(--surface2);position:relative}
+.pv .th img{width:100%;height:100%;object-fit:cover;display:block}
+.pv .th .cred{position:absolute;top:5px;left:5px}
+.pv .tt{padding:6px 7px 8px;font-size:11px;line-height:1.45;color:#d5dae2;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.picked .load{color:var(--dim2);font-size:12px;padding:12px 0}
 
-/* 构成条 */
-.compo{display:grid;grid-template-columns:1fr;gap:0;margin-top:6px}
-.compo .row{display:grid;grid-template-columns:110px 1fr 104px;gap:10px;align-items:center;font-size:13px}
-.compo .bar{height:8px;border-radius:4px;background:var(--surface2);overflow:hidden}
-.compo .bar i{display:block;height:100%;background:var(--accent)}
-.compo .row:nth-child(2) .bar i{background:var(--violet)}
-.compo .row:nth-child(3) .bar i{background:var(--warn)}
-.compo .n{text-align:right;color:var(--dim);font-family:var(--mono);font-size:12px}
-/* 主题下面列出它到底合并了哪些标签 —— 不然「英语口语 439 条」看着像凭空来的 */
-.compo .subtags{grid-column:1/-1;margin:-2px 0 6px;padding-left:2px;
-  font-size:11px;color:var(--dim2);line-height:1.6}
-.compo .row{margin-bottom:2px}
+/* ── 主题构成条 ── */
+.compo{margin:2px 0 16px}
+.compo .row{display:grid;grid-template-columns:96px 1fr 92px;gap:10px;
+  align-items:center;font-size:12.5px;padding:3px 0;cursor:pointer;border-radius:6px}
+.compo .row:hover{background:var(--surface)}
+.compo .row.on{background:var(--accent-dim)}
+.compo .bar{height:7px;border-radius:4px;background:var(--surface2);overflow:hidden}
+.compo .bar i{display:block;height:100%;border-radius:4px}
+.compo .n{text-align:right;color:var(--dim2);font-family:var(--mono);font-size:11px}
+.compo .sub{grid-column:1/-1;font-size:10.5px;color:var(--dim2);
+  padding:0 0 5px 2px;line-height:1.5;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
-/* 通用表 */
-table.t{width:100%;border-collapse:collapse;margin-top:8px;font-size:13px}
-table.t th{text-align:left;color:var(--dim2);font-weight:500;font-size:11.5px;padding:6px 10px;border-bottom:1px solid var(--line)}
-table.t td{padding:8px 10px;border-bottom:1px solid var(--line)}
-table.t td.num{text-align:right;font-family:var(--mono);color:var(--dim)}
-table.t tr:last-child td{border-bottom:0}
-.pill{font-size:11px;padding:1px 7px;border-radius:4px}
-.pill.gap{background:var(--warn-dim);color:var(--warn-text)}
-.pill.ok{background:var(--ok-dim);color:var(--ok)}
+/* ── 结论卡网格:2×2,不竖着堆 ── */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(268px,1fr));gap:12px}
+.ic{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 15px}
+.ic h3{margin:0 0 3px;font-size:13px;font-weight:600}
+.ic .cap{font-size:10.5px;color:var(--dim2);margin-bottom:10px}
+.ic .soo{font-size:13px;line-height:1.7;color:#d5dae2;margin-top:10px}
+.ic .soo b{color:var(--fg-hi);font-weight:600}
+.ic .soo .warm{color:var(--warn-text)}
 
-/* 想学vs看:两条对比 */
-.vs{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:8px}
-.vs .col{background:var(--surface);border:1px solid var(--line);border-radius:9px;padding:12px 14px}
-.vs .col h4{margin:0 0 8px;font-size:12.5px;color:var(--dim);font-weight:500}
-.vs .seg2{display:flex;height:26px;border-radius:6px;overflow:hidden;font-size:11px}
-.vs .seg2 span{display:flex;align-items:center;justify-content:center;color:#0a0c0f;font-weight:600}
+/* 卡内的小条形 */
+.mini{display:flex;flex-direction:column;gap:6px}
+.mini .r{display:grid;grid-template-columns:74px 1fr 44px;gap:8px;
+  align-items:center;font-size:11.5px}
+.mini .b{height:6px;border-radius:3px;background:var(--surface2);overflow:hidden}
+.mini .b i{display:block;height:100%;border-radius:3px}
+.mini .v{text-align:right;font-family:var(--mono);font-size:10.5px;color:var(--dim2)}
+/* 收藏 vs 点赞 的双色对照 */
+.vs2 .r{grid-template-columns:66px 1fr 1fr}
+.vs2 .lg{display:flex;gap:12px;font-size:10.5px;color:var(--dim2);margin-bottom:7px}
+.vs2 .lg i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px}
 
-/* 干货率 */
-.qual{display:flex;flex-direction:column;gap:9px;margin-top:6px}
-.qual .row{display:grid;grid-template-columns:110px 1fr 52px;gap:10px;align-items:center;font-size:13px}
-.qual .bar{height:8px;border-radius:4px;background:var(--surface2);overflow:hidden}
-.qual .bar i{display:block;height:100%}
-.qual .pct{text-align:right;font-family:var(--mono);font-size:12px;color:var(--dim)}
-.qual .tag{color:var(--fg)}
-
-/* 时长直方 */
-.hist{display:flex;flex-direction:column;gap:8px;margin-top:6px}
-.hist .row{display:grid;grid-template-columns:120px 1fr 44px;gap:10px;align-items:center;font-size:13px}
-.hist .bar{height:8px;border-radius:4px;background:var(--surface2);overflow:hidden}
-.hist .bar i{display:block;height:100%;background:var(--accent)}
-
-.ev{margin:8px 0 0;padding:0;list-style:none;color:var(--dim);font-size:13px;line-height:1.9}
-.ev li::before{content:"·";color:var(--dim2);margin-right:8px}
-.why{color:var(--dim2);font-size:12px;margin-top:8px;line-height:1.6}
-.link{display:inline-block;margin-top:10px;font-size:13px}
-
-/* 问答 */
-.ask{margin-top:30px;border:1px solid var(--line);border-radius:10px;background:var(--surface);padding:16px}
-.ask h3{margin:0 0 4px;font-size:15px}
-.ask p{margin:0 0 12px;color:var(--dim2);font-size:12px}
-.ask .box{display:flex;gap:8px}
-.ask input{flex:1;background:var(--bg);border:1px solid var(--line);border-radius:8px;
-  padding:9px 12px;color:var(--fg);font-size:14px}
+/* ── 右侧常驻问答 ── */
+.ask{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px}
+.ask h3{margin:0 0 3px;font-size:13px;font-weight:600}
+.ask p{margin:0 0 11px;color:var(--dim2);font-size:10.5px;line-height:1.55}
+.ask .box{display:flex;gap:7px}
+.ask input{flex:1;min-width:0;background:var(--bg);border:1px solid var(--line);
+  border-radius:8px;padding:8px 10px;color:var(--fg);font-size:12.5px}
 .ask input:focus{outline:none;border-color:var(--accent-line)}
-.ask .sugs{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}
-.ask .sug{font-size:12px;color:var(--dim);background:var(--surface2);border:1px solid var(--line);
-  border-radius:20px;padding:5px 11px;cursor:pointer}
-.ask .sug:hover{color:var(--fg);border-color:var(--accent-line)}
-.ans{margin-top:14px;font-size:14px;line-height:1.75;white-space:pre-wrap}
-.ans .cite{display:block;margin-top:8px;font-size:12px;color:var(--dim)}
-.skel{color:var(--dim2);font-size:13px;padding:40px 0;text-align:center}
+.ask .btn{flex:none;padding:8px 13px;font-size:12px}
+.sugs{display:flex;flex-direction:column;gap:6px;margin-top:10px}
+.sug{font-size:11.5px;color:var(--dim);background:var(--bg);border:1px solid var(--line);
+  border-radius:7px;padding:7px 10px;cursor:pointer;text-align:left;line-height:1.45}
+.sug:hover{color:var(--fg);border-color:var(--accent-line)}
+.ans{margin-top:12px;font-size:12.5px;line-height:1.75;color:#d5dae2;
+  max-height:46vh;overflow-y:auto}
+.ans .cite{display:block;margin-top:7px;font-size:10.5px;color:var(--dim2);line-height:1.5}
+.skel{color:var(--dim2);text-align:center;padding:50px 0;font-size:13px}
+
+@media(max-width:1000px){
+  .cols{grid-template-columns:1fr}
+  .side{position:static}
+}
 </style>
 
-<div class="wrap narrow">
-  <div class="phead">
-    <h1>认识自己</h1>
-    <p id="scope">从我做过的收藏和点赞里看我自己</p>
-  </div>
-
+<div class="wrap">
   <div id="body"><div class="skel">正在分析…</div></div>
 </div>
 
-<script src="/shell.js?v=1786291075"></script>
+<script src="/shell.js?v=1786292809"></script>
 <script>
 'use strict';
 mountNav('insight');
 
-const PALETTE = ['#4c8dff', '#a78bfa', '#ff7a45', '#5cb87a', '#e8b04b', '#5b6675'];
+const PALETTE = ['#4c8dff', '#a78bfa', '#ff7a45', '#5cb87a', '#e8b04b', '#7fb0ff'];
+let SPH = null;       // 球的控制句柄,构成条点击也要用
 
 async function load() {
   try {
@@ -122,222 +130,305 @@ async function load() {
   }
 }
 
-function part(stats, id) { return (stats.parts || []).find(p => p.id === id) || {}; }
+const part = (stats, id) => (stats.parts || []).find(p => p.id === id) || {};
 
 function render(stats, asp, qual, graph, themes) {
   const contrast = part(stats, 'contrast');
   const shape = part(stats, 'shape');
   const drift = part(stats, 'drift');
   const tension = part(stats, 'tension');
-
-  $('#scope').textContent =
-    `只统计我主动选的 ${fmt(stats.n_videos)} 条 · 收藏 / 点赞 / 我发的 · 博主发的不算`;
-
-  // 顶部一句话画像:优先 AI 画像,没有就用「核心张力」
-  const heroText = (stats.narrative && stats.narrative.split('\n')[0])
-    || (tension.headline) || '看看你都存了些什么。';
-
-  // 01 构成:用**语义聚类出的兴趣主题**,不是抖音官方一级分类。
-  // 官方那套排前几的是「个人管理 18%」「随拍 16%」—— 看完不知道你在看什么。
   const TH = (themes && themes.themes) || [];
   const top3 = TH.slice(0, 3);
-  const top3pct = Math.round(top3.reduce((s, t) => s + t.n, 0) * 100 /
-    Math.max(TH.reduce((s, t) => s + t.n, 0), 1));
+  const thTotal = Math.max(TH.reduce((s, t) => s + t.n, 0), 1);
+  const top3pct = Math.round(top3.reduce((s, t) => s + t.n, 0) * 100 / thTotal);
 
-  // 02 关注的人:真实故事 = 97 位里多少从没看过
-  const seen = asp.categorizable, unknown = asp.unknown;
+  const heroText = (stats.narrative && stats.narrative.split('\n')[0])
+    || tension.headline || '看看你都存了些什么。';
+  const hi = heroText.indexOf('但');
+  const hero = hi > 0
+    ? `${esc(heroText.slice(0, hi))}<span class="warm">${esc(heroText.slice(hi))}</span>`
+    : esc(heroText);
 
-  let html = `
-    <div class="hero">${heroConclusion(heroText)}</div>
-    <div class="herosub">下面几段是拆解 —— 每段都写清「所以呢」,基于真实数据,不够的地方会直说。</div>
+  // 收藏 vs 点赞:取落差最大的几类
+  const vs = (contrast.table || []).slice()
+    .sort((a, b) => Math.abs(b.gap) - Math.abs(a.gap)).slice(0, 5);
+  const vsMax = Math.max(...vs.map(r => Math.max(r.fav_pct, r.lik_pct)), 1);
 
-    <!-- 01 兴趣构成 -->
-    <section class="seg">
-      <div class="seghd"><span class="no">01</span><h2>我的兴趣构成</h2>
-        <span class="cap">拖动球体可以转 · 每个点是一个话题,越大存得越多</span></div>
-      <div class="sphere"><canvas id="sph"></canvas><button class="pause" id="sphpause">暂停旋转</button></div>
-      <div class="compo">${TH.slice(0, 6).map(t => {
-        const w = Math.round(t.n * 100 / Math.max(TH[0].n, 1));
-        return `<div class="row"><span title="${esc(t.tags.join(' '))}">${esc(t.name)}</span>
-          <span class="bar"><i style="width:${w}%"></i></span>
-          <span class="n">${t.n} 条 · ${t.share}%</span></div>
-          <div class="subtags">${t.tags.slice(0, 8).map(x => '#' + esc(x)).join(' ')}${
-            t.tags.length > 8 ? ` 等 ${t.tags.length} 个标签` : ''}</div>`;
-      }).join('')}</div>
-      <div class="soo"><span class="lbl">所以呢</span>${
-        TH.length ? `${TH.length} 个兴趣主题里,前三个就占了 ${top3pct}% ——
-        <b>${top3.map(t => esc(t.name)).join('、')}</b>。
-        你不是什么都存,兴趣其实很窄,窄到可以直接把这几条当知识库主线来经营。`
-        : '还没有足够的话题标签来归纳主题。'}</div>
-      <div class="why">${esc((themes && themes.note) || '')}</div>
-    </section>
+  $('#body').innerHTML = `
+  <div class="cols">
+    <div class="main">
+      <div class="scopeline">只统计我主动选的 ${fmt(stats.n_videos)} 条 · 收藏 / 点赞 / 我发的 · 博主发的不算</div>
+      <div class="hero">${hero}</div>
+      <div class="herosub">点球上的标签,或点下面任一主题,看它下面到底是些什么作品。</div>
 
-    <!-- 02 关注的人分方面 -->
-    <section class="seg">
-      <div class="seghd"><span class="no">02</span><h2>我关注的人,都在做什么</h2></div>
-      <table class="t"><thead><tr><th>方面</th><th class="num">关注了几位</th>
-        <th class="num">我收藏过</th><th></th></tr></thead><tbody>
-        ${asp.items.map(x => `<tr><td>${esc(x.aspect)}</td>
-          <td class="num">${x.follow}</td><td class="num">${x.saved}</td>
-          <td><span class="pill ${x.gap > 0 ? 'gap' : 'ok'}">${esc(x.verdict)}</span></td></tr>`).join('')}
-      </tbody></table>
-      <div class="soo"><span class="lbl">所以呢</span>你关注的 ${asp.total_following} 人里,
-        <b>只有 ${seen} 人</b>你真正收藏过他们的内容 —— 另外 <span class="warm">${unknown} 人从没看过</span>。
-        关注不等于在看。那 ${unknown} 人要么取关,要么正是「想跟却刷不到」、最该做成每日简报的。
-        <a class="link" href="/creators.html">按这个去挑博主 →</a></div>
-      <div class="why">${esc(asp.note)}</div>
-    </section>
-
-    <!-- 03 想学 vs 真正在看 -->
-    ${contrast.headline ? `<section class="seg">
-      <div class="seghd"><span class="no">03</span><h2>想学的 vs 真正在看的</h2></div>
-      ${vsBlock(contrast)}
-      <div class="soo"><span class="lbl">所以呢</span>${esc(contrast.headline)}
-        —— 收藏夹是你对自己的期望,点赞才是真实注意力。想改变什么,盯点赞,别盯收藏夹。</div>
-    </section>` : ''}
-
-    <!-- 04 干货率 -->
-    <section class="seg">
-      <div class="seghd"><span class="no">04</span><h2>哪些话题是干货,哪些只是刷</h2></div>
-      <div class="qual">${qual.items.map(x => `<div class="row">
-        <span class="tag">#${esc(x.tag)}</span>
-        <span class="bar"><i style="width:${x.rate}%;background:${x.rate >= 45 ? 'var(--ok)' : x.rate >= 30 ? 'var(--accent)' : 'var(--warn)'}"></i></span>
-        <span class="pct">${x.rate}%</span></div>`).join('')}</div>
-      <div class="soo"><span class="lbl">所以呢</span>标签数量骗人。
-        同样攒了几十条,${topQual(qual)} —— 你以为攒了一堆,其实攒的可能是一堆空壳。</div>
-      <div class="why">${esc(qual.note)}</div>
-    </section>
-
-    <!-- 05 兴趣漂移 -->
-    <section class="seg">
-      <div class="seghd"><span class="no">05</span><h2>兴趣是怎么变的</h2>
-        <span class="cap">月级精度 —— 做不了「我几点刷抖音」</span></div>
-      <ul class="ev">${(drift.evidence || ['还需要更多快照才能看出变化']).map(e => `<li>${esc(e)}</li>`).join('')}</ul>
-      <div class="soo"><span class="lbl">所以呢</span>${esc(drift.headline || '目前只有少量历史快照,趋势还看不出来 —— 多分析几次就有了。')}</div>
-    </section>
-
-    <!-- 06 时长形态 -->
-    <section class="seg">
-      <div class="seghd"><span class="no">06</span><h2>我能看完多长的东西</h2></div>
-      <ul class="ev">${(shape.evidence || []).map(e => `<li>${esc(e)}</li>`).join('')}</ul>
-      <div class="soo"><span class="lbl">所以呢</span>${esc(shape.headline || '')}</div>
-    </section>
-
-    <!-- 问答 -->
-    <div class="ask">
-      <h3>还想问点别的?</h3>
-      <p>只翻我主动存的内容 · 答案带出处 · 没依据就说没有</p>
-      <div class="box">
-        <input id="q" placeholder="问点关于我自己的…" autocomplete="off">
-        <button class="btn go" id="qgo">问</button>
+      <div class="sphere">
+        <canvas id="sph"></canvas>
+        <span class="tip">点一个标签看作品 · 拖动可以转</span>
+        <button class="pause" id="sphpause">暂停旋转</button>
       </div>
-      <div class="sugs">
-        <span class="sug">我为什么老收藏不看?</span>
-        <span class="sug">我到底在看什么内容?</span>
-        <span class="sug">我收藏里最有干货的是哪些?</span>
-      </div>
-      <div class="ans" id="ans" hidden></div>
-    </div>`;
+      <div id="picked"></div>
 
-  $('#body').innerHTML = html;
-  drawSphere(graph);
+      <div class="compo" id="compo">
+        ${TH.slice(0, 6).map((t, i) => {
+          const w = Math.round(t.n * 100 / Math.max(TH[0].n, 1));
+          return `<div class="row" data-theme="${esc(t.name)}">
+            <span>${esc(t.name)}</span>
+            <span class="bar"><i style="width:${w}%;background:${PALETTE[i % PALETTE.length]}"></i></span>
+            <span class="n">${t.n} 条 · ${t.share}%</span>
+            <span class="sub">${t.tags.slice(0, 7).map(x => '#' + esc(x)).join(' ')}${
+              t.tags.length > 7 ? ` 等 ${t.tags.length} 个` : ''}</span></div>`;
+        }).join('')}
+      </div>
+
+      <div class="cards">
+        <!-- 想学 vs 在看:这一层里最有信息量的一刀 -->
+        <div class="ic">
+          <h3>想学的 vs 真正在看的</h3>
+          <div class="cap">收藏夹是对自己的期望,点赞才是真实注意力</div>
+          <div class="mini vs2">
+            <div class="lg"><span><i style="background:#4c8dff"></i>收藏</span>
+              <span><i style="background:#ff7a45"></i>点赞</span></div>
+            ${vs.map(r => `<div class="r"><span>${esc(r.cat)}</span>
+              <span class="b"><i style="width:${r.fav_pct * 100 / vsMax}%;background:#4c8dff"></i></span>
+              <span class="b"><i style="width:${r.lik_pct * 100 / vsMax}%;background:#ff7a45"></i></span></div>`).join('')}
+          </div>
+          <div class="soo">${esc(contrast.headline || '收藏和点赞的分布还看不出明显落差。')}</div>
+        </div>
+
+        <!-- 干货率 -->
+        <div class="ic">
+          <h3>哪些话题是干货,哪些只是刷</h3>
+          <div class="cap">「有干货」= 抖音给它生成过内容总结,是代理指标</div>
+          <div class="mini">
+            ${qual.items.slice(0, 6).map(x => `<div class="r"><span>#${esc(x.tag)}</span>
+              <span class="b"><i style="width:${x.rate}%;background:${
+                x.rate >= 45 ? 'var(--ok)' : x.rate >= 30 ? 'var(--accent)' : 'var(--warn)'}"></i></span>
+              <span class="v">${x.rate}%</span></div>`).join('')}
+          </div>
+          <div class="soo">${topQual(qual)}</div>
+        </div>
+
+        <!-- 关注的人缺口 -->
+        <div class="ic">
+          <h3>关注了,却没在看</h3>
+          <div class="cap">方面按其作品的主导分类推断,是估计不是精确</div>
+          <div class="mini">
+            ${asp.items.slice(0, 5).map(x => `<div class="r"><span>${esc(x.aspect)}</span>
+              <span class="b"><i style="width:${x.saved * 100 / Math.max(x.follow, 1)}%;background:var(--accent)"></i></span>
+              <span class="v">${x.saved}/${x.follow}</span></div>`).join('')}
+          </div>
+          <div class="soo">关注的 ${asp.total_following} 人里,<b>只有 ${asp.categorizable} 人</b>你真正收藏过 ——
+            另外 <span class="warm">${asp.unknown} 人从没看过</span>。关注不等于在看。
+            <a href="/creators.html">去挑博主 →</a></div>
+        </div>
+
+        <!-- 形态 + 漂移 合成一张 -->
+        <div class="ic">
+          <h3>形态与变化</h3>
+          <div class="cap">时间只到月级 —— 做不了「我几点刷抖音」</div>
+          <div class="soo">${esc(shape.headline || '')}</div>
+          <div class="soo" style="color:var(--dim)">${
+            esc(drift.headline || '历史快照还太少,趋势看不出来 —— 多分析几次就有了。')}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右侧常驻问答 -->
+    <div class="side">
+      <div class="ask">
+        <h3>问点关于我自己的</h3>
+        <p>只翻我主动存的 ${fmt(stats.n_videos)} 条 · 答案带出处 · 没依据就说没有</p>
+        <div class="box">
+          <input id="q" placeholder="比如:我为什么老收藏不看?" autocomplete="off">
+          <button class="btn go" id="qgo">问</button>
+        </div>
+        <div class="sugs">
+          <button class="sug">我为什么老收藏不看?</button>
+          <button class="sug">我收藏里最有干货的是哪些?</button>
+          <button class="sug">${TH[0] ? esc(TH[0].name) + '我到底在看什么?' : '我到底在看什么?'}</button>
+        </div>
+        <div class="ans" id="ans" hidden></div>
+      </div>
+    </div>
+  </div>`;
+
+  SPH = drawSphere(graph);
+  wireCompo(TH);
   wireAsk();
 }
 
-function heroConclusion(text) {
-  // 把画像里第一句加重:如果含「但」,「但」后半句用暖色(理想 vs 实际的反差)
-  const i = text.indexOf('但');
-  if (i > 0) return `${esc(text.slice(0, i))}<br><span class="warm">${esc(text.slice(i))}</span>`;
-  return esc(text);
-}
-
-function vsBlock(c) {
-  // 用 table 的前两类拼「学习 vs 娱乐」对比不总成立,直接用 evidence + table 展示落差
-  const rows = (c.table || []).slice(0, 5);
-  return `<table class="t"><thead><tr><th>分类</th><th class="num">收藏</th>
-    <th class="num">点赞</th><th class="num">差</th></tr></thead><tbody>
-    ${rows.map(r => `<tr><td>${esc(r.cat)}</td>
-      <td class="num">${r.fav_pct}%</td><td class="num">${r.lik_pct}%</td>
-      <td class="num" style="color:${r.gap > 0 ? 'var(--accent-text)' : 'var(--warn-text)'}">${r.gap > 0 ? '+' : ''}${r.gap}</td></tr>`).join('')}
-  </tbody></table>`;
-}
-
 function topQual(q) {
-  const items = q.items.filter(x => x.n >= 15);
-  if (items.length < 2) return '有的话题几乎全是干货,有的几乎全是空壳';
-  const hi = items.reduce((a, b) => a.rate > b.rate ? a : b);
-  const lo = items.reduce((a, b) => a.rate < b.rate ? a : b);
-  return `#${hi.tag} 里 ${hi.rate}% 真有内容,#${lo.tag} 只有 ${lo.rate}%`;
+  const it = q.items || [];
+  if (it.length < 2) return '还需要更多数据才能比出干货率。';
+  const hi = it.reduce((a, b) => a.rate > b.rate ? a : b);
+  const lo = it.reduce((a, b) => a.rate < b.rate ? a : b);
+  return `标签数量骗人 —— <b>#${esc(hi.tag)}</b> 里 ${hi.rate}% 真有内容,
+    <span class="warm">#${esc(lo.tag)} 只有 ${lo.rate}%</span>。攒的可能是一堆空壳。`;
 }
 
-/* ── 标签球:Fibonacci 球面分布 + 自转。用 graph 的节点。 ── */
+/* ── 标签球:Fibonacci 分布 + 自转 + 可点 ── */
 function drawSphere(graph) {
-  const cv = $('#sph'); if (!cv) return;
-  const nodes = (graph.nodes || []).slice(0, 60);
-  if (!nodes.length) { cv.parentElement.style.display = 'none'; return; }
+  const cv = $('#sph'); if (!cv) return null;
+  const nodes = (graph.nodes || []).slice(0, 70);
+  if (!nodes.length) { cv.parentElement.style.display = 'none'; return null; }
   const dpr = Math.min(devicePixelRatio || 1, 2);
-  function size() { cv.width = cv.clientWidth * dpr; cv.height = cv.clientHeight * dpr; }
+  const size = () => { cv.width = cv.clientWidth * dpr; cv.height = cv.clientHeight * dpr; };
   size(); addEventListener('resize', size);
-  const maxc = Math.max(...nodes.map(n => n.count || n.n || 1));
-  // Fibonacci 球面
+
+  const maxc = Math.max(...nodes.map(n => n.n || n.count || 1));
   const pts = nodes.map((n, i) => {
     const y = 1 - (i / (nodes.length - 1)) * 2;
     const r = Math.sqrt(1 - y * y);
     const th = Math.PI * (3 - Math.sqrt(5)) * i;
     return {x: Math.cos(th) * r, y, z: Math.sin(th) * r,
-      label: n.tag || n.id || n.label, w: (n.count || n.n || 1) / maxc,
-      color: PALETTE[i % PALETTE.length]};
+      label: n.tag || n.id || n.label, w: (n.n || n.count || 1) / maxc,
+      n: n.n || n.count || 0, color: PALETTE[i % PALETTE.length]};
   });
-  let ax = 0, ay = 0, paused = false, drag = null;
-  cv.onpointerdown = e => { drag = {x: e.clientX, y: e.clientY, ax, ay}; cv.setPointerCapture(e.pointerId); };
-  cv.onpointermove = e => { if (!drag) return; ay = drag.ay + (e.clientX - drag.x) * .01; ax = drag.ax + (e.clientY - drag.y) * .01; };
-  cv.onpointerup = () => drag = null;
-  $('#sphpause').onclick = function () { paused = !paused; this.textContent = paused ? '继续旋转' : '暂停旋转'; };
+
+  let ax = 0, ay = 0, paused = false, drag = null, moved = 0, sel = null, proj = [];
+  const btn = $('#sphpause');
+  const setPaused = v => { paused = v; btn.textContent = v ? '继续旋转' : '暂停旋转'; };
+
+  cv.onpointerdown = e => {
+    drag = {x: e.clientX, y: e.clientY, ax, ay}; moved = 0;
+    cv.setPointerCapture(e.pointerId);
+  };
+  cv.onpointermove = e => {
+    const r = cv.getBoundingClientRect();
+    if (drag) {
+      moved += Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y);
+      ay = drag.ay + (e.clientX - drag.x) * .01;
+      ax = drag.ax + (e.clientY - drag.y) * .01;
+      return;
+    }
+    cv.classList.toggle('hit', !!hit(e.clientX - r.left, e.clientY - r.top));
+  };
+  cv.onpointerup = e => {
+    const wasDrag = moved > 6;      // 拖动过就不算点击,免得转两下就误触
+    drag = null;
+    if (wasDrag) return;
+    const r = cv.getBoundingClientRect();
+    const p = hit(e.clientX - r.left, e.clientY - r.top);
+    if (p) { sel = p; setPaused(true); showTag(p.label, p.n); }   // 点中就停转
+    else { sel = null; $('#picked').innerHTML = ''; }
+  };
+  btn.onclick = () => setPaused(!paused);
+
+  /** 命中检测:用上一帧的投影结果反查,最近且在阈值内的那个点 */
+  function hit(cssX, cssY) {
+    const x = cssX * dpr, y = cssY * dpr;
+    let best = null, bd = 26 * dpr;
+    for (const q of proj) {
+      const d = Math.hypot(q.sx - x, q.sy - y);
+      if (d < bd) { bd = d; best = q.p; }
+    }
+    return best;
+  }
 
   function frame() {
-    if (!paused && !drag) ay += 0.0032;
-    const w = cv.width, h = cv.height, cx = w / 2, cy = h / 2, R = Math.min(w, h) * 0.38;
+    if (!paused && !drag) ay += 0.0030;
+    const w = cv.width, h = cv.height, cx = w / 2, cy = h / 2;
+    // 半径按较小边算,但留出标签横向展开的余量
+    const R = Math.min(w * 0.36, h * 0.42);
     const ctx = cv.getContext('2d'); ctx.clearRect(0, 0, w, h);
     const cosX = Math.cos(ax), sinX = Math.sin(ax), cosY = Math.cos(ay), sinY = Math.sin(ay);
-    const proj = pts.map(p => {
+    proj = pts.map(p => {
       let x = p.x * cosY - p.z * sinY, z = p.x * sinY + p.z * cosY, y = p.y;
       const y2 = y * cosX - z * sinX; z = y * sinX + z * cosX; y = y2;
-      const scale = (z + 1.8) / 2.8;
-      return {sx: cx + x * R, sy: cy + y * R, z, scale, p};
+      return {sx: cx + x * R, sy: cy + y * R, z, scale: (z + 1.8) / 2.8, p};
     }).sort((a, b) => a.z - b.z);
+
     for (const q of proj) {
-      const alpha = 0.35 + q.scale * 0.65;
-      const fs = (11 + q.p.w * 12) * q.scale * dpr;
+      const isSel = sel && sel.label === q.p.label;
+      const alpha = isSel ? 1 : 0.32 + q.scale * 0.68;
       ctx.globalAlpha = alpha;
-      ctx.fillStyle = q.p.color;
-      ctx.beginPath(); ctx.arc(q.sx, q.sy, (2 + q.p.w * 4) * q.scale * dpr, 0, 7); ctx.fill();
-      if (q.p.w > 0.28 || q.scale > 0.7) {
-        ctx.font = `${fs}px -apple-system,"PingFang SC",sans-serif`;
-        ctx.fillStyle = `rgba(233,236,241,${alpha})`;
-        ctx.fillText(q.p.label, q.sx + 5 * dpr, q.sy + 4 * dpr);
+      ctx.fillStyle = isSel ? '#fff' : q.p.color;
+      const rad = (2.5 + q.p.w * 5) * q.scale * dpr;
+      ctx.beginPath(); ctx.arc(q.sx, q.sy, rad, 0, 7); ctx.fill();
+      if (isSel) {   // 选中的加个圈,转到背面也认得出
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5 * dpr;
+        ctx.beginPath(); ctx.arc(q.sx, q.sy, rad + 5 * dpr, 0, 7); ctx.stroke();
+      }
+      if (q.p.w > 0.22 || q.scale > 0.66 || isSel) {
+        ctx.font = `${isSel ? 600 : 400} ${(11.5 + q.p.w * 11) * q.scale * dpr}px `
+          + `-apple-system,"PingFang SC",sans-serif`;
+        ctx.fillStyle = isSel ? '#fff' : `rgba(233,236,241,${alpha})`;
+        ctx.fillText(q.p.label, q.sx + rad + 3 * dpr, q.sy + 4 * dpr);
       }
     }
     ctx.globalAlpha = 1;
     requestAnimationFrame(frame);
   }
   frame();
+
+  return {
+    /** 从外面选中一个标签(构成条点击用) */
+    pick(label) {
+      const p = pts.find(x => x.label === label);
+      sel = p || null;
+      setPaused(true);
+      if (p) showTag(p.label, p.n);
+    },
+  };
 }
 
-/* ── 问答 ── */
+/** 点了标签 → 下面出这个标签的作品 */
+async function showTag(tag, n) {
+  const box = $('#picked');
+  box.innerHTML = `<div class="picked"><div class="hd"><b>#${esc(tag)}</b>
+    <span>${n ? n + ' 条' : ''}</span><span class="gap"></span></div>
+    <div class="load">读取中…</div></div>`;
+  try {
+    const r = await api(`/api/videos?tag=${encodeURIComponent(tag)}&limit=8&sort=digg`);
+    box.innerHTML = `<div class="picked">
+      <div class="hd"><b>#${esc(tag)}</b><span>共 ${fmt(r.total)} 条 · 按点赞排</span>
+        <span class="gap"></span>
+        <a href="/?tag=${encodeURIComponent(tag)}">在浏览页看全部 →</a>
+        <button data-close="1">关闭</button></div>
+      <div class="pvs">${r.items.map(v => `<a class="pv" href="${esc(v.share_url || '#')}"
+        target="_blank" rel="noopener">
+        <div class="th"><img src="/api/cover/${v.aweme_id}" loading="lazy"
+          onerror="this.style.display='none'">
+          <span class="cred ${v.content_state === 'have' ? 'summary' : 'desc'}">${
+            v.content_state === 'have' ? '有总结' : '仅文案'}</span></div>
+        <div class="tt">${esc(v.item_title || v.description || '')}</div></a>`).join('')}</div>
+    </div>`;
+    box.querySelector('[data-close]').onclick = () => { box.innerHTML = ''; };
+  } catch (e) {
+    box.innerHTML = `<div class="picked"><div class="load">读取失败:${esc(e.message)}</div></div>`;
+  }
+}
+
+/** 构成条点击 = 选中该主题的头号标签 */
+function wireCompo(TH) {
+  $$('#compo .row').forEach(row => row.onclick = () => {
+    const name = row.dataset.theme;
+    $$('#compo .row').forEach(r => r.classList.toggle('on', r === row));
+    const t = TH.find(x => x.name === name);
+    if (SPH) SPH.pick(name);
+    else showTag(name, t ? t.n : 0);
+  });
+}
+
 function wireAsk() {
   const go = async () => {
     const q = $('#q').value.trim(); if (!q) return;
     const ans = $('#ans'); ans.hidden = false; ans.textContent = '想…';
     try {
-      const r = await api('/api/ask?q=' + encodeURIComponent(q));
-      if (!r.answered) { ans.textContent = r.answer || '库里没有相关内容。'; return; }
+      const r = await api('/api/ask?q=' + encodeURIComponent(q), {method: 'POST'});
+      if (!r.answered) {
+        ans.textContent = (r.answer || '库里没有相关内容。')
+          + (r.reason ? `(${r.reason})` : '');
+        return;
+      }
       ans.innerHTML = esc(r.answer) + (r.citations || []).map(c =>
-        `<span class="cite">[${c.n}] ${esc(c.author || '')}《${esc((c.title || '').slice(0, 30))}》 · 相关度 ${c.score}</span>`).join('');
+        `<span class="cite">[${c.n}] ${esc(c.author || '')}《${
+          esc((c.title || '').slice(0, 26))}》 · ${c.score}</span>`).join('');
     } catch (e) { ans.textContent = '出错:' + e.message; }
   };
   $('#qgo').onclick = go;
   $('#q').addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
-  $$('.ask .sug').forEach(s => s.onclick = () => { $('#q').value = s.textContent; go(); });
+  $$('.sug').forEach(s => s.onclick = () => { $('#q').value = s.textContent; go(); });
 }
 
 load();
