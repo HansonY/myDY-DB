@@ -49,14 +49,36 @@ async def login(timeout: int = 300) -> int:
     print("浏览器**不会自己关**,登录完回终端按回车。\n")
 
     async with async_playwright() as p:
-        # 用 persistent_context:登录态直接落在这个目录,下次免登。
-        # headless=False —— 扫码/验证码必须你能看见。
-        ctx = await p.chromium.launch_persistent_context(
-            str(prof), headless=False,
-            viewport={"width": 1280, "height": 900},
+        # 优先用**你本机真实的 Chrome**(channel="chrome")而不是 Playwright
+        # 自带的 Chromium:后者在指纹上更容易被反爬识别出是自动化环境。
+        # 没装 Chrome 就退回 Chromium。
+        launch = dict(
+            headless=False,     # 扫码/验证码必须你能看见
+            viewport=None,      # 用真实窗口尺寸,别设成固定值(那也是特征)
             args=["--disable-blink-features=AutomationControlled"],
         )
+        ctx = None
+        for channel in ("chrome", None):
+            try:
+                ctx = await p.chromium.launch_persistent_context(
+                    str(prof), **({**launch, "channel": channel} if channel else launch))
+                print(f"浏览器:{'本机 Chrome' if channel else 'Playwright Chromium'}")
+                break
+            except Exception as e:      # noqa: BLE001
+                if channel:
+                    print(f"(本机没有 Chrome,退回 Chromium:{type(e).__name__})")
+                else:
+                    print(f"浏览器起不来:{type(e).__name__}: {str(e)[:120]}")
+                    return 1
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+
+        # 打印导航轨迹。**不猜「为什么跳走」,把它记下来。**
+        # 反爬把你重定向到空白页/验证页时,这里会留下证据。
+        def _nav(frame):
+            if frame is page.main_frame:
+                print(f"  → {frame.url[:110]}")
+        page.on("framenavigated", _nav)
+
         try:
             await page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=60000)
         except Exception as e:      # noqa: BLE001
@@ -87,6 +109,15 @@ async def login(timeout: int = 300) -> int:
         except (KeyboardInterrupt, EOFError):
             await ctx.close()
             return 1
+
+        # 先如实报当前停在哪 —— 「跳到空白页」这类问题,现场信息最值钱
+        try:
+            print(f"\n当前地址:{page.url}")
+            print(f"页面标题:{await page.title()}")
+            body = await page.evaluate("document.body ? document.body.innerText.length : -1")
+            print(f"正文字数:{body}" + ("   ← 空白页,多半被反爬拦了" if body <= 0 else ""))
+        except Exception as e:      # noqa: BLE001
+            print(f"读页面状态失败:{type(e).__name__}: {str(e)[:80]}")
 
         ok = await _verify(page)
         # 把 cookie 名字列出来 —— 只列名字不列值。下次要写自动判据就靠它,
