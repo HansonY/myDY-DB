@@ -1,0 +1,199 @@
+/* 全站共享的设计基座。
+ *
+ * 为什么要单独一份:四个页面原来各写各的导航和按钮样式,结果
+ *   - 到哪都不知道自己在哪、还能去哪
+ *   - 「认识自己 →」(换页)和「智能采集」(向抖音发请求、可能 403)
+ *     长得一模一样,后果天差地别却看不出来
+ * 这份文件只管**跨页一致的东西**:配色、导航、按钮层级、区块、空状态。
+ * 页面自己的东西(标签球、力导向图、简报卡)留在各自页面里。
+ */
+
+:root{
+  /* 底色刻意用近黑而非纯黑:纯黑上的暗色边框会糊成一片。取自高保真稿 #0A0C0F。 */
+  --bg:#0a0c0f;
+  --surface:#12151a;
+  --surface2:#161b22;
+  --line:#1e242d;
+  --line2:#242a33;
+
+  --fg:#e9ecf1;
+  --fg-hi:#f2f5f9;
+  --dim:#8b93a1;
+  --dim2:#4e5866;
+
+  /* 主强调:蓝。取自高保真稿 #4C8DFF —— 比之前那版更亮更实,
+     深色底上做主色够跳但不刺眼。text 变体给文字用(实心蓝在暗底上偏糊)。 */
+  --accent:#4c8dff;
+  --accent-text:#7fb0ff;
+  --accent-dim:rgba(76,141,255,.16);
+  --accent-line:rgba(76,141,255,.35);
+
+  /* 次强调:紫。专门给「本地转写」这条可信度用 —— 蓝=平台给的、
+     紫=我自己转的、橙=没内容,三色各有语义,不是随便配的。 */
+  --violet:#a78bfa;
+  --violet-text:#bca6ff;
+  --violet-dim:rgba(167,139,250,.14);
+  --violet-line:rgba(167,139,250,.35);
+
+  /* 暖色:橙。给「只有文案/要花钱/有风险」——「这条其实没内容」的信号。 */
+  --warn:#ff7a45;
+  --warn-text:#ff9166;
+  --warn-dim:rgba(255,122,69,.12);
+  --warn-line:rgba(255,122,69,.4);
+
+  /* 正向:绿(只读模式状态点、达成) */
+  --ok:#5cb87a;
+  --ok-dim:rgba(92,184,122,.12);
+  --ok-line:rgba(92,184,122,.3);
+
+  --mono:ui-monospace,SFMono-Regular,"SF Mono","JetBrains Mono",Menlo,monospace;
+  --ease:cubic-bezier(.16,1,.3,1);
+  --nav-h:52px;
+}
+
+*{box-sizing:border-box}
+html{scroll-padding-top:calc(var(--nav-h) + 16px)}
+body{
+  margin:0;background:var(--bg);color:var(--fg);
+  font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",
+       "Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+a{color:var(--accent);text-decoration:none}
+button,select,input{font-family:inherit}
+
+/* ── 顶栏 ────────────────────────────────────────────────
+   导航是**文字**,操作是**按钮**。这个区分是刻意的:
+   顶栏里没有任何会发出网络请求的东西,所以点它永远安全。
+   真正的采集动作全在「数据」页,那里每个按钮都写清了代价。 */
+.nav{
+  position:sticky;top:0;z-index:60;height:var(--nav-h);
+  display:flex;align-items:center;gap:4px;
+  padding:0 20px;background:rgba(10,12,15,.72);
+  backdrop-filter:saturate(150%) blur(14px);
+  border-bottom:1px solid var(--line);
+}
+.nav .brand{
+  font:600 14px/1 var(--mono);letter-spacing:-.3px;
+  color:var(--fg);margin-right:16px;white-space:nowrap;
+}
+.nav .brand span{color:var(--dim2);font-weight:400}
+.nav a.n{
+  color:var(--dim);font-size:13.5px;padding:7px 11px;border-radius:7px;
+  white-space:nowrap;transition:color .14s var(--ease),background .14s var(--ease);
+}
+.nav a.n:hover{color:var(--fg);background:var(--surface2)}
+/* 当前页:左侧一道竖线 + 亮字。不用背景块 —— 背景块会和按钮混淆 */
+.nav a.n[aria-current="page"]{
+  color:var(--fg);font-weight:500;background:var(--accent-dim);
+  box-shadow:inset 2px 0 0 var(--accent);
+}
+.nav .gap{flex:1}
+/* 「数据」是运维入口,视觉上压低:它不该和日常动作抢注意力 */
+.nav a.n.util{color:var(--dim2);font-size:13px}
+.nav a.n.util:hover{color:var(--dim)}
+
+/* 手机:导航横向滚动,不换行不压缩 */
+@media(max-width:720px){
+  .nav{padding:0 12px;gap:2px;overflow-x:auto;scrollbar-width:none}
+  .nav::-webkit-scrollbar{display:none}
+  .nav .brand{margin-right:10px;font-size:13px}
+  .nav .gap{flex:0 0 8px}
+  .nav a.n{padding:7px 9px;font-size:13px}
+}
+
+/* ── 页容器 ── */
+.wrap{max-width:1120px;margin:0 auto;padding:24px 20px 88px}
+.wrap.narrow{max-width:940px}
+.wrap.wide{max-width:1360px}
+
+/* ── 页头:每页一句话说清「这页是干嘛的」 ── */
+.phead{margin:0 0 20px;padding-bottom:16px;border-bottom:1px solid var(--line)}
+.phead h1{margin:0;font-size:21px;font-weight:600;letter-spacing:-.3px}
+.phead p{margin:4px 0 0;color:var(--dim);font-size:13.5px}
+
+/* ── 按钮三级。层级对应「后果」而不是「好看」 ──
+   .btn        普通本地动作(筛选、切换、重算)
+   .btn.go     主动作,每页最多一个
+   .btn.net    **会向抖音发请求** —— 唯一带边框强调的一档,
+               因为它是唯一可能把账号搞到 403 的操作 */
+.btn{
+  background:var(--surface2);color:var(--fg);border:1px solid var(--line);
+  border-radius:7px;padding:7px 13px;font-size:13px;cursor:pointer;
+  transition:.15s var(--ease);
+}
+.btn:hover:not(:disabled){border-color:var(--line2);background:#1b2029}
+.btn:disabled{opacity:.4;cursor:default}
+.btn.go{background:var(--accent-dim);border-color:var(--accent-line);color:#a9cdf0}
+.btn.go:hover:not(:disabled){background:rgba(91,157,217,.2)}
+.btn.net{border-color:var(--warn-line);color:var(--warn);background:var(--warn-dim)}
+.btn.net:hover:not(:disabled){background:rgba(201,161,83,.18)}
+.btn.sm{padding:5px 10px;font-size:12px}
+
+.bar{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-bottom:18px}
+.bar .gap{flex:1}
+.hint{color:var(--dim2);font-size:12px}
+.hint.warn{color:var(--warn)}
+
+/* ── 卡片 / 区块 ── */
+.card{background:var(--surface);border:1px solid var(--line);border-radius:10px}
+.card>h3{margin:0;padding:12px 15px;font-size:13px;font-weight:600;
+  border-bottom:1px solid var(--line);background:var(--surface2);
+  border-radius:10px 10px 0 0}
+.card>.body{padding:14px 15px}
+
+/* 数字条:把关键事实摆在脸上,不藏进折叠区 */
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
+  gap:1px;background:var(--line);border:1px solid var(--line);
+  border-radius:10px;overflow:hidden}
+.fact{background:var(--surface);padding:12px 14px}
+.fact b{display:block;font:600 19px/1.25 var(--mono);letter-spacing:-.4px}
+.fact span{color:var(--dim);font-size:11.5px;display:block;margin-top:2px}
+.fact.hot b{color:var(--warn)}
+.fact.on b{color:var(--accent)}
+.fact.ok b{color:var(--ok)}
+
+/* ── 空状态:必须说「下一步点哪」,不能只说「没有数据」 ── */
+.empty{padding:34px 24px;text-align:center;color:var(--dim);
+  border:1px dashed var(--line2);border-radius:10px;font-size:13.5px}
+.empty b{display:block;color:var(--fg);margin-bottom:6px;font-size:15px;font-weight:600}
+.empty .btn{margin-top:12px}
+
+/* ── 提示条。放在内容**之前**,不夹在列表中间 ── */
+.notice{border:1px solid var(--line);border-left-width:2px;border-radius:8px;
+  padding:11px 14px;font-size:13px;margin-bottom:16px;background:var(--surface);
+  line-height:1.6}
+.notice.warn{border-left-color:var(--warn);background:var(--warn-dim)}
+.notice.info{border-left-color:var(--accent);background:var(--accent-dim)}
+.notice b{font-weight:600}
+
+/* ── 分节标题 ── */
+.sec{margin:28px 0 12px;display:flex;align-items:baseline;gap:10px}
+.sec h2{margin:0;font-size:15px;font-weight:600}
+.sec em{font-style:normal;color:var(--dim);font-size:12.5px}
+
+.mono{font-family:var(--mono)}
+.dim{color:var(--dim)}
+
+/* ── 可信度徽章:全站统一 ────────────────────────────────────
+   这三档是产品的核心概念,颜色是刚性语义,不是装饰:
+     summary 蓝  = 抖音自己生成的总结(平台给的)
+     asr     紫  = 我本地转写的逐字稿(自己补的)
+     desc    橙  = 只有作者文案 = 其实什么内容都没有
+   混在一起展示等于骗自己,所以哪怕在列表里也一眼要能分清。 */
+.cred{display:inline-flex;align-items:center;gap:4px;border-radius:5px;
+  padding:2px 7px;font-size:11px;font-weight:500;line-height:1.4;white-space:nowrap}
+.cred.summary{background:var(--accent-dim);color:var(--accent-text);border:1px solid var(--accent-line)}
+.cred.asr{background:var(--violet-dim);color:var(--violet-text);border:1px solid var(--violet-line)}
+.cred.desc{background:var(--warn-dim);color:var(--warn-text);border:1px solid var(--warn-line)}
+
+/* ── 顶栏右侧:只读模式状态 + 维护入口 ──────────────────────
+   「只读」是这个产品的安全承诺(绝不评论/点赞/关注),值得常驻显示。 */
+.nav .status{display:inline-flex;align-items:center;gap:6px;
+  font-size:12px;color:var(--dim);white-space:nowrap;margin-right:4px}
+.nav .status .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);
+  box-shadow:0 0 0 3px var(--ok-dim)}
+.nav a.n.maint{color:var(--dim2);font-size:13px;border:1px solid var(--line);
+  border-radius:7px;padding:6px 11px}
+.nav a.n.maint:hover{color:var(--dim);border-color:var(--line2);background:var(--surface2)}
+@media(max-width:720px){ .nav .status{display:none} }

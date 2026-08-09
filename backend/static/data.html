@@ -1,0 +1,249 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>数据 · Douyin-DB</title>
+<link rel="stylesheet" href="/shell.css?v=1786270349">
+<style>
+/* 这一页集中了所有「有代价」的操作,所以设计目标只有一个:
+   点之前就知道会发生什么、要多久、有没有风险。
+   代价说不清楚的按钮不该存在。 */
+
+.grp{margin-bottom:26px}
+.grp>h2{margin:0 0 4px;font-size:15px;font-weight:600}
+.grp>p{margin:0 0 12px;color:var(--dim);font-size:13px;line-height:1.65}
+.grp>p b{color:var(--warn);font-weight:600}
+
+/* 动作行:名字 + 说明 + 按钮。说明不是 tooltip —— tooltip 等于没有 */
+.acts{border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.act{display:flex;align-items:center;gap:14px;padding:12px 15px;
+  background:var(--surface);border-top:1px solid var(--line)}
+.acts .act:first-child{border-top:0}
+.act .t{min-width:0;flex:1}
+.act .t b{display:block;font-size:14px;font-weight:500}
+.act .t span{display:block;color:var(--dim);font-size:12.5px;margin-top:2px;line-height:1.6}
+.act .cost{font:11.5px/1.4 var(--mono);color:var(--dim2);text-align:right;
+  white-space:nowrap;min-width:74px}
+.act .cost.warn{color:var(--warn)}
+.act .btn{flex:0 0 auto}
+
+/* 覆盖率表:数据到底全不全,要能一眼看到,不能靠推断 */
+.cov{width:100%;border-collapse:collapse;font-size:13px}
+.cov td{padding:7px 0;border-top:1px solid var(--line)}
+.cov tr:first-child td{border-top:0}
+.cov td:first-child{color:var(--dim);width:38%}
+.cov td:nth-child(2){font-family:var(--mono);text-align:right;width:96px}
+.cov td:last-child{padding-left:12px}
+.meter{height:6px;border-radius:3px;background:#0d1015;overflow:hidden}
+.meter i{display:block;height:100%;background:var(--accent)}
+.meter.low i{background:var(--warn)}
+
+.runs{font-size:12.5px}
+.run{display:flex;gap:10px;padding:6px 0;border-top:1px solid var(--line);
+  align-items:baseline;flex-wrap:wrap}
+.runs .run:first-child{border-top:0}
+.run .w{font:11.5px/1 var(--mono);color:var(--dim2);flex:0 0 96px}
+.run .s{flex:0 0 62px;font-size:11.5px}
+.run .s.done{color:var(--ok)} .run .s.failed{color:var(--warn)}
+.run .m{color:var(--dim);min-width:0;flex:1}
+@media(max-width:640px){
+  .act{flex-wrap:wrap}
+  .act .cost{order:3;text-align:left;min-width:0}
+  .act .btn{order:2}
+}
+</style>
+
+<div class="wrap narrow">
+  <div class="phead">
+    <h1>数据</h1>
+    <p>所有会向抖音发请求、或者要跑一会儿的操作都在这里 —— 每个都写了代价</p>
+  </div>
+
+  <div id="alert"></div>
+
+  <!-- ① 先看现状,再决定要不要动 -->
+  <div class="grp">
+    <h2>现在有多少数据</h2>
+    <p>「数据全不全」要能一眼看到。之前两次把「已经采尽」判断错,就是因为没有分母。</p>
+    <div class="facts" id="facts"></div>
+    <div class="card" style="margin-top:12px"><div class="body">
+      <table class="cov" id="cov"><tr><td colspan="3" class="dim">读取中…</td></tr></table>
+    </div></div>
+  </div>
+
+  <!-- ② 采集:唯一会打抖音接口的一组 -->
+  <div class="grp">
+    <h2>从抖音拿数据</h2>
+    <p><b>这一组会向抖音发请求。</b>请求多了会被限流(返回 403),被拒之后要冷却
+       几小时。所以宁可少采几页也别硬打 —— 每个动作都有断点,下次接着走,不会重头来。</p>
+    <div class="acts" id="collect"></div>
+    <p class="hint" id="cmsg" style="margin-top:10px"></p>
+  </div>
+
+  <!-- ③ 本地加工:不联网,只花 CPU -->
+  <div class="grp">
+    <h2>把内容补全(本地跑,不联网)</h2>
+    <p>抖音的响应里<b>没有字幕文本</b> —— 字段翻过两遍,只有一个「有字幕」的标记。
+       而它自己生成的内容总结只覆盖三分之一,剩下的在库里只有营销文案,
+       看起来有字其实什么都没说。转写是补齐它们的唯一办法。</p>
+    <div class="acts" id="local"></div>
+    <p class="hint" id="lmsg" style="margin-top:10px"></p>
+  </div>
+
+  <!-- ④ 最近发生了什么 -->
+  <div class="grp">
+    <h2>最近几次采集</h2>
+    <p>被限流是常态,不是故障。看到 403 不用管,过一阵再点一次就接着走。</p>
+    <div class="card"><div class="body">
+      <div class="runs" id="runs"><span class="dim">读取中…</span></div>
+    </div></div>
+  </div>
+</div>
+
+<script src="/shell.js?v=1786270349"></script>
+<script>
+'use strict';
+mountNav('data');
+
+/* 采集动作。**代价写在行里,不写在 tooltip 里** —— tooltip 等于没有。 */
+const COLLECT = [
+  {id: 'smart', label: '智能采集', url: '/api/collect/smart', go: true,
+   cost: '几分钟', desc: '按计划自动跑三类:该续采的续采、已采尽的做增量、被限流的跳过。平时点这个就够。'},
+  {id: 'recent', label: '抓我跟的博主', url: '/api/digest/refresh?days=3',
+   cost: '~1.5 分钟', desc: '只抓已打标博主最近三天的新作品,每人翻一页左右。没打标的一次请求都不会发。'},
+  {id: 'fav', label: '只采收藏', url: '/api/collect/favorites',
+   cost: '看进度', desc: '只走「我的收藏」列表。'},
+  {id: 'like', label: '只采点赞', url: '/api/collect/likes',
+   cost: '看进度', desc: '只走「我的点赞」列表。这个接口实测最容易被限流。'},
+  {id: 'post', label: '只采我的作品', url: '/api/collect/posts',
+   cost: '很快', desc: '我自己发布的视频,数量少。'},
+  {id: 'refill', label: '补齐旧数据', url: '/api/collect/refill',
+   cost: '要多轮', desc: '早期采的那批只存了很少几项。补齐之后,「还不知道有没有总结」的那些才能确定。'
+      + '有独立断点,被限流后再点一次接着往深处走,不会从最新重刷。'},
+  {id: 'fold', label: '查找收藏夹', url: '/api/collect/folders/sync',
+   cost: '很快', desc: '只列出收藏夹清单,**不采里面的内容**(采内容要用命令行)。'},
+];
+
+const LOCAL = [
+  {id: 'asr', label: '转写没内容的', url: '/api/asr/run?limit=20&scope=all', go: true,
+   cost: '', desc: '本地 Whisper 转成文字,转完自动进检索。首次要下模型(1.6GB)会比较久。'},
+  {id: 'tags', label: '重抽话题标签', url: '/api/tags/rebuild',
+   cost: '几秒', desc: '从文案重新提取 #标签。零成本,采集之后跑一次。'},
+];
+
+function actHtml(a) {
+  return `<div class="act">
+    <div class="t"><b>${esc(a.label)}</b><span>${esc(a.desc)}</span></div>
+    <div class="cost ${a.id === 'refill' || a.id === 'like' ? 'warn' : ''}">${esc(a.cost)}</div>
+    <button class="btn ${a.go ? 'go' : ''}" id="b-${a.id}">运行</button>
+  </div>`;
+}
+
+function busy(on) {
+  [...COLLECT, ...LOCAL].forEach(a => {
+    const el = $('#b-' + a.id);
+    if (el) el.disabled = on;
+  });
+}
+
+async function run(a, msgSel) {
+  if (a.id === 'refill' && !confirm(
+      '补齐旧数据会一直翻历史,很可能中途被抖音限流。\n\n'
+      + '被拒了不要紧:已采的都留着,断点存住,过一阵再点一次接着走。\n\n继续?')) return;
+  busy(true);
+  say(msgSel, `正在跑「${a.label}」…`);
+  try {
+    const r = await api(a.url, {method: 'POST'});
+    if (r.error) { say(msgSel, r.error, true); }
+    else if (r.note) { say(msgSel, r.note); }
+    else if (a.id === 'asr') {
+      say(msgSel, `转了 ${r.attempted} 条,成功 ${r.ok} 条,共 ${fmt(r.chars)} 字,${r.seconds}s`
+        + (r.failed && r.failed.length ? ` · ${r.failed.length} 条失败` : ''),
+        !!(r.failed && r.failed.length));
+    } else if (a.id === 'tags') {
+      say(msgSel, `重抽完成:${fmt(r.tagged_videos)} 条作品 · ${fmt(r.distinct_tags)} 个标签`);
+    } else if (a.id === 'recent') {
+      say(msgSel, r.stopped_on_403 ? `被限流打断,已入库 ${r.new} 条。过一阵再点。`
+        : `抓完了:发现 ${r.found} 条 · 新增 ${r.new} 条`, !!r.stopped_on_403);
+    } else {
+      say(msgSel, '已开始,进度看下面「最近几次采集」');
+    }
+    await Promise.all([loadCoverage(), loadRuns()]);
+  } catch (e) {
+    say(msgSel, e.message, true);
+  }
+  busy(false);
+}
+
+function pct(n, d) { return d ? Math.round(n * 100 / d) : 0; }
+
+async function loadCoverage() {
+  try {
+    const [cov, st, asr] = await Promise.all([
+      api('/api/coverage'), api('/api/search/status'),
+      api('/api/asr/pending?limit=1&scope=all'),
+    ]);
+    const tot = cov.total || 0;
+    $('#facts').innerHTML = `
+      <div class="fact"><b>${fmt(tot)}</b><span>作品</span></div>
+      <div class="fact ok"><b>${fmt((cov.fragments || {}).fragments)}</b><span>知识片段</span></div>
+      <div class="fact ${st.in_sync ? 'on' : 'hot'}"><b>${fmt(st.vectors)}</b><span>${
+        st.in_sync ? '向量已同步' : (st.pending || 0) + ' 段待索引'}</span></div>
+      <div class="fact ${asr.total ? 'hot' : 'ok'}"><b>${fmt(asr.total)}</b><span>还没有内容的</span></div>`;
+
+    const rows = [
+      ['完整原始响应', cov.full_raw, tot],
+      ['互动数据', cov.digg_count, tot],
+      ['官方分类', cov.cat1, tot],
+      ['抖音内容总结', cov.content_have, tot],
+      ['音轨地址(转写要用)', cov.music_url, tot],
+    ].filter(r => r[1] != null);
+    $('#cov').innerHTML = rows.map(([name, n, d]) => {
+      const p = pct(n, d);
+      return `<tr><td>${esc(name)}</td>
+        <td>${fmt(n)} / ${fmt(d)}</td>
+        <td><div class="meter ${p < 50 ? 'low' : ''}"><i style="width:${p}%"></i></div></td></tr>`;
+    }).join('') || '<tr><td class="dim">还没有数据</td></tr>';
+
+    $('#b-asr').disabled = !asr.total;
+    const el = [...$$('#local .act')].find(x => x.querySelector('#b-asr'));
+    if (el) el.querySelector('.cost').textContent =
+      asr.total ? `${asr.estimate_minutes} 分钟` : '没有待转的';
+  } catch (e) {
+    $('#cov').innerHTML = `<tr><td colspan="3" class="dim">读取失败:${esc(e.message)}</td></tr>`;
+  }
+}
+
+async function loadRuns() {
+  try {
+    const d = await api('/api/runs?limit=8');
+    if (d.collecting) {
+      const p = d.progress || {};
+      $('#alert').innerHTML = `<div class="notice info"><b>正在采集</b> ——
+        ${esc(d.active_scope || '')} 第 ${p.pages || 0} 页 · 已入库 ${fmt(p.inserted || 0)} 条
+        (${esc({cli: '命令行', web: '网页', mcp: 'MCP'}[d.origin] || '另一个进程')}在跑)</div>`;
+    } else {
+      $('#alert').innerHTML = '';
+    }
+    $('#runs').innerHTML = (d.items || []).map(r => {
+      const err = (r.error || '').includes('403') ? '被抖音限流(正常,过一阵再来)'
+        : (r.error || '').slice(0, 70);
+      return `<div class="run">
+        <span class="w">${esc((r.started_at || '').slice(5, 16).replace('T', ' '))}</span>
+        <span class="s ${esc(r.status)}">${esc({done: '完成', failed: '中断', running: '进行中',
+          stale: '被回收'}[r.status] || r.status)}</span>
+        <span class="m">${esc(r.scope)} · 采 ${fmt(r.fetched)} 新 ${fmt(r.inserted)}${
+          err ? ' · ' + esc(err) : ''}</span></div>`;
+    }).join('') || '<span class="dim">还没采过</span>';
+  } catch (e) {
+    $('#runs').innerHTML = `<span class="dim">读取失败:${esc(e.message)}</span>`;
+  }
+}
+
+$('#collect').innerHTML = COLLECT.map(actHtml).join('');
+$('#local').innerHTML = LOCAL.map(actHtml).join('');
+COLLECT.forEach(a => $('#b-' + a.id).onclick = () => run(a, '#cmsg'));
+LOCAL.forEach(a => $('#b-' + a.id).onclick = () => run(a, '#lmsg'));
+
+loadCoverage();
+loadRuns();
+setInterval(loadRuns, 5000);      // 采集是长任务,进度要自己刷新
+</script>

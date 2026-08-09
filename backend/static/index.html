@@ -1,1217 +1,267 @@
-<!doctype html>
-<html lang="zh-CN">
-<head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Douyin-DB · 我的收藏知识库</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>浏览 · Douyin-DB</title>
+<link rel="stylesheet" href="/shell.css?v=1786270349">
 <style>
-/* ─────────────────────────────────────────────────────────────
-   设计定档(参考 taste-skill 的三个旋钮):
-     VISUAL_DENSITY  8  —— 2500+ 条数据的浏览器,驾驶舱模式:
-                           不用卡片盒子,用 1px 分隔线;数字一律等宽
-     DESIGN_VARIANCE 3  —— 工具要可扫描,规整优于不对称
-     MOTION          3  —— 只做功能性反馈(hover / active),无自动动画
+/* 搜索 + 模式切换 */
+.search{display:flex;gap:10px;align-items:stretch;margin-bottom:14px}
+.search .box{flex:1;display:flex;align-items:center;gap:8px;background:var(--surface);
+  border:1px solid var(--line);border-radius:9px;padding:0 12px}
+.search .box:focus-within{border-color:var(--accent-line)}
+.search .box svg{width:16px;height:16px;color:var(--dim2);flex:none}
+.search input{flex:1;background:none;border:0;color:var(--fg);font-size:14px;padding:11px 0;outline:none}
+.seg{display:flex;background:var(--surface);border:1px solid var(--line);border-radius:9px;padding:3px}
+.seg button{background:none;border:0;color:var(--dim);font-size:13px;padding:7px 13px;
+  border-radius:6px;cursor:pointer;white-space:nowrap}
+.seg button.on{background:var(--accent-dim);color:var(--accent-text)}
 
-   遵守的硬规则:
-     · 零 emoji,全部用 1.5px 描边 SVG
-     · 只有 1 个强调色(去饱和蓝),状态色仅用于语义(警告/错误)
-     · 无外发光、无渐变文字、无纯黑
-     · :active 有物理下压反馈
-   ───────────────────────────────────────────────────────────── */
-:root{
-  --bg:#0b0d11;            /* 近黑,非纯黑 */
-  --surface:#11141a;
-  --surface-2:#171b22;
-  --line:#20252e;
-  --line-2:#2a313c;
-  --fg:#e7ebf0;
-  --fg-2:#aab3bf;
-  --dim:#78808c;
-  --dim-2:#565e6a;
-  --accent:#5b9dd9;        /* 唯一强调色,去饱和 */
-  --accent-dim:rgba(91,157,217,.13);
-  --accent-line:rgba(91,157,217,.3);
-  --warn:#c9a153;
-  --warn-dim:rgba(201,161,83,.1);
-  --mono:ui-monospace,SFMono-Regular,"SF Mono","JetBrains Mono",Menlo,monospace;
-  --ease:cubic-bezier(.16,1,.3,1);
-}
-*{box-sizing:border-box}
-/* hidden 属性靠浏览器默认样式的 display:none 生效,任何作者写的 display
-   (比如 .prog{display:grid})都会盖掉它 —— 必须显式提权,否则折叠失效。 */
-[hidden]{display:none !important}
-html{-webkit-text-size-adjust:100%}
-body{
-  margin:0;
-  font:14.5px/1.6 -apple-system,BlinkMacSystemFont,system-ui,"PingFang SC",
-       "Hiragino Sans GB","Microsoft YaHei",sans-serif;
-  background:var(--bg);color:var(--fg);-webkit-font-smoothing:antialiased;
-}
-a{color:var(--accent);text-decoration:none}
-svg{display:block;flex:0 0 auto}
-::selection{background:rgba(91,157,217,.26)}
-::-webkit-scrollbar{width:10px;height:10px}
-::-webkit-scrollbar-track{background:var(--bg)}
-::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:5px;border:3px solid var(--bg)}
-::-webkit-scrollbar-thumb:hover{background:#38414f}
-.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+/* 筛选行 */
+.filters{display:flex;flex-direction:column;gap:9px;margin-bottom:8px}
+.frow{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.frow .lab{font:11px/1 var(--mono);letter-spacing:1px;color:var(--dim2);
+  width:56px;flex:none;text-transform:uppercase}
+.chip{background:var(--surface);border:1px solid var(--line);color:var(--dim);
+  font-size:13px;padding:6px 12px;border-radius:20px;cursor:pointer;transition:.14s var(--ease)}
+.chip:hover{color:var(--fg)}
+.chip.on{background:var(--accent-dim);border-color:var(--accent-line);color:var(--accent-text)}
+.chip b{color:var(--dim2);font-weight:400;margin-left:5px;font-size:12px}
+.chip.on b{color:var(--accent-text);opacity:.8}
 
-/* ══ 顶栏 ══════════════════════════════════════════════════ */
-header{position:sticky;top:0;z-index:20;background:rgba(11,13,17,.96);
-  backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
-.wrap{max-width:1400px;margin:0 auto;padding:0 20px}
+.meta{display:flex;align-items:center;margin:14px 0 12px;color:var(--dim2);font-size:12.5px}
+.meta .gap{flex:1}
+.meta select{background:var(--surface);border:1px solid var(--line);color:var(--dim);
+  border-radius:7px;padding:5px 9px;font-size:12.5px}
 
-.ident{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}
-.ident h1{margin:0;font-size:15px;font-weight:600;letter-spacing:-.1px;color:var(--fg)}
-.ident .sub{color:var(--dim-2);font-size:12px}
-.ident .kpis{margin-left:auto;display:flex;gap:20px}
-.kpi{display:flex;align-items:baseline;gap:5px}
-.kpi b{font-family:var(--mono);font-size:15px;font-weight:600;letter-spacing:-.4px}
-.kpi i{font-style:normal;font-size:11px;color:var(--dim-2)}
+/* 卡片网格 */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(186px,1fr));gap:14px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:10px;
+  overflow:hidden;transition:border-color .14s var(--ease)}
+.card:hover{border-color:var(--line2)}
+.thumb{position:relative;aspect-ratio:3/4;background:var(--surface2);overflow:hidden}
+.thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.thumb .ph{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  color:var(--dim2);font-size:11px}
+.thumb .cred{position:absolute;top:8px;left:8px}
+.thumb .dur{position:absolute;right:8px;bottom:8px;background:rgba(10,12,15,.8);
+  color:#fff;font:11px/1 var(--mono);padding:3px 6px;border-radius:4px}
+.card .info{padding:10px 11px 12px}
+.card .ttl{font-size:13px;line-height:1.5;color:var(--fg);
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:39px}
+.card .by{margin-top:7px;display:flex;gap:8px;align-items:center;color:var(--dim2);font-size:11.5px}
+.card .by .who{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .by .digg{margin-left:auto;flex:none;font-family:var(--mono)}
+.card a.open{color:inherit}
 
-/* ══ 区块:标签 + 分隔 ═════════════════════════════════════ */
-.zone{display:flex;align-items:flex-start;gap:14px;padding:11px 0}
-.zone + .zone{border-top:1px solid var(--line)}
-.ztag{
-  flex:0 0 62px;padding-top:6px;font-size:10.5px;letter-spacing:1.6px;
-  color:var(--dim-2);user-select:none;
-}
-.ztag em{font-style:normal;font-family:var(--mono);margin-right:4px;opacity:.6}
-.zbody{flex:1;min-width:0;display:flex;flex-direction:column;gap:9px}
-.row{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+/* 底部「没内容」提示条 */
+.warnbar{margin-top:22px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  border:1px solid var(--warn-line);background:var(--warn-dim);border-radius:10px;padding:13px 16px}
+.warnbar p{margin:0;font-size:13px;color:var(--fg);line-height:1.6;flex:1;min-width:240px}
+.warnbar b{color:var(--warn-text)}
+.warnbar .btn{border-color:var(--warn-line);color:var(--warn-text);background:transparent;flex:none}
+.warnbar .btn:hover{background:rgba(255,122,69,.14)}
 
-/* ══ 控件 ══════════════════════════════════════════════════ */
-button,select,input{font-family:inherit}
-
-.btn{
-  display:inline-flex;align-items:center;gap:6px;
-  padding:7px 12px;border-radius:8px;border:1px solid var(--line-2);
-  background:var(--surface);color:var(--fg-2);cursor:pointer;font-size:12.5px;
-  white-space:nowrap;transition:background .16s var(--ease),border-color .16s var(--ease),color .16s var(--ease);
-}
-.btn:hover:not(:disabled){background:var(--surface-2);border-color:#39414e;color:var(--fg)}
-.btn:active:not(:disabled){transform:translateY(1px)}   /* 物理下压反馈 */
-.btn:disabled{opacity:.38;cursor:not-allowed}
-.btn svg{width:13px;height:13px;stroke-width:1.5}
-
-.btn.primary{background:var(--accent-dim);border-color:var(--accent-line);color:#a9cdec}
-/* 按钮上的待办数。等宽,和界面里其他数字一致 */
-.badge{font-family:var(--mono);font-size:10.5px;padding:0 4px;border-radius:4px;
-  background:var(--surface-2);color:var(--fg-2);margin-left:2px}
-.btn.primary .badge{background:rgba(91,157,217,.24);color:#c6dff5}
-.btn.primary:hover:not(:disabled){background:rgba(91,157,217,.2);border-color:var(--accent);color:#d3e6f7}
-
-.search{position:relative;flex:1;min-width:220px;max-width:420px}
-.search input{
-  width:100%;padding:7px 11px 7px 30px;border-radius:8px;
-  border:1px solid var(--line-2);background:var(--surface);color:var(--fg);font-size:13px;
-  transition:border-color .16s var(--ease);
-}
-.search input::placeholder{color:var(--dim-2)}
-.search input:focus{outline:none;border-color:var(--accent-line)}
-.search svg{position:absolute;left:9px;top:50%;transform:translateY(-50%);
-  width:13px;height:13px;color:var(--dim-2);stroke-width:1.5}
-
-select{
-  padding:7px 9px;border-radius:8px;border:1px solid var(--line-2);
-  background:var(--surface);color:var(--fg-2);font-size:12.5px;max-width:190px;cursor:pointer;
-}
-select:focus{outline:none;border-color:var(--accent-line)}
-
-.chip{
-  padding:4px 10px;border-radius:7px;border:1px solid transparent;
-  background:var(--surface);color:var(--dim);cursor:pointer;font-size:12.5px;
-  white-space:nowrap;transition:all .14s var(--ease);user-select:none;
-}
-.chip:hover{background:var(--surface-2);color:var(--fg)}
-.chip:active{transform:translateY(1px)}
-.chip .n{font-family:var(--mono);opacity:.55;margin-left:4px;font-size:11.5px}
-.chip.on{background:var(--accent-dim);border-color:var(--accent-line);color:#a9cdec}
-/* 「还不知道」是待办不是结论 —— 用虚线边框区分:它在提示「这里该去补采」。
-   不另开一个颜色,唯一强调色的规矩不破。 */
-.chip.warn{border-style:dashed;border-color:var(--line-2);color:var(--fg-2)}
-.chip.warn.on{border-style:dashed}
-.chip.on .n{opacity:.8}
-
-.seg{display:flex;border:1px solid var(--line-2);border-radius:8px;overflow:hidden}
-.seg button{padding:6px 11px;background:var(--surface);border:none;color:var(--dim);
-  cursor:pointer;font-size:12.5px;transition:all .14s var(--ease)}
-.seg button.on{background:var(--surface-2);color:var(--fg)}
-.seg button+button{border-left:1px solid var(--line-2)}
-.link{background:none;border:none;color:var(--accent);cursor:pointer;font-size:12.5px;padding:2px 4px}
-.link:hover{text-decoration:underline}
-.vsep{width:1px;align-self:stretch;background:var(--line);margin:0 3px}
-
-/* 当前筛选:必须存在。作者/标签的可点入口只列 Top N,一旦筛的对象不在其中,
-   下拉会显示空白、标签也不会高亮 —— 用户就看不出正在按什么筛。 */
-.act-f{display:inline-flex;align-items:center;gap:6px;padding:3px 6px 3px 10px;
-  border-radius:7px;font-size:12px;background:var(--accent-dim);
-  border:1px solid var(--accent-line);color:#a9cdec}
-.act-f i{font-style:normal;opacity:.62;margin-right:1px}
-.act-f button{background:none;border:none;color:inherit;cursor:pointer;
-  padding:0 2px;line-height:1;opacity:.65;font-size:14px}
-.act-f button:hover{opacity:1}
-.act-lbl{font-size:11.5px;color:var(--dim-2);margin-right:2px}
-
-/* 采集进度表:已采 / 平台总数 + 完成度条 + 还差多少。
-   这是「信息」不是控件,所以不用 chip 那种可点外观,但要能一眼看出比例。 */
-.prog{display:grid;grid-template-columns:auto auto 1fr auto auto auto;
-  gap:3px 10px;align-items:center;font-size:11.5px;color:var(--dim)}
-.prog .lb{color:var(--fg-2)}
-.prog .cnt{font-family:var(--mono);color:var(--fg-2);white-space:nowrap}
-.prog .cnt s{text-decoration:none;color:var(--dim-2)}
-.prog .bar{height:4px;border-radius:3px;background:var(--surface-2);
-  overflow:hidden;min-width:70px;max-width:220px}
-.prog .bar i{display:block;height:100%;border-radius:3px;background:var(--accent);
-  transition:width .4s var(--ease)}
-.prog .bar.bad i{background:var(--warn)}
-.prog .pc{font-family:var(--mono);min-width:44px;text-align:right}
-.prog .pc.bad{color:var(--warn)}
-.prog .left{color:var(--warn);white-space:nowrap}
-.prog .act{color:var(--dim-2);white-space:nowrap}
-.prog .act.wait{color:var(--warn)}
-.prog .none{color:var(--dim-2)}
-.prog .set{background:none;border:none;color:var(--accent);cursor:pointer;
-  font-size:11px;padding:0 3px;font-family:inherit}
-.prog .set:hover{text-decoration:underline}
-.prog .hd{grid-column:1/-1;color:var(--dim-2);opacity:.8;margin-bottom:1px;
-  display:flex;gap:8px;align-items:center}
-
-/* 渐进披露:2500+ 条的界面里,采集进度是「偶尔要看」的信息,
-   默认折叠成一行摘要,别占掉浏览区的垂直空间。 */
-.disc{display:inline-flex;align-items:center;gap:8px;padding:4px 9px;
-  border-radius:7px;border:1px solid transparent;background:none;cursor:pointer;
-  color:var(--dim);font-size:11.5px;font-family:inherit;text-align:left;
-  transition:background .14s var(--ease),color .14s var(--ease)}
-.disc:hover{background:var(--surface);color:var(--fg-2)}
-.disc b{font-family:var(--mono);color:var(--fg-2);font-weight:500}
-/* 必须显式限尺寸:.btn svg 那条规则不覆盖 .disc,不限的话 SVG 会撑满整行 */
-.disc svg{width:12px;height:12px;stroke-width:1.7}
-.disc .caret{transition:transform .18s var(--ease);opacity:.6}
-.disc[aria-expanded="true"] .caret{transform:rotate(180deg)}
-.disc .warn-dot{width:5px;height:5px;border-radius:50%;background:var(--warn)}
-
-/* ══ 提示条 ════════════════════════════════════════════════ */
-main{max-width:1400px;margin:0 auto;padding:14px 20px 64px}
-.notice{display:flex;gap:9px;align-items:flex-start;padding:10px 13px;border-radius:9px;
-  margin-bottom:12px;font-size:13px;line-height:1.55;
-  border:1px solid var(--line);background:var(--surface);color:var(--fg-2)}
-.notice code{font-family:var(--mono);background:var(--surface-2);padding:1px 5px;
-  border-radius:4px;font-size:12px;color:var(--fg)}
-.notice.warn{border-color:rgba(201,161,83,.3);background:var(--warn-dim);color:#dcbc7c}
-.notice.busy{border-color:var(--accent-line);background:var(--accent-dim);color:#a9cdec}
-.notice.done{border-color:rgba(91,157,217,.22);background:var(--surface);color:var(--fg-2)}
-.notice.done svg{color:var(--accent)}
-.notice svg{width:14px;height:14px;stroke-width:1.6;margin-top:3px}
-.spin{width:12px;height:12px;border-radius:50%;border:1.5px solid rgba(169,205,236,.28);
-  border-top-color:#a9cdec;animation:sp .7s linear infinite;margin-top:4px;flex:0 0 auto}
-@keyframes sp{to{transform:rotate(360deg)}}
-
-/* ══ 列表:高密度 —— 分隔线而非卡片盒子 ═══════════════════ */
-.rows{border-top:1px solid var(--line)}
-.r{display:flex;gap:12px;padding:11px 4px;border-bottom:1px solid var(--line);
-  transition:background .14s var(--ease)}
-.r:hover{background:var(--surface)}
-
-/* 封面方向混杂(实测 63% 竖屏 / 35% 横屏)。统一用 contain 保证画面不被裁,
-   letterbox 用同一张图放大模糊后垫底 —— 盒子尺寸完全一致,又不留死白。
-   若用 cover,横屏封面会被裁掉约六成宽度,只剩中间一条。 */
-/* 三个尺寸共用同一套规则(列表缩略图 / 网格 / 详情大图)。
-   img 必须显式 100% + display:block —— 少了它就按原始像素(640×360)撑出盒子,
-   在详情弹层里会盖住整栏文字。 */
-.thumb,.cover{position:relative;border-radius:6px;
-  overflow:hidden;background:var(--surface-2)}
-/* 用 width 而不是只写 flex-basis:缩略图外面套了一层 span,它才是
-   .r 的 flex 项 —— .thumb 自己不是,flex-basis 一点用都没有,
-   结果盒子跟着图片比例走(实测竖屏 51px / 横屏 162px,一行一个宽度)。 */
-.thumb{width:68px;height:91px;flex:0 0 68px}
-.thumb img,.cover img{position:relative;z-index:1;width:100%;height:100%;
-  object-fit:contain;display:block}
-.thumb .bg,.gc .bg,.cover .bg{position:absolute;inset:0;width:100%;height:100%;z-index:0;
-  object-fit:cover;filter:blur(14px) saturate(.7) brightness(.55);transform:scale(1.25)}
-.dur{position:absolute;right:3px;bottom:3px;padding:0 4px;border-radius:4px;
-  background:rgba(6,8,11,.82);color:#e7ebf0;font-family:var(--mono);font-size:10px}
-.ph{width:100%;height:100%;display:grid;place-items:center;color:var(--dim-2)}
-.ph svg{width:16px;height:16px;stroke-width:1.4}
-
-.rb{min-width:0;flex:1}
-.rm{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--dim);margin-bottom:4px}
-.who{color:var(--fg);font-weight:530;cursor:pointer}
-.who:hover{color:var(--accent)}
-.rm .t{font-family:var(--mono);font-size:11.5px;color:var(--dim-2)}
-.out{margin-left:auto;display:inline-flex;align-items:center;gap:4px;color:var(--dim-2);font-size:11.5px}
-.out:hover{color:var(--accent)}
-.out svg{width:11px;height:11px;stroke-width:1.6}
-
-.txt{white-space:pre-wrap;word-break:break-word;color:var(--fg-2);font-size:13.5px;
-  line-height:1.6;max-height:4.8em;overflow:hidden}
-.txt.open{max-height:none}
-.txt.none{color:var(--dim-2);font-style:italic;font-size:12.5px}
-
-.pills{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px;align-items:center}
-.pill{font-size:11px;padding:1px 7px;border-radius:5px;background:var(--surface-2);
-  color:var(--dim);white-space:nowrap}
-.pill.src{background:var(--accent-dim);color:#8fb8dc}
-.pill.h{cursor:pointer}
-.pill.h:hover{background:rgba(91,157,217,.16);color:#a9cdec}
-/* 官方分类:平台自己打的,权威度高于文案里抠的话题 —— 用描边区分开 */
-.pill.c{cursor:pointer;background:none;border:1px solid var(--line-2);color:var(--fg-2)}
-.pill.c:hover{border-color:var(--accent-line);color:#a9cdec}
-
-/* 互动数据。等宽 + tabular-nums,竖着扫一列时数字对齐才好比大小 */
-/* 内容总结标记。三态靠「实心/描边/虚线」区分形态,不引第二个强调色。
-   只有「有内容」值得用强调色 —— 它是库里唯一能回答「视频讲了什么」的信号。 */
-.cm{font-size:10.5px;padding:0 5px;border-radius:4px;cursor:pointer;white-space:nowrap;
-  border:1px solid transparent;transition:all .14s var(--ease)}
-.cm.ok{background:var(--accent-dim);border-color:var(--accent-line);color:#a9cdec}
-.cm.no{color:var(--dim-2);border-color:var(--line)}
-.cm.todo{color:var(--fg-2);border-color:var(--line-2);border-style:dashed}
-.cm:hover{filter:brightness(1.25)}
-.cm:active{transform:translateY(1px)}
-
-/* 语义相似度。等宽 —— 竖着扫一列时要能比大小。
-   ok = 过了 good 线 · mid = 只在「可能相关」那一档,视觉上必须弱一等 */
-.sc{font-family:var(--mono);font-size:11.5px;padding:0 5px;border-radius:4px;
-  font-variant-numeric:tabular-nums}
-.sc.ok{background:var(--accent-dim);border:1px solid var(--accent-line);color:#a9cdec}
-.sc.mid{border:1px dashed var(--line-2);color:var(--dim)}
-
-
-.mx{display:inline-flex;gap:9px;font-family:var(--mono);font-size:11.5px;
-  color:var(--fg-2);font-variant-numeric:tabular-nums}
-.mx i{font-style:normal;color:var(--dim-2);margin-right:2px}
-
-/* 平台 AI 总结:这是「视频讲了什么」,和作者文案不是一回事,
-   所以要在视觉上分开 —— 左侧一道细线,不做成卡片(列表密度已经很高) */
-.sum{margin-top:6px;padding-left:9px;border-left:2px solid var(--accent-line);
-  font-size:13px;line-height:1.65;color:var(--fg-2);
-  max-height:calc(1.65em * 3);overflow:hidden;
-  -webkit-mask-image:linear-gradient(180deg,#000 calc(100% - 12px),transparent);
-  mask-image:linear-gradient(180deg,#000 calc(100% - 12px),transparent)}
-.sum b{font-weight:500;color:var(--dim-2);font-size:11px;margin-right:6px}
-
-/* ══ 网格:封面即内容,此处卡片是功能性的 ═════════════════ */
-.grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(158px,1fr))}
-.g{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--surface);
-  cursor:pointer;transition:border-color .16s var(--ease),transform .16s var(--ease)}
-.g:hover{border-color:var(--line-2);transform:translateY(-2px)}
-.g:active{transform:translateY(0)}
-.gc{position:relative;aspect-ratio:3/4;background:var(--surface-2);overflow:hidden}
-.gc img{position:relative;z-index:1;width:100%;height:100%;
-  object-fit:contain;display:block}
-/* 网格里底部被标题占了,时长角标必须挪到右上 —— 否则被文字压住只露一半 */
-.gc .dur{top:5px;right:5px;bottom:auto;z-index:3}
-.gc::after{content:"";position:absolute;inset:auto 0 0 0;height:58%;
-  background:linear-gradient(to top,rgba(7,9,12,.94),rgba(7,9,12,.5) 42%,transparent)}
-.gt{position:absolute;left:0;right:0;bottom:0;padding:8px 9px;z-index:2;
-  font-size:12px;line-height:1.45;color:#eef2f6;
-  /* -webkit-line-clamp 在 overflow:hidden 下会被 Chrome 归一成 flow-root 而失效,
-     所以用 max-height 硬兜底(含内边距),再用渐隐收尾代替省略号 */
-  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;line-clamp:3;
-  max-height:calc(1.45em * 3 + 16px);overflow:hidden;
-  -webkit-mask-image:linear-gradient(180deg,#000 calc(100% - 14px),transparent);
-  mask-image:linear-gradient(180deg,#000 calc(100% - 14px),transparent);
-}
-.gf{padding:7px 9px 8px;display:flex;flex-direction:column;gap:3px}
-.gf .a{font-size:11.5px;color:var(--fg-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.gf .d{font-family:var(--mono);font-size:10.5px;color:var(--dim-2)}
-/* 「有内容总结」角标。时长在右上,所以它走左上 */
-.gm{position:absolute;top:5px;left:5px;z-index:3;padding:1px 5px;border-radius:4px;
-  font-size:10px;background:rgba(6,8,11,.82);border:1px solid transparent}
-.gm.ok{border-color:var(--accent-line);color:#a9cdec}
-.gm.no{color:#8b939c}
-.gm.todo{color:#c8ced6;border-color:rgba(255,255,255,.22);border-style:dashed}
-
-/* ══ 详情弹层 ══════════════════════════════════════════════
-   知识库的核心动作是「读内容」。网格里文案被截断,列表里也只显示 5 行 ——
-   所以需要一个能看全文的地方,而不是每次都跳去抖音。
-   模态是少数正当的 z-index 层(系统层),这里只用 transform/opacity 动画。 */
-.mask{position:fixed;inset:0;z-index:60;display:grid;place-items:center;padding:22px;
-  /* 不用 backdrop-filter:它会另建合成层,部分环境(含无头截图)渲染不可靠。
-     遮罩本身 88% 不透明已经足够压住背景,毛玻璃属于可有可无。 */
-  background:rgba(6,8,11,.88);
-  animation:fade .16s var(--ease)}
-@keyframes fade{from{opacity:0}}
-.sheet{position:relative;z-index:1;
-  width:min(760px,100%);max-height:min(84vh,760px);display:flex;flex-direction:column;
-  background:var(--surface);border:1px solid var(--line-2);border-radius:14px;
-  box-shadow:0 24px 64px -20px rgba(0,0,0,.8), inset 0 1px 0 rgba(255,255,255,.04);
-  animation:rise .2s var(--ease)}
-@keyframes rise{from{opacity:0;transform:translateY(8px)}}
-.sheet header{display:flex;gap:12px;align-items:flex-start;padding:15px 16px;
-  border-bottom:1px solid var(--line);position:static;background:none;backdrop-filter:none}
-.sheet .st{min-width:0;flex:1}
-.sheet .sa{font-size:14px;font-weight:560;color:var(--fg);cursor:pointer}
-.sheet .sa:hover{color:var(--accent)}
-.sheet .sm{display:flex;gap:9px;flex-wrap:wrap;margin-top:3px;
-  font-size:11.5px;color:var(--dim-2);font-family:var(--mono)}
-.sheet .x{background:none;border:none;color:var(--dim);cursor:pointer;
-  font-size:20px;line-height:1;padding:0 4px;flex:0 0 auto}
-.sheet .x:hover{color:var(--fg)}
-.sbody{display:flex;gap:16px;padding:16px;overflow-y:auto;flex:1}
-.sbody .pic{flex:0 0 168px}
-.sbody .pic .cover{width:168px;height:224px;flex:none}
-.sfull{min-width:0;white-space:pre-wrap;word-break:break-word;
-  font-size:14.5px;line-height:1.72;color:var(--fg-2)}
-
-/* 详情右栏:内容总结 → 章节 → 作者文案。顺序就是重要性顺序 ——
-   「视频讲了什么」在最上面,作者写的营销话术在最下面。 */
-.scol{min-width:0;flex:1;display:flex;flex-direction:column;gap:18px}
-.sec h4{font-size:11px;font-weight:600;letter-spacing:.04em;color:var(--dim);
-  margin:0 0 7px;display:flex;gap:7px;align-items:baseline}
-.sec h4 em{font-style:normal;font-weight:400;font-size:10.5px;color:var(--dim-2);
-  font-family:var(--mono)}
-.sec.hintbox{font-size:12.5px;line-height:1.65;color:var(--dim);
-  padding-left:9px;border-left:2px solid var(--line-2)}
-
-/* 章节大纲:带时间戳,是抖音自己切的。序号交给时间戳,不用列表编号。 */
-.chs{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:11px}
-.chs li{display:flex;gap:10px}
-.chs .ts{flex:0 0 auto;font-family:var(--mono);font-size:11px;color:var(--accent);
-  padding-top:2px;min-width:42px}
-.chs b{font-weight:550;font-size:13.5px;color:var(--fg);line-height:1.5}
-.chs p{margin:3px 0 0;font-size:12.5px;line-height:1.6;color:var(--fg-2)}
-.chs ul{margin:4px 0 0;padding-left:16px}
-.chs ul li{display:list-item;font-size:12px;line-height:1.6;color:var(--dim);margin-top:2px}
-.sfull.none{color:var(--dim-2);font-style:italic}
-.sheet footer{display:flex;gap:7px;flex-wrap:wrap;align-items:center;
-  padding:12px 16px;border-top:1px solid var(--line)}
-.sheet footer .go{margin-left:auto}
-@media(max-width:640px){
-  .mask{padding:10px}
-  .sbody{flex-direction:column}
-  .sbody .pic{flex:none;align-self:flex-start}
-}
-
-/* ══ 骨架 / 空态 / 分页 ════════════════════════════════════ */
-.sk{height:92px;border-bottom:1px solid var(--line);
-  background:linear-gradient(90deg,var(--surface) 25%,var(--surface-2) 50%,var(--surface) 75%);
-  background-size:200% 100%;animation:shim 1.2s infinite}
-@keyframes shim{to{background-position:-200% 0}}
-.empty{text-align:center;padding:72px 20px;color:var(--dim)}
-.empty svg{width:26px;height:26px;stroke-width:1.3;margin:0 auto 12px;color:var(--dim-2)}
-.empty code{font-family:var(--mono);background:var(--surface-2);padding:2px 6px;border-radius:5px;color:var(--fg)}
-/* 页尾:给一条上边线,明确「本页到此结束」,避免网格末行的空白被误读成内容断了 */
-footer{max-width:1400px;margin:18px auto 0;padding:16px 20px 8px;
-  display:flex;gap:10px;justify-content:center;align-items:center;flex-wrap:wrap;
-  border-top:1px solid var(--line)}
-.pg{padding:7px 13px;border-radius:8px;border:1px solid var(--line-2);background:var(--surface);
-  color:var(--fg-2);cursor:pointer;font-size:12.5px}
-.pg:hover:not(:disabled){border-color:#39414e;color:var(--fg)}
-.pg:active:not(:disabled){transform:translateY(1px)}
-.pg:disabled{opacity:.35;cursor:default}
-.pg.i{background:none;border:none;color:var(--dim);font-family:var(--mono);font-size:12px}
-
-@media(max-width:720px){
-  .wrap,main,footer{padding-left:13px;padding-right:13px}
-  .zone{flex-direction:column;gap:8px}
-  .ztag{flex:none;padding-top:0}
-  .ident .kpis{gap:13px;width:100%;margin-left:0;order:3}
-  .ident .sub{display:none}
-  .thumb{width:56px;flex-basis:56px;height:75px}
-  .grid{grid-template-columns:repeat(auto-fill,minmax(126px,1fr));gap:9px}
-}
+.more{display:block;margin:22px auto 0;}
+.skel{color:var(--dim2);text-align:center;padding:50px 0}
+.score{font:11px/1 var(--mono);color:var(--ok);margin-left:6px}
 </style>
-</head>
-<body>
 
-<!-- 图标定义:全部 1.5px 描边,零 emoji -->
-<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
-  <g id="i-search"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6"/></g>
-  <g id="i-bolt"><path d="M13 2L4.5 13.5H11l-1 8.5L18.5 10H12z"/></g>
-  <g id="i-down"><path d="M12 3v13"/><path d="M7 12l5 5 5-5"/><path d="M4 21h16"/></g>
-  <g id="i-heart"><path d="M12 20s-7-4.4-7-9.5A4 4 0 0 1 12 7a4 4 0 0 1 7 3.5C19 15.6 12 20 12 20z"/></g>
-  <g id="i-user"><circle cx="12" cy="8" r="3.6"/><path d="M5 20c0-3.6 3.1-5.6 7-5.6s7 2 7 5.6"/></g>
-  <g id="i-folder"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2.5h7A1.5 1.5 0 0 1 19 10v7a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 3 17z"/></g>
-  <g id="i-sync"><path d="M4 9a8 8 0 0 1 13.5-3.5L20 8"/><path d="M20 4v4h-4"/><path d="M20 15a8 8 0 0 1-13.5 3.5L4 16"/><path d="M4 20v-4h4"/></g>
-  <g id="i-resume"><path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4v4h-4"/></g>
-  <g id="i-pause"><path d="M9.5 6v12"/><path d="M14.5 6v12"/></g>
-  <g id="i-ext"><path d="M13 5h6v6"/><path d="M19 5l-8 8"/><path d="M18 14v4a1.6 1.6 0 0 1-1.6 1.6H6.6A1.6 1.6 0 0 1 5 18V8.6A1.6 1.6 0 0 1 6.6 7H10"/></g>
-  <g id="i-img"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M4 17l5-4.5 4 3.5 3-2.5 4 3.5"/></g>
-  <g id="i-key"><circle cx="8" cy="14" r="4"/><path d="M11 11l8-8"/><path d="M16 3h4v4"/></g>
-  <g id="i-warn"><path d="M12 4.5L21 19.5H3z"/><path d="M12 10v4"/><path d="M12 17h.01"/></g>
-  <g id="i-caret"><path d="M6 9.5l6 6 6-6"/></g>
-  <g id="i-check"><path d="M4.5 12.5l5 5 10-11"/></g>
-  <g id="i-inbox"><path d="M3.5 12.5h4l1.5 3h6l1.5-3h4"/><path d="M5.5 5.5h13l2 7v6a1.5 1.5 0 0 1-1.5 1.5h-14A1.5 1.5 0 0 1 3.5 18.5v-6z"/></g>
-</defs></svg>
-
-<header><div class="wrap">
-
-  <div class="ident">
-    <h1>Douyin-DB</h1>
-    <span class="sub">抖音收藏 → 可搜索的知识库</span>
-    <div class="kpis" id="kpis"></div>
-    <!-- 顶层视图切换。分析是另一件事(看自己)而不是浏览的一个筛选,
-         所以给它独立的视图,不塞进筛选栏。 -->
-    <!-- 分析已独立成 /insight.html —— 那页有标签球和关联图,需要整屏空间,
-         塞在筛选栏下面会挤成一团 -->
-    <a class="btn" href="/insight.html" style="margin-left:14px"
-       title="从你自己做过的收藏和点赞里看你自己">认识自己 →</a>
-    <!-- 关注的人是另一个来源轴:那些作品不是我选的,所以既不进「认识自己」的
-         分析,检索里也默认不出现。这里只是入口,挑人和开采都在那页做。 -->
-    <a class="btn" href="/following.html" style="margin-left:8px"
-       title="挑出要跟的人,分成信息价值 / 竞品">我关注的人 →</a>
-    <a class="btn" href="/daily.html" style="margin-left:8px"
-       title="信息价值主播讲了什么 + 竞品主播的打法">他们讲了什么 →</a>
+<div class="wrap wide">
+  <div class="phead">
+    <h1>浏览</h1>
+    <p>抓来的所有内容,一个地方翻、一个地方搜</p>
   </div>
 
-  <!-- ① 操作区:会真的向抖音发请求 -->
-  <div class="zone">
-    <div class="ztag"><em>01</em>采集</div>
-    <div class="zbody">
-      <div class="row" id="acts"></div>
-      <button class="disc" id="prog-toggle" aria-expanded="false" aria-controls="plan"></button>
-      <div class="prog" id="plan" hidden></div>
+  <div class="search">
+    <label class="box">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="q" placeholder="搜文案、内容总结、逐字稿、作者…" autocomplete="off">
+    </label>
+    <div class="seg">
+      <button id="m-lit" class="on">字面搜</button>
+      <button id="m-sem">换句话也能搜</button>
     </div>
   </div>
 
-  <!-- ② 展示区:纯本地查询,零代价 -->
-  <div class="zone">
-    <div class="ztag"><em>02</em>浏览</div>
-    <div class="zbody">
-      <div class="row">
-        <label class="search">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#i-search"/></svg>
-          <input type="search" id="q" placeholder="搜文案、抖音总结、作者…">
-        </label>
-        <!-- 两种搜法刻意分开,而不是偷偷融合:字面搜是「这几个字出现过」,
-             语义搜是「意思接近」。混成一个之后你就不知道结果是怎么来的了。 -->
-        <div class="seg" id="smode">
-          <button id="m-lit" class="on" title="字面匹配:这几个字出现过才命中。即时、不需要模型">字面</button>
-          <button id="m-sem" title="语义匹配:换句话说也找得到。回车执行,需要先建索引">语义</button>
-        </div>
-        <span id="srcs" class="row" style="gap:6px"></span>
-        <span class="vsep"></span>
-        <select id="sort">
-          <option value="collected">存入时间</option>
-          <option value="published">发布时间</option>
-          <option value="digg">赞数</option>
-          <option value="collect">被收藏数</option>
-          <option value="comment">评论数</option>
-          <option value="duration">时长</option>
-          <option value="author">作者</option>
-        </select>
-        <select id="cat" title="抖音官方分类"><option value="">全部分类</option></select>
-        <select id="author"><option value="">全部作者</option></select>
-        <select id="psize" title="每页显示条数">
-          <option value="50">每页 50</option>
-          <option value="100">每页 100</option>
-          <option value="200">每页 200</option>
-          <option value="500">每页 500</option>
-        </select>
-        <div class="seg" style="margin-left:auto">
-          <button id="v-list" class="on">列表</button>
-          <button id="v-grid">网格</button>
-        </div>
-        <button class="chip" id="b-reset">重置</button>
-      </div>
-      <!-- 视频内容总结的三态。必须分开显示:
-           「抖音确认没给」该认命,「还不知道」该去补采 —— 混成一个开关就
-           分不出下一步该干什么了。 -->
-      <div class="row" id="cstates" style="gap:6px"></div>
-      <div class="row" id="tags" style="gap:6px"></div>
-      <div class="row" id="active" style="gap:6px"></div>
-    </div>
+  <div class="filters">
+    <div class="frow" id="f-source"><span class="lab">来源</span></div>
+    <div class="frow" id="f-cred"><span class="lab">可信度</span></div>
   </div>
 
-</div></header>
+  <div class="meta">
+    <span id="count">…</span>
+    <span class="gap"></span>
+    <select id="sort">
+      <option value="collected">按存入时间</option>
+      <option value="digg">按点赞</option>
+      <option value="create">按发布时间</option>
+    </select>
+  </div>
 
-<main>
-  <div id="notices"></div>
-  <div id="out"></div>
-</main>
-<footer id="pager"></footer>
+  <div id="grid" class="grid"><div class="skel">读取中…</div></div>
+  <div id="tail"></div>
+</div>
 
+<script src="/shell.js?v=1786270349"></script>
 <script>
-const $ = s => document.querySelector(s);
-const api = (p,o) => fetch(p,o).then(async r => {
-  const d = await r.json().catch(()=>({}));
-  if(!r.ok){
-    // FastAPI 校验失败时 detail 是**数组**,直接进模板字符串会变成
-    // "[object Object]" —— 实测踩过,错误信息等于没有。所以要摊平。
-    const det = Array.isArray(d.detail)
-      ? d.detail.map(x => `${(x.loc||[]).join('.')}: ${x.msg}`).join('; ')
-      : d.detail;
-    throw new Error(det || `HTTP ${r.status}`);
+'use strict';
+mountNav('browse');
+
+// 来源用人话,值是库里的真实 source。「博主发的」= 我关注但没主动存的。
+const SOURCES = [
+  {v: '',           label: '全部'},
+  {v: 'collection', label: '我收藏的'},
+  {v: 'like',       label: '我点赞的'},
+  {v: 'post',       label: '我发布的'},
+  {v: 'following',  label: '博主发的'},
+];
+// 可信度对应 content_state。这是「这条到底有没有真内容」的三态,不是随便的标签。
+const CREDS = [
+  {v: '',        label: '不限'},
+  {v: 'have',    label: '有内容总结'},
+  {v: 'none',    label: '只有文案'},
+  {v: 'unknown', label: '还没采全'},
+];
+
+let mode = 'lit';           // lit=字面 | sem=语义
+let source = '', cred = '', sort = 'collected', q = '';
+let offset = 0, total = 0, loading = false;
+const LIMIT = 60;
+let counts = {};            // 各来源/可信度的条数,填在 chip 上
+
+function credOf(v) {
+  // have→抖音总结(蓝) · 其余→只有文案(橙)。浏览页只按 content_state 分两档:
+  // 「本地转写」需要逐字稿标记,列表接口没带,不在这里假装有。
+  return v.content_state === 'have'
+    ? {cls: 'summary', label: '抖音总结'}
+    : {cls: 'desc', label: '只有文案'};
+}
+
+function chips() {
+  $('#f-source').innerHTML = '<span class="lab">来源</span>' + SOURCES.map(s =>
+    `<button class="chip${source === s.v ? ' on' : ''}" data-src="${s.v}">${s.label}` +
+    `${counts.src && counts.src[s.v] != null ? `<b>${fmt(counts.src[s.v])}</b>` : ''}</button>`).join('');
+  $('#f-cred').innerHTML = '<span class="lab">可信度</span>' + CREDS.map(c =>
+    `<button class="chip${cred === c.v ? ' on' : ''}" data-cred="${c.v}">${c.label}` +
+    `${counts.cred && counts.cred[c.v] != null ? `<b>${fmt(counts.cred[c.v])}</b>` : ''}</button>`).join('');
+}
+
+function card(v) {
+  const title = v.item_title || v.description || '(无标题)';
+  const c = credOf(v);
+  const cover = `/api/cover/${v.aweme_id}`;
+  const score = v._score != null ? `<span class="score">${v._score}</span>` : '';
+  return `<div class="card"><a class="open" href="${esc(v.share_url || '#')}" target="_blank" rel="noopener">
+    <div class="thumb">
+      <img src="${cover}" loading="lazy" onerror="this.style.display='none'">
+      <span class="ph">封面</span>
+      <span class="cred ${c.cls}">${c.label}</span>
+      ${v.video_duration ? `<span class="dur">${dur(v.video_duration)}</span>` : ''}
+    </div>
+    <div class="info">
+      <div class="ttl">${esc(title)}${score}</div>
+      <div class="by"><span class="who">${esc(v.nickname || '')}</span>
+        <span class="digg">♥ ${fmt(v.digg_count)}</span></div>
+    </div></a></div>`;
+}
+
+async function loadCounts() {
+  // 各 chip 的条数:并发问一遍(轻,只要 total)。全部那格用总数。
+  try {
+    const base = await api('/api/videos?limit=1');
+    counts.src = {'': base.total}; counts.cred = {'': base.total};
+    await Promise.all([
+      ...SOURCES.filter(s => s.v).map(s =>
+        api(`/api/videos?limit=1&source=${s.v}`).then(r => counts.src[s.v] = r.total)),
+      ...CREDS.filter(c => c.v).map(c =>
+        api(`/api/videos?limit=1&content=${c.v}`).then(r => counts.cred[c.v] = r.total)),
+    ]);
+  } catch (e) { /* 数字拿不到不影响筛选 */ }
+  chips();
+}
+
+async function run(reset) {
+  if (loading) return;
+  loading = true;
+  if (reset) { offset = 0; $('#grid').innerHTML = '<div class="skel">读取中…</div>'; }
+
+  try {
+    if (mode === 'sem' && q) {
+      // 语义搜:走 /api/search,默认只搜「我的」,把命中拍平成卡片
+      const r = await api(`/api/search?q=${encodeURIComponent(q)}&limit=30&scope=all`);
+      const hits = [...(r.good || []), ...(r.maybe || [])];
+      total = hits.length;
+      $('#count').innerHTML = hits.length
+        ? `换句话找到 ${hits.length} 条 · <span class="dim">相关度已标在角上</span>`
+        : `没找到相关的 · <span class="dim">${(r.nearest_below || []).join(' / ') || ''}</span>`;
+      $('#grid').innerHTML = hits.map(h => card({
+        aweme_id: h.aweme_id, item_title: h.title, nickname: h.author,
+        digg_count: h.digg_count, share_url: h.url, content_state: 'have',
+        video_duration: 0, _score: h.score,
+      })).join('') || '<div class="empty">换个说法试试</div>';
+      $('#tail').innerHTML = '';
+      loading = false; return;
+    }
+
+    const p = new URLSearchParams({limit: LIMIT, offset, sort});
+    if (q) p.set('q', q);
+    if (source) p.set('source', source);
+    if (cred) p.set('content', cred);
+    const r = await api('/api/videos?' + p);
+    total = r.total;
+    $('#count').textContent = `${fmt(total)} 条` + (q ? ` · 含「${q}」` : '');
+    const cards = r.items.map(card).join('');
+    if (reset) $('#grid').innerHTML = cards || '<div class="empty">没有匹配的</div>';
+    else $('#grid').insertAdjacentHTML('beforeend', cards);
+    offset += r.items.length;
+    renderTail();
+  } catch (e) {
+    $('#grid').innerHTML = `<div class="empty"><b>读取失败</b>${esc(e.message)}</div>`;
   }
-  return d;
+  loading = false;
+}
+
+function renderTail() {
+  let html = '';
+  if (offset < total) html += `<button class="btn more" id="more">再看 ${Math.min(LIMIT, total - offset)} 条</button>`;
+  // 底部提示条:多少条其实没有真内容 —— 只在「不限可信度」时提示,别在已筛选时误导
+  if (!cred && counts.cred && counts.cred.have != null) {
+    const noContent = total - (counts.cred.have || 0);
+    if (noContent > 0) html += `<div class="warnbar">
+      <p><b>${fmt(counts.cred.none)} 条只有作者文案、没有真实内容</b> —— 搜不到、也问不到。
+        补齐它们要跑本地语音转写,把「视频里说了什么」变成能搜的文字。</p>
+      <a class="btn" href="/data.html">去维护里转写 →</a></div>`;
+  }
+  $('#tail').innerHTML = html;
+  const m = $('#more'); if (m) m.onclick = () => run(false);
+}
+
+// ── 交互 ──
+$('#f-source').addEventListener('click', e => {
+  const b = e.target.closest('[data-src]'); if (!b) return;
+  source = b.dataset.src; chips(); run(true);
 });
-const esc = s => (s??'').toString().replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const jsq = s => esc(s).replace(/'/g,"\\'");
-const ico = (id,cls='') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#${id}"/></svg>`;
-
-const SRC = {collection:'收藏', like:'点赞', post:'我的作品', collects:'收藏夹'};
-
-/* 采集动作:名字用「动词+对象」,和下面的名词筛选 chip 不会混。
-   hint 说清到底采的是什么 —— 尤其「查找收藏夹」只列清单、不采内容。 */
-const ACTS = [
-  {id:'smart', icon:'i-bolt',   label:'智能采集', primary:true, url:'/api/collect/smart',
-   hint:'按计划自动跑三类:该续采的续采、已采尽的做增量、被限流的跳过'},
-  {id:'fav',   icon:'i-down',   label:'采集收藏', url:'/api/collect/favorites',
-   hint:'只采「我的收藏」列表'},
-  {id:'like',  icon:'i-heart',  label:'采集点赞', url:'/api/collect/likes',
-   hint:'只采「我的点赞」列表'},
-  {id:'post',  icon:'i-user',   label:'采集我的作品', url:'/api/collect/posts',
-   hint:'只采我自己发布的视频'},
-  {id:'fold',  icon:'i-folder', label:'查找收藏夹', url:'/api/collect/folders/sync', folders:true,
-   hint:'只列出收藏夹清单,不采里面的内容(采内容用命令行 cli.py folder <id>)'},
-  /* 回补是「还不知道有没有内容总结」的唯一解法。它有自己的游标,
-     被 403 打断后再点一次接着往深处走,不会从最新重刷。 */
-  {id:'refill', icon:'i-resume', label:'补齐信息', url:'/api/collect/refill', refill:true,
-   hint:'早期采的那批只存了很少几项信息。补齐之后,「未采全」的那些才能确定'
-      + '到底有没有抖音总结。中途被抖音限流是正常的,再点一次接着补'},
-];
-
-let offset=0, total=0;
-// 每页条数记住选择:2485 条按 50/页 要翻 50 页,默认给 100
-let limit = +(localStorage.getItem('dydb.limit') || 100);
-let q='', source='', sort='collected', author='', tag='', cat='', content='';
-let smode = 'lit';      // lit=字面(即时) | sem=语义(回车执行)
-let semData = null;     // 语义结果,null 表示当前不在语义模式
-let view = localStorage.getItem('dydb.view') || 'list';
-let tagsOpen=false, polling=null;
-let shown = new Map();          // 当前页 aweme_id → 作品,详情弹层用
-
-/* 时长跨三个量级:30 秒短视频、8 分钟长视频、24 小时直播回放 */
-function dur(ms){
-  if(!ms) return '';
-  const t=Math.round(ms/1000);
-  if(t<60) return t+'s';
-  if(t<3600) return `${Math.floor(t/60)}:${String(t%60).padStart(2,'0')}`;
-  const h=Math.floor(t/3600);
-  return h<24 ? `${h}h${String(Math.floor(t%3600/60)).padStart(2,'0')}` : 'LIVE';
-}
-const day = s => (s||'').slice(0,10);
-const qs = () => {
-  const p=new URLSearchParams({limit,offset,sort});
-  if(q) p.set('q',q); if(source) p.set('source',source);
-  if(author) p.set('nickname',author); if(tag) p.set('tag',tag);
-  if(cat) p.set('cat1',cat); if(content) p.set('content',content);
-  return p.toString();
-};
-/* 大数要好读:61.6万 比 616071 快得多 */
-const num = n => n==null ? '' :
-  n>=100000 ? (n/10000).toFixed(1).replace(/\.0$/,'')+'万' : n.toLocaleString();
-
-function renderActs(){
-  $('#acts').innerHTML = ACTS.map(a =>
-    `<button class="btn${a.primary?' primary':''}" id="b-${a.id}" title="${esc(a.hint)}">
-       ${ico(a.icon)}${a.label}<span class="badge" id="bg-${a.id}" hidden></span></button>`).join('');
-  ACTS.forEach(a => $(`#b-${a.id}`).onclick = () => a.folders ? doFolders() : trigger(a.url));
-}
-
-/* 按钮上挂个待办数:回补按钮显示还有多少条「不知道」。
-   这样不用先去读说明,光看按钮就知道该不该点。 */
-function markTodo(s){
-  const n = s.content_unknown || 0, el = $('#bg-refill');
-  if(!el) return;
-  el.textContent = n; el.hidden = !n;
-  $('#b-refill').classList.toggle('primary', n > 0);
-}
-
-async function loadStats(){
-  const [s,h] = await Promise.all([api('/api/stats'), api('/api/health')]);
-  // 「有总结」和「有文案」分开列:总结是视频讲了什么,文案只是作者写的标题
-  $('#kpis').innerHTML = [['作品',s.total],['有文案',s.with_description],
-                          ['有总结',s.content_have],['作者',s.authors]]
-    .map(([k,v]) => `<span class="kpi"><b>${(v||0).toLocaleString()}</b><i>${k}</i></span>`).join('');
-  renderContentStates(s);
-  markTodo(s);
-
-  const es = Object.entries(s.by_source||{});
-  $('#srcs').innerHTML =
-    `<span class="chip${source?'':' on'}" data-s="">全部<span class="n">${s.total}</span></span>` +
-    es.map(([k,v]) => `<span class="chip${source===k?' on':''}" data-s="${k}">${SRC[k]||k}<span class="n">${v}</span></span>`).join('');
-  $('#srcs').querySelectorAll('.chip').forEach(el => el.onclick = () => {
-    source=el.dataset.s; offset=0; loadStats(); loadActive(); loadList();
-  });
-
-  const box=$('#notices'); box.querySelector('.ck')?.remove();
-  if(!h.cookie_configured) box.insertAdjacentHTML('afterbegin',
-    `<div class="notice warn ck">${ico('i-key')}<div>还没登录。跑 <code>python backend/cli.py qrlogin</code> 扫码,cookie 只存在你本机。</div></div>`);
-}
-
-/* 「总结」= 抖音自己给视频生成的文字版内容概要,App 里就叫这个名字。
-   有它就不用点开视频也知道讲了什么。
-
-   三态用词的讲究:前两个说的是**视频有没有**,第三个说的是**我的库采没采全**。
-   混成一个「无」就等于告诉人「这 771 条没有」,而它们其实只是还没查过 ——
-   人一旦以为没有,就再也不会去采了。 */
-const CMARK = {
-  have:    {t:'有总结', cls:'ok',
-            tip:'抖音给这条视频生成了文字总结,不用点开也知道讲了什么'},
-  none:    {t:'无总结', cls:'no',
-            tip:'抖音没给这条生成总结 —— 它一般只给长视频和知识类的做'},
-  unknown: {t:'未采全', cls:'todo',
-            tip:'这条的详细信息还没采完,所以不知道有没有总结。点上方「补齐信息」就能确定'},
-};
-function cmark(v){
-  const m = CMARK[v.content_state || 'unknown'];
-  return m ? `<span class="cm ${m.cls}" title="${esc(m.tip)}"
-    onclick="event.stopPropagation();byContent('${v.content_state||'unknown'}')">${m.t}</span>` : '';
-}
-
-/* 顶部的三态筛选。用词和条目上的标记保持一字不差 ——
-   同一件事在两个地方叫不同名字,人得先在脑子里做一次翻译。 */
-const CSTATE = [
-  {k:'have',    label:'有总结', n:'content_have',  hint:CMARK.have.tip},
-  {k:'none',    label:'无总结', n:'content_none',  hint:CMARK.none.tip},
-  {k:'unknown', label:'未采全', n:'content_unknown', warn:true, hint:CMARK.unknown.tip},
-];
-
-function renderContentStates(s){
-  $('#cstates').innerHTML = '<span class="act-lbl">抖音总结</span>' + CSTATE.map(c =>
-    `<span class="chip${content===c.k?' on':''}${c.warn&&s[c.n]?' warn':''}"
-           data-c="${c.k}" title="${esc(c.hint)}">${c.label}<span class="n">${s[c.n]||0}</span></span>`
-  ).join('');
-  $('#cstates').querySelectorAll('.chip').forEach(el => el.onclick = () => {
-    content = content===el.dataset.c ? '' : el.dataset.c;
-    offset=0; loadStats(); loadActive(); loadList();
-  });
-}
-
-const PLAN_ICON = {resume:'i-resume', sync:'i-sync', skip:'i-pause'};
-const n0 = v => (v??0).toLocaleString();
-
-async function loadPlan(){
-  const d = await api('/api/collect/plan');
-
-  const rows = d.steps.map(s => {
-    const act = s.action==='skip' ? `冷却 ${s.cooldown_minutes} 分钟`
-              : s.action==='sync' ? '增量同步' : '续采历史';
-    // 有分母才能算比例。收藏没有官方计数字段,分母得手填。
-    if(!s.total){
-      return `<span class="lb">${esc(s.label)}</span>
-        <span class="cnt">${n0(s.collected)} <s>/ ?</s></span>
-        <span class="none">未设总数,无法判断完整度</span>
-        <span></span>
-        <button class="set" data-scope="${s.scope}">设置总数</button>
-        <span class="act${s.action==='skip'?' wait':''}">${act}</span>`;
-    }
-    const pct = Math.min(100, s.percent);
-    // 缺口分两种,不能都显示成「还差 N」+ 警告色:
-    //   待采(short 且未确认) → 确实有事可做,警告色
-    //   已确认不可达(gap_permanent) → 原作者删稿/私密/注销,补不了,
-    //     显示为中性的「N 条已失效」,否则会一直误导成有事可做
-    const todo = s.short && !s.gap_permanent;
-    const note = s.gap_permanent ? `${n0(s.gap)} 条已失效`
-               : todo            ? `还差 ${n0(s.gap)}`
-               : '已齐';
-    return `<span class="lb">${esc(s.label)}</span>
-      <span class="cnt">${n0(s.collected)} <s>/ ${n0(s.total)}</s></span>
-      <span class="bar${todo?' bad':''}"><i style="width:${pct}%"></i></span>
-      <span class="pc${todo?' bad':''}">${s.percent}%</span>
-      <span class="${todo?'left':'none'}" ${s.gap_permanent?`title="抖音计数器仍算着这些,但列表接口已不返回 —— 无法采集"`:''}>${note}</span>
-      <span class="act${s.action==='skip'?' wait':''}">${act}</span>`;
-  }).join('');
-
-  $('#plan').innerHTML =
-    `<div class="hd"><span>采集进度(已采 / 平台总数)</span>
-       <button class="set" id="p-refresh" title="向抖音取一次官方计数">刷新计数</button></div>` + rows;
-
-  // 折叠态的一行摘要:只说结论 —— 总进度、是否有待采、是否在冷却
-  const got = d.steps.reduce((n,x)=>n+x.collected, 0);
-  const tot = d.steps.reduce((n,x)=>n+(x.total||0), 0);
-  const todo = d.steps.filter(x=>x.short && !x.gap_permanent);
-  const cool = d.steps.filter(x=>x.action==='skip');
-  const bits = [];
-  if(todo.length) bits.push(`${todo.map(x=>esc(x.label)).join('、')}待采 ${n0(todo.reduce((n,x)=>n+x.gap,0))}`);
-  if(cool.length) bits.push(`${cool.map(x=>esc(x.label)).join('、')}冷却中`);
-  if(!bits.length) bits.push('均已同步至最新');
-
-  $('#prog-toggle').innerHTML =
-    `${ico('i-caret','caret')}采集进度 <b>${n0(got)}${tot?` / ${n0(tot)}`:''}</b>` +
-    `<span style="opacity:.8">· ${bits.join(' · ')}</span>` +
-    ((todo.length||cool.length) ? '<span class="warn-dot"></span>' : '');
-
-  $('#p-refresh').onclick = async () => {
-    const b=$('#p-refresh'); b.disabled=true; b.textContent='取数中…';
-    try{ await api('/api/collect/totals/refresh',{method:'POST'}); await loadPlan(); }
-    catch(e){ warn(esc(e.message)); b.disabled=false; b.textContent='刷新计数'; }
-  };
-
-  // 手填分母:抖音不提供「我收藏了多少条」,只能你在 App 里看到后填进来
-  $('#plan').querySelectorAll('.set[data-scope]').forEach(b => b.onclick = async () => {
-    const cur = d.steps.find(x=>x.scope===b.dataset.scope);
-    const v = prompt(
-      `「${cur.label}」在抖音 App 里显示多少条?\n\n` +
-      `抖音资料接口不提供这个数(收藏是私密的,没有计数器),所以只能手填。\n` +
-      `填了之后就能看到完整度,采集也会照着补齐。留空则清除。`,
-      cur.total || '');
-    if(v===null) return;
-    const q = new URLSearchParams({scope:b.dataset.scope});
-    if(v.trim()) q.set('total', String(parseInt(v,10)||0));
-    try{ await api('/api/collect/totals/manual?'+q,{method:'POST'}); await loadPlan(); }
-    catch(e){ warn(esc(e.message)); }
-  });
-}
-
-async function loadTags(){
-  const d = await api('/api/tags?limit=120');
-  if(!d.items.length){ $('#tags').innerHTML=''; return; }
-  const shown = tagsOpen ? d.items : d.items.slice(0,16);
-  $('#tags').innerHTML = shown.map(t =>
-      `<span class="chip${tag===t.tag?' on':''}" data-t="${esc(t.tag)}">#${esc(t.tag)}<span class="n">${t.n}</span></span>`).join('')
-    + (d.items.length>16 ? `<button class="link" id="t-more">${tagsOpen?'收起':`+${d.items.length-16} 个标签`}</button>` : '');
-  $('#tags').querySelectorAll('.chip').forEach(el => el.onclick = () => {
-    tag = tag===el.dataset.t ? '' : el.dataset.t; offset=0; loadTags(); loadActive(); loadList();
-  });
-  const m=$('#t-more'); if(m) m.onclick=()=>{ tagsOpen=!tagsOpen; loadTags(); };
-}
-
-/* 把当前生效的筛选全部显示出来,每个可单独撤销 */
-function loadActive(){
-  const fs = [
-    q      && {k:'搜索', v:q,             clear:()=>{ q=''; $('#q').value=''; }},
-    source && {k:'来源', v:SRC[source]||source, clear:()=>{ source=''; }},
-    author && {k:'作者', v:author,        clear:()=>{ author=''; $('#author').value=''; }},
-    tag    && {k:'标签', v:'#'+tag,       clear:()=>{ tag=''; }},
-    cat    && {k:'分类', v:cat,           clear:()=>{ cat=''; $('#cat').value=''; }},
-    content&& {k:'抖音总结', v:(CSTATE.find(c=>c.k===content)||{}).label,
-                              clear:()=>{ content=''; }},
-  ].filter(Boolean);
-
-  if(!fs.length){ $('#active').innerHTML=''; return; }
-  $('#active').innerHTML = '<span class="act-lbl">当前筛选</span>' +
-    fs.map((f,i)=>`<span class="act-f"><i>${f.k}</i>${esc(f.v)}<button data-i="${i}" title="移除">×</button></span>`).join('') +
-    `<button class="link" id="f-clear">全部清空</button>`;
-
-  $('#active').querySelectorAll('.act-f button').forEach(b => b.onclick = () => {
-    fs[+b.dataset.i].clear(); offset=0;
-    loadStats(); loadTags(); loadActive(); loadList();
-  });
-  $('#f-clear').onclick = resetAll;
-}
-
-/* 抖音官方分类:平台自己打的三级类目,100% 覆盖,比从文案抠的 #标签 权威 */
-async function loadCategories(){
-  const d = await api('/api/categories?limit=40');
-  $('#cat').innerHTML = '<option value="">全部分类</option>' +
-    d.items.map(c=>`<option value="${esc(c.cat)}">${esc(c.cat)} · ${c.n}</option>`).join('');
-  $('#cat').value = cat;
-}
-
-async function loadAuthors(){
-  const d = await api('/api/authors?limit=60');
-  $('#author').innerHTML = '<option value="">全部作者</option>' +
-    d.items.map(a=>`<option value="${esc(a.nickname)}">${esc(a.nickname)} · ${a.n}</option>`).join('');
-  $('#author').value = author;
-}
-
-/* 封面走 /api/cover 代理:抖音 CDN 防盗链,且 URL 带 x-expires 会过期 */
-/* 封面取不到(签名过期/已删稿)就换占位图。模糊垫底那层也要一起去掉,
-   否则会剩一块看不出是什么的色斑。 */
-window.coverFail = img => { const b=img.parentNode; img.remove();
-  b.querySelector('img.bg')?.remove();
-  b.insertAdjacentHTML('afterbegin', `<div class="ph">${ico('i-img')}</div>`); };
-
-function cover(v, cls){
-  const d = v.video_duration ? `<span class="dur">${dur(v.video_duration)}</span>` : '';
-  if(!v.cover) return `<div class="${cls}"><div class="ph">${ico('i-img')}</div>${d}</div>`;
-  const src = `/api/cover/${encodeURIComponent(v.aweme_id)}`;
-  // 两层同一张图:底层 cover+模糊填满盒子,上层 contain 保证画面不被裁。
-  // 封面方向混杂(63% 竖屏 / 35% 横屏),统一盒子尺寸就必然留边 ——
-  // 用模糊的自己垫底,比留一片死黑好看,也不会误导画面比例。
-  return `<div class="${cls}">
-    <img class="bg" src="${src}" loading="lazy" alt="" aria-hidden="true">
-    <img src="${src}" loading="lazy" alt="" onerror="coverFail(this)">${d}</div>`;
-}
-
-/* 互动数据:一千多条散装收藏,靠人翻是翻不出优质内容的,
-   得让「多少人赞过」直接摆在脸上。数字用等宽字体,方便竖着比。 */
-function metrics(v){
-  const ms = [['赞', v.digg_count], ['藏', v.collect_count], ['评', v.comment_count]]
-    .filter(([,n]) => n!=null && n>0);
-  if(!ms.length) return '';
-  return `<span class="mx">${ms.map(([k,n])=>`<i>${k}</i>${num(n)}`).join('')}</span>`;
-}
-
-function catPill(v){
-  const c = [v.cat1,v.cat2,v.cat3].filter(Boolean);
-  return c.length ? `<span class="pill c" onclick="byCat('${jsq(v.cat1)}')"
-    title="抖音官方分类">${esc(c.join(' › '))}</span>` : '';
-}
-
-function listRow(v){
-  const t=(v.description||'').trim();
-  const long = t.length>150 || t.split('\n').length>3;
-  const srcs=(v.sources||'').split(',').filter(Boolean);
-  const fold=(v.folders||'').split(',').filter(Boolean);
-  const hs=(v.tags||'').split(',').filter(Boolean).slice(0,6);
-  const sum=(v.ai_summary||'').trim();
-  return `<div class="r">
-    <span style="cursor:zoom-in" onclick="detail('${esc(v.aweme_id)}')">${cover(v,'thumb')}</span>
-    <div class="rb">
-      <div class="rm">
-        <span class="who" onclick="byAuthor('${jsq(v.nickname)}')">${esc(v.nickname)||'未知作者'}</span>
-        <span class="t">${esc(day(v.create_time))}</span>
-        ${cmark(v)}
-        ${metrics(v)}
-        <a class="out" href="${esc(v.share_url)}" target="_blank" rel="noreferrer">抖音打开${ico('i-ext')}</a>
-      </div>
-      <div class="txt${t?'':' none'}">${t?esc(t):'（无文案）'}</div>
-      ${long?`<button class="link" onclick="tg(this)">展开全文</button>`:''}
-      ${sum?`<div class="sum"><b>总结</b>${esc(sum)}</div>`:''}
-      <button class="link" style="align-self:flex-start" onclick="detail('${esc(v.aweme_id)}')">详情</button>
-      <div class="pills">
-        ${srcs.map(s=>`<span class="pill src">${SRC[s]||s}</span>`).join('')}
-        ${catPill(v)}
-        ${fold.map(f=>`<span class="pill">${esc(f)}</span>`).join('')}
-        ${hs.map(x=>`<span class="pill h" onclick="byTag('${jsq(x)}')">#${esc(x)}</span>`).join('')}
-        ${v.music_title?`<span class="pill">${esc(v.music_title)}</span>`:''}
-      </div>
-    </div></div>`;
-}
-
-function gridCell(v){
-  const t=(v.description||'').trim();
-  // 点卡片开详情而不是直接跳抖音 —— 网格里文案被截断,先给个能读全文的地方
-  // 网格里放不下总结全文,但要能一眼看出这条有没有内容可读
-  const m = CMARK[v.content_state || 'unknown'];
-  const mark = m ? `<span class="gm ${m.cls}" title="${esc(m.tip)}">${m.t}</span>` : '';
-  return `<div class="g" onclick="detail('${esc(v.aweme_id)}')">
-    <div style="position:relative">${cover(v,'gc')}${mark}${t?`<div class="gt">${esc(t)}</div>`:''}</div>
-    <div class="gf"><span class="a">${esc(v.nickname)||'未知作者'}</span>
-      <span class="d">${v.digg_count!=null?num(v.digg_count)+' 赞':esc(day(v.create_time))}</span></div></div>`;
-}
-
-/* ── 语义检索 ────────────────────────────────────────────
-   和字面搜共用列表区域,但**必须让人看出这是语义结果**:
-   每条带相似度,顶上有一条判定横幅。分数不藏起来 ——
-   阈值只是十几组样本调出来的,机器分不清的那一档得交给人判断。 */
-async function runSemantic(){
-  const kw = q.trim();
-  if(!kw){ semData=null; loadList(); return; }
-  $('#out').innerHTML = `<div class="empty">${ico('i-search')}正在按意思找…</div>`;
-  try{
-    semData = await api('/api/search?' + new URLSearchParams({q:kw, limit:50}));
-  }catch(e){
-    semData = null;
-    $('#out').innerHTML = `<div class="empty">${ico('i-search')}语义检索不可用<br><br>
-      <span style="color:var(--dim)">${esc(e.message)}</span></div>`;
-    $('#pager').innerHTML=''; return;
-  }
-  renderSemantic();
-}
-
-const VERDICT = {
-  relevant:   {cls:'ok',   t:'找到相关内容'},
-  only_maybe: {cls:'warn', t:'没有确定相关的 —— 下面都只是「可能相关」,别当成答案'},
-  nothing:    {cls:'warn', t:'库里没有相关内容'},
-};
-
-function semRow(v, zone){
-  const ts = v.at_sec!=null ? `${Math.floor(v.at_sec/60)}:${String(v.at_sec%60).padStart(2,'0')}` : '';
-  const KIND = {overview:'概览', chapter:'章节', queries:'搜索词'};
-  return `<div class="r">
-    <span style="cursor:zoom-in" onclick="detail('${esc(v.aweme_id)}')">
-      ${cover({aweme_id:v.aweme_id, cover:1, video_duration:0},'thumb')}</span>
-    <div class="rb">
-      <div class="rm">
-        <span class="sc ${zone}">${v.score.toFixed(3)}</span>
-        <span class="who" onclick="byAuthor('${jsq(v.author)}')">${esc(v.author)||'未知作者'}</span>
-        ${ts?`<span class="t">命中 ${KIND[v.matched_kind]||v.matched_kind} @${ts}</span>`
-            :`<span class="t">命中 ${KIND[v.matched_kind]||v.matched_kind}</span>`}
-        ${v.n_matched_fragments>1?`<span class="t">${v.n_matched_fragments} 段都命中</span>`:''}
-        <a class="out" href="${esc(v.url)}" target="_blank" rel="noreferrer">抖音打开${ico('i-ext')}</a>
-      </div>
-      <div class="txt">${esc(v.title)}</div>
-      <div class="sum"><b>命中原文</b>${esc(v.text||'')}</div>
-      <button class="link" style="align-self:flex-start" onclick="detail('${esc(v.aweme_id)}')">详情</button>
-      <div class="pills">${v.cat?`<span class="pill c">${esc(v.cat)}</span>`:''}</div>
-    </div></div>`;
-}
-
-function renderSemantic(){
-  const d = semData, V = VERDICT[d.verdict] || VERDICT.nothing;
-  const items = [...d.good.map(x=>[x,'ok']), ...d.maybe.map(x=>[x,'mid'])];
-  shown = new Map(items.map(([v]) => [String(v.aweme_id), {aweme_id:v.aweme_id}]));
-
-  let html = `<div class="notice ${V.cls==='ok'?'done':'warn'}">${ico(V.cls==='ok'?'i-check':'i-key')}
-    <div>${V.t}
-      <span style="opacity:.72"> · 相关 ${d.good.length} 条 · 可能相关 ${d.maybe.length} 条
-      · 阈值 ${d.thresholds.good}/${d.thresholds.maybe} · ${esc(d.model)}</span>
-      ${d.nearest_below.length?`<br><span style="opacity:.6">最接近的分数:${
-        d.nearest_below.map(x=>x.toFixed(3)).join(' · ')}(都低于下限)</span>`:''}
-    </div></div>`;
-  html += items.length ? `<div class="rows">${items.map(([v,z])=>semRow(v,z)).join('')}</div>`
-                       : `<div class="empty">${ico('i-inbox')}没有达到下限的结果</div>`;
-  $('#out').innerHTML = html;
-  $('#pager').innerHTML = `<span class="pg i">语义检索共 ${items.length} 条 · 按相似度排序</span>`;
-}
-
-async function loadList(){
-  if(!$('#out').innerHTML) $('#out').innerHTML = `<div class="rows">${'<div class="sk"></div>'.repeat(6)}</div>`;
-  const d = await api('/api/videos?'+qs());
-  total = d.total;
-  shown = new Map(d.items.map(v => [String(v.aweme_id), v]));   // 详情弹层直接取,不再多请求
-
-  if(!d.items.length){
-    $('#out').innerHTML = (q||source||author||tag)
-      ? `<div class="empty">${ico('i-search')}当前条件下没有结果<br><button class="link" onclick="resetAll()">清空筛选</button></div>`
-      : `<div class="empty">${ico('i-inbox')}库还是空的<br><br>点上方 <code>智能采集</code>,或命令行 <code>python backend/cli.py smart</code></div>`;
-    $('#pager').innerHTML=''; return;
-  }
-
-  $('#out').innerHTML = view==='grid'
-    ? `<div class="grid">${d.items.map(gridCell).join('')}</div>`
-    : `<div class="rows">${d.items.map(listRow).join('')}</div>`;
-
-  // 页尾要说清楚「本页到这里为止」。网格最后一行必然有余数
-  // (列数随窗口宽度变),不明说的话那片空白会被当成内容断了。
-  const pages=Math.ceil(total/limit), cur=Math.floor(offset/limit)+1;
-  const from=offset+1, to=offset+d.items.length;
-  $('#pager').innerHTML = `
-    <span class="pg i">本页 ${d.items.length} 条已全部显示 · 第 ${from.toLocaleString()}–${to.toLocaleString()} 条 / 共 ${total.toLocaleString()} 条</span>
-    ${pages>1 ? `
-      <button class="pg" ${offset?'':'disabled'} onclick="go(-1)">← 上一页</button>
-      <span class="pg i">${cur} / ${pages}</span>
-      <button class="pg" ${cur>=pages?'disabled':''} onclick="go(1)">下一页 →</button>` : ''}`;
-}
-
-/* ── 详情弹层:能读全文的地方 ───────────────────────────── */
-window.detail = async id => {
-  // 详情走接口:章节大纲只在这里给(列表不带,免得每条多驮一份 JSON)。
-  // 本地 SQLite,一次查询是毫秒级的。
-  let v = shown.get(String(id));
-  try { v = await api('/api/videos/'+encodeURIComponent(id)); }
-  catch(e){ if(!v) return warn(esc(e.message)); }
-
-  const t = (v.description || '').trim();
-  const arr = x => Array.isArray(x) ? x.filter(Boolean) : (x||'').split(',').filter(Boolean);
-  const srcs = arr(v.sources);
-  const hs = arr(v.tags);
-  const sum = (v.ai_summary || '').trim();
-  const chs = Array.isArray(v.chapters) ? v.chapters : [];
-  const cats = [v.cat1,v.cat2,v.cat3].filter(Boolean);
-
-  document.body.insertAdjacentHTML('beforeend', `
-    <div class="mask" id="sheet">
-      <div class="sheet" role="dialog" aria-modal="true" onclick="event.stopPropagation()">
-        <header>
-          <div class="st">
-            <div class="sa" onclick="byAuthor('${jsq(v.nickname)}');closeSheet()"
-                 title="只看这个作者">${esc(v.nickname) || '未知作者'}</div>
-            <div class="sm">
-              <span>${esc((v.create_time||'').slice(0,10))}</span>
-              ${v.video_duration?`<span>${dur(v.video_duration)}</span>`:''}
-              ${cmark(v)}
-              ${metrics(v)}
-              <span>${esc(v.aweme_id)}</span>
-            </div>
-          </div>
-          <button class="x" onclick="closeSheet()" title="关闭(Esc)">×</button>
-        </header>
-        <div class="sbody">
-          <div class="pic">${cover(v,'cover')}</div>
-          <div class="scol">
-          ${sum ? `<div class="sec"><h4>视频讲了什么<em>抖音生成的总结</em></h4>
-                     <div class="sfull">${esc(sum)}</div></div>` : ''}
-          ${chs.length ? `<div class="sec"><h4>章节<em>${chs.length} 段</em></h4>
-            <ol class="chs">${chs.map(c=>`<li>
-              ${c.t?`<span class="ts">${dur(c.t)}</span>`:'<span class="ts">0:00</span>'}
-              <div><b>${esc(c.desc||'')}</b>
-              ${c.detail?`<p>${esc(c.detail)}</p>`:''}
-              ${(c.points||[]).length?`<ul>${c.points.map(p=>`<li>${esc(p)}</li>`).join('')}</ul>`:''}
-              </div></li>`).join('')}</ol></div>` : ''}
-          <div class="sec"><h4>作者写的文案${sum?'<em>不是视频内容</em>':''}</h4>
-            <div class="sfull${t?'':' none'}">${t?esc(t):'（这条作品没有文案）'}</div></div>
-          ${!sum ? `<div class="sec hintbox">${v.content_state==='unknown'
-              ? '这条的详细信息还没采完，所以不知道有没有抖音总结 —— 点上方「补齐信息」就能确定。'
-              : '抖音没给这条生成总结（它一般只给长视频和知识类的做）。想知道讲了什么，'
-                + '只能听一遍原声转文字，那是后面的事。'}</div>` : ''}
-          </div>
-        </div>
-        <footer>
-          ${srcs.map(x=>`<span class="pill src">${SRC[x]||x}</span>`).join('')}
-          ${cats.length?`<span class="pill c">${esc(cats.join(' › '))}</span>`:''}
-          ${hs.map(x=>`<span class="pill h" onclick="byTag('${jsq(x)}');closeSheet()">#${esc(x)}</span>`).join('')}
-          ${v.music_title?`<span class="pill">${esc(v.music_title)}</span>`:''}
-          <a class="btn primary go" href="${esc(v.share_url)}" target="_blank"
-             rel="noreferrer">${ico('i-ext')}在抖音打开</a>
-        </footer>
-      </div>
-    </div>`);
-
-  const mask = $('#sheet');
-  mask.onclick = closeSheet;                       // 点遮罩关闭
-  document.addEventListener('keydown', _esc);
-  document.body.style.overflow = 'hidden';         // 防背景滚动
-};
-
-function _esc(e){ if(e.key === 'Escape') closeSheet(); }
-window.closeSheet = () => {
-  $('#sheet')?.remove();
-  document.removeEventListener('keydown', _esc);
-  document.body.style.overflow = '';
-};
-
-window.go = d => { if(semData) return; offset=Math.max(0,offset+d*limit); loadList(); scrollTo({top:0,behavior:'smooth'}); };
-window.tg = b => { const e=b.previousElementSibling; e.classList.toggle('open');
-  b.textContent = e.classList.contains('open')?'收起':'展开全文'; };
-window.byAuthor = n => { author = author===n?'':n; $('#author').value=author; offset=0; loadActive(); loadList(); };
-window.byTag = t => { tag = tag===t?'':t; offset=0; loadTags(); loadActive(); loadList(); };
-window.byCat = c => { cat = cat===c?'':c; $('#cat').value=cat; offset=0;
-  closeSheet(); loadActive(); loadList(); };
-/* 点标记 = 按这个状态筛选,和上面那排三态 chip 是同一个筛选 */
-window.byContent = k => { content = content===k?'':k; offset=0;
-  closeSheet(); loadStats(); loadActive(); loadList(); };
-window.resetAll = () => { q=source=author=tag=cat=content=''; sort='collected'; offset=0;
-  $('#q').value=''; $('#author').value=''; $('#cat').value=''; $('#sort').value='collected';
-  loadStats(); loadTags(); loadActive(); loadList(); };
-
-function setView(v){ view=v; localStorage.setItem('dydb.view',v);
-  $('#v-list').classList.toggle('on',v==='list'); $('#v-grid').classList.toggle('on',v==='grid'); loadList(); }
-function busy(b){ ACTS.forEach(a=>{ const el=$(`#b-${a.id}`); if(el) el.disabled=b; }); }
-const warn = m => $('#notices').insertAdjacentHTML('beforeend',
-  `<div class="notice warn">${ico('i-warn')}<div>${m}</div></div>`);
-
-async function pollRuns(){
-  const d = await api('/api/runs');
-  const box=$('#notices'); box.querySelector('.rn')?.remove();
-
-  if(d.collecting){
-    const p=d.progress||{};
-    // 采集可能是命令行进程在跑(状态来自数据库,跨进程可见),要说清是谁
-    const who = ({cli:'命令行正在采集', mcp:'AI(MCP)正在采集', web:'采集中'})[d.origin] || '采集中';
-    const sc  = d.active_scope ? `「${esc(SRC[d.active_scope]||d.active_scope)}」` : '';
-    box.insertAdjacentHTML('beforeend',
-      `<div class="notice busy rn"><span class="spin"></span><div>${who}${sc} · 第 ${p.pages??0} 页 · 已抓 ${p.fetched??0} 条(新增 ${p.inserted??0})<br>
-       <span style="opacity:.72">抖音有风控,翻页间隔是刻意留的,慢是正常的。期间采集按钮会锁住,避免两个进程一起打接口。</span></div></div>`);
-    busy(true); await loadStats(); await loadList();
-    if(!polling) polling=setInterval(pollRuns,3000);
-  }else{
-    busy(false);
-    if(polling){
-      clearInterval(polling); polling=null;
-      await loadStats(); await loadTags(); await loadPlan(); await loadList();
-      // 跑完必须给结果 —— 否则「都已采尽、增量没新东西」的正常情况
-      // 在界面上表现为「转个圈然后什么都没变」,看起来像坏了
-      showOutcome(d.items||[]);
-    }
-    const last=(d.items||[])[0];
-    if(last && last.status==='failed') box.insertAdjacentHTML('beforeend',
-      `<div class="notice warn rn">${ico('i-warn')}<div>上次采集中断:${esc(last.error)}<br>
-       <span style="opacity:.8">已抓到的数据和游标都保留了,重新采集会从断点续采。</span></div></div>`);
-  }
-}
-
-/* 汇总刚结束那一轮的结果。取最近连续的、几分钟内的记录当作同一轮。 */
-function showOutcome(items){
-  const now = Date.now();
-  const mine = items.filter(r => r.finished_at &&
-    now - Date.parse(r.finished_at) < 10*60*1000).slice(0, 3);
-  if(!mine.length) return;
-
-  const added = mine.reduce((s,r)=>s+(r.inserted||0), 0);
-  const parts = mine.map(r => {
-    const nm = SRC[r.scope] || r.scope;
-    if(r.status==='failed')  return `${nm} 被限流中断`;
-    if(r.status==='stale')   return `${nm} 记录被回收`;
-    return `${nm} +${r.inserted||0}`;
-  }).join(' · ');
-
-  const head = added > 0
-    ? `本轮新增 ${added} 条`
-    : `本轮没有新内容 —— 三类都已是最新`;
-  $('#notices').insertAdjacentHTML('beforeend',
-    `<div class="notice done" id="oc">${ico(added?'i-down':'i-check')}<div>${head}
-      <span style="opacity:.72"> · ${esc(parts)}</span></div>
-      <button class="set" onclick="this.parentNode.remove()" style="margin-left:auto">关闭</button></div>`);
-  setTimeout(()=>$('#oc')?.remove(), 15000);
-}
-
-async function trigger(url){
-  busy(true);
-  try{ await api(url,{method:'POST'}); await pollRuns(); }
-  catch(e){ warn(esc(e.message)); busy(false); }
-}
-
-async function doFolders(){
-  busy(true);
-  try{
-    const d = await api('/api/collect/folders/sync',{method:'POST'});
-    $('#notices').insertAdjacentHTML('beforeend',
-      `<div class="notice">${ico('i-folder')}<div>${d.items.length
-        ? `找到 ${d.items.length} 个收藏夹:${d.items.map(f=>esc(f.collects_name)).join('、')}<br>
-           采里面的内容:<code>python backend/cli.py folder &lt;id&gt;</code>`
-        : '你没有自定义收藏夹。'}</div></div>`);
-  }catch(e){ warn(esc(e.message)); }
-  busy(false);
-}
-
-// 采集进度默认折叠(渐进披露),状态记住
-function setProgOpen(open){
-  localStorage.setItem('dydb.progOpen', open ? '1' : '0');
-  $('#plan').hidden = !open;
-  $('#prog-toggle').setAttribute('aria-expanded', open ? 'true' : 'false');
-}
-$('#prog-toggle').onclick = () =>
-  setProgOpen($('#prog-toggle').getAttribute('aria-expanded') !== 'true');
-
-$('#b-reset').onclick = resetAll;
-$('#v-list').onclick  = () => setView('list');
-$('#v-grid').onclick  = () => setView('grid');
-$('#sort').onchange   = e => { sort=e.target.value; offset=0; loadList(); };
-$('#author').onchange = e => { author=e.target.value; offset=0; loadActive(); loadList(); };
-$('#cat').onchange    = e => { cat=e.target.value; offset=0; loadActive(); loadList(); };
-/* 三态 chip 的点击在 renderContentStates 里绑定 —— 它每次 loadStats 都重画 */
-$('#psize').onchange  = e => {
-  limit = +e.target.value;
-  localStorage.setItem('dydb.limit', limit);
-  offset = 0;                     // 换页大小后页码必须归零,否则可能落到不存在的页
-  loadList(); scrollTo({top:0,behavior:'smooth'});
-};
-let dt;
-$('#q').oninput = e => {
+$('#f-cred').addEventListener('click', e => {
+  const b = e.target.closest('[data-cred]'); if (!b) return;
+  cred = b.dataset.cred; chips(); run(true);
+});
+$('#sort').addEventListener('change', e => { sort = e.target.value; run(true); });
+$('#m-lit').onclick = () => { mode = 'lit'; $('#m-lit').classList.add('on'); $('#m-sem').classList.remove('on'); run(true); };
+$('#m-sem').onclick = () => { mode = 'sem'; $('#m-sem').classList.add('on'); $('#m-lit').classList.remove('on'); if (q) run(true); };
+let t;
+$('#q').addEventListener('input', e => {
   q = e.target.value.trim();
-  if(smode === 'sem') return;          // 语义要花时间,不做即时搜,等回车
-  clearTimeout(dt);
-  dt = setTimeout(()=>{ offset=0; loadActive(); loadList(); }, 250);
-};
-$('#q').onkeydown = e => { if(e.key === 'Enter' && smode === 'sem') runSemantic(); };
+  if (mode === 'sem') return;              // 语义搜按回车,不即时
+  clearTimeout(t); t = setTimeout(() => run(true), 250);
+});
+$('#q').addEventListener('keydown', e => { if (e.key === 'Enter' && mode === 'sem') run(true); });
 
-function setSmode(m){
-  smode = m;
-  $('#m-lit').classList.toggle('on', m==='lit');
-  $('#m-sem').classList.toggle('on', m==='sem');
-  $('#q').placeholder = m==='sem'
-    ? '按意思找,回车执行 —— 例:怎么提高英语口语'
-    : '搜文案、抖音总结、作者…';
-  if(m==='lit'){ semData=null; loadList(); }
-  else if(q) runSemantic();
-}
-$('#m-lit').onclick = () => setSmode('lit');
-$('#m-sem').onclick = () => setSmode('sem');
+// 顶栏同步时间:拿最近一次采集
+api('/api/runs?limit=1').then(r => {
+  const last = (r.items && r.items[0] && (r.items[0].finished_at || r.items[0].started_at));
+  navSync(last);
+}).catch(() => navSync());
 
-/* 从 URL 读初始筛选。
-   分析页和标签球都靠 `/?tag=xxx&content=have` 跳过来 —— 不读参数的话
-   链接等于没用(实测:URL 带了参数但页面照样显示全部 2555 条)。 */
-function applyUrlFilters(){
-  const p = new URLSearchParams(location.search);
-  const t = p.get('tag');       if(t) tag = t;
-  const c = p.get('cat1');      if(c) cat = c;
-  const n = p.get('nickname');  if(n) author = n;
-  const kw = p.get('q');        if(kw){ q = kw; $('#q').value = kw; }
-  const ct = p.get('content');
-  if(['have','none','unknown'].includes(ct)) content = ct;
-  const so = p.get('sort');     if(so) sort = so;
-  return !!(t || c || n || kw || ct || so);
-}
-
-(async()=>{
-  renderActs(); setView(view);
-  const fromUrl = applyUrlFilters();
-  $('#psize').value = limit;
-  setProgOpen(localStorage.getItem('dydb.progOpen') === '1');
-  await loadStats(); await loadAuthors(); await loadCategories();
-  await loadTags(); await loadPlan(); loadActive();
-  if(fromUrl){
-    // 带筛选进来的,把控件也同步上,否则界面显示「全部」而结果是筛过的
-    $('#cat').value = cat; $('#author').value = author; $('#sort').value = sort;
-  }
-  await loadList(); await pollRuns();
-})();
+chips();
+loadCounts();
+run(true);
 </script>
-</body>
-</html>

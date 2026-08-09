@@ -492,6 +492,8 @@ def tag_quality(min_n: int = 15, limit: int = 16) -> dict[str, Any]:
     换一套词汇会让人得在脑子里翻译一遍(这个毛病第一版犯过)。
     """
     with store.connect() as c:
+        # 只算「我主动选的」—— 认识自己的每一段都不能把爬来的博主内容算进去,
+        # 否则干货率会被关注者的营销视频稀释。之前这里漏了这个过滤。
         rows = c.execute("""
             SELECT LOWER(t.tag) tg,
                    COUNT(DISTINCT t.aweme_id) n,
@@ -499,9 +501,10 @@ def tag_quality(min_n: int = 15, limit: int = 16) -> dict[str, Any]:
                    SUM(v.content_state='unknown') AS unknown,
                    AVG(v.digg_count) AS digg
             FROM tags t JOIN videos v ON v.aweme_id = t.aweme_id
+            WHERE {mine}
             GROUP BY LOWER(t.tag)
             HAVING n >= ? ORDER BY n DESC LIMIT ?
-        """, (min_n, limit)).fetchall()
+        """.format(mine=store.mine_pred("v")), (min_n, limit)).fetchall()
 
     items = []
     for r in rows:
@@ -530,3 +533,78 @@ def tag_quality(min_n: int = 15, limit: int = 16) -> dict[str, Any]:
                  "是「真的讲了东西」的**代理指标**,不是精确判定。"
                  "「未采全」那些还不知道有没有,补齐信息后这些数会变。"),
     }
+
+
+def following_aspects() -> dict[str, Any]:
+    """我关注的人都是做什么的,以及「关注了却没在看」的缺口。
+
+    这一段回答:我关注的 97 人,方面上集中在哪、哪些是「关注了但刷不到、
+    最该做成简报」的。核心洞察是**关注 ≠ 在看**的落差 ——
+    某个方面关注了很多人却几乎没收藏过,说明我想跟但平台没喂给我。
+
+    ⚠️ 诚实前提:方面靠「这个博主在我库里的作品的主导官方分类」推断,
+    所以**只有我存过或抓过其作品的人才能归类**。实测 97 人里只有 35 人
+    能归类,其余 62 人从没存过也没抓过 —— 那 62 人单独计入「还不了解」,
+    绝不编一个覆盖全部 97 人的假分布(高保真稿里那张满表是设计占位)。
+
+    方面 = 把官方 cat1 归成几个大类。归法写在 _ASPECT 里,是手工的、可调。
+    """
+    with store.connect() as c:
+        # 每位关注者的主导分类(在库里作品最多的那个 cat1)
+        rows = c.execute("""
+          WITH per AS (
+            SELECT f.sec_user_id, v.cat1, COUNT(*) n,
+                   ROW_NUMBER() OVER (PARTITION BY f.sec_user_id
+                                      ORDER BY COUNT(*) DESC) rk
+            FROM following f JOIN videos v ON v.sec_user_id = f.sec_user_id
+            WHERE v.cat1 IS NOT NULL AND TRIM(v.cat1) <> ''
+            GROUP BY f.sec_user_id, v.cat1)
+          SELECT p.sec_user_id, p.cat1,
+                 EXISTS(SELECT 1 FROM videos v2
+                        WHERE v2.sec_user_id = p.sec_user_id AND {mine}) AS saved
+          FROM per p WHERE rk = 1
+        """.format(mine=store.mine_pred("v2"))).fetchall()
+        total = c.execute("SELECT COUNT(*) n FROM following").fetchone()["n"]
+
+    buckets: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        asp = _ASPECT.get(r["cat1"], "其他")
+        b = buckets.setdefault(asp, {"aspect": asp, "follow": 0, "saved": 0,
+                                     "cats": set()})
+        b["follow"] += 1
+        b["saved"] += 1 if r["saved"] else 0
+        b["cats"].add(r["cat1"])
+
+    items = []
+    for b in buckets.values():
+        gap = b["follow"] - b["saved"]
+        # 「关注了却几乎没收藏」= 最该做成简报的缺口
+        verdict = ("主线,关注即在看" if b["saved"] >= b["follow"] * 0.6 else
+                   "缺口最大,关注了却刷不到" if b["saved"] <= b["follow"] * 0.3 else
+                   "在跟,量不大")
+        items.append({**b, "cats": sorted(b["cats"]), "gap": gap,
+                      "verdict": verdict})
+    items.sort(key=lambda x: -x["follow"])
+
+    known = sum(b["follow"] for b in buckets.values())
+    return {
+        "items": items,
+        "total_following": total,
+        "categorizable": known,
+        "unknown": total - known,
+        "note": (f"只有 {known}/{total} 位能推断方面(其余从没存过也没抓过)。"
+                 "方面按「其作品的主导官方分类」归类,是估计不是精确。"),
+    }
+
+
+# cat1 → 方面 的归类。手工映射,官方分类有十几种,归成几个我真正在意的大类。
+# 没列到的一律「其他」。这个表可以随时调 —— 它只影响这一段的呈现。
+_ASPECT = {
+    "校园教育": "英语 / 教育", "外语": "英语 / 教育",
+    "财经": "财经 / 投资", "三农": "财经 / 投资",
+    "科技": "AI / 科技", "科普": "AI / 科技",
+    "人文社科": "人文 / 社科", "文化": "人文 / 社科",
+    "个人管理": "个人成长", "职场": "个人成长",
+    "二次元": "娱乐", "游戏": "娱乐", "影视": "娱乐",
+    "音乐": "娱乐", "美食": "生活", "亲子": "生活", "随拍": "生活",
+}

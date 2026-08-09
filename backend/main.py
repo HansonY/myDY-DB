@@ -20,7 +20,7 @@ _pyversion.check()   # Python 版本不对就早失败,别让人撞 Rust 编译�
 import httpx
 from fastapi import BackgroundTasks, Body, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 import config
@@ -57,6 +57,18 @@ app.add_middleware(
 # 全局采集锁:同一时刻只跑一个采集任务
 _collect_lock = asyncio.Lock()
 _last_progress: dict[str, Any] = {}
+
+
+# 关掉静态资源缓存。本地单人自部署,没有带宽压力,而浏览器缓存 shell.js / *.html
+# 会让「明明改了却看起来没变」—— 实测就因此反复误判成「UI 没改」。
+# 正确性在这里远比缓存命中重要,一律 no-store。
+@app.middleware("http")
+async def _no_cache_static(request, call_next):
+    resp = await call_next(request)
+    p = request.url.path
+    if p.endswith((".html", ".css", ".js")) or p == "/":
+        resp.headers["Cache-Control"] = "no-store, must-revalidate"
+    return resp
 
 
 # ── 只读接口 ────────────────────────────────────────────────
@@ -190,6 +202,13 @@ async def insight_graph(
     """
     from knowledge import insight as ki
     return await asyncio.to_thread(ki.tag_graph, min_count, min_edge, max_nodes)
+
+
+@app.get("/api/insight/aspects")
+async def insight_aspects() -> dict[str, Any]:
+    """我关注的人都是做什么的 + 「关注了却没在看」的缺口(认识自己 第 02 段)。"""
+    from knowledge import insight as ki
+    return await asyncio.to_thread(ki.following_aspects)
 
 
 @app.get("/api/insight/quality")
@@ -686,4 +705,23 @@ async def collect_folder(
 
 
 # ── 前端(零构建静态页,必须挂在所有 /api 路由之后)──────────
+# 老地址重定向。这个项目是自部署的,书签会失效 —— 三行代码的事,不要让人撞 404。
+#   /daily.html      → /            简报成了首页
+#   /following.html  → /creators.html
+_MOVED = {"/daily.html": "/", "/following.html": "/creators.html",
+          "/rival.html": "/digest.html"}  # 竞品暂并在简报页,待拆
+
+
+@app.get("/{old_path:path}.html", include_in_schema=False)
+async def _moved(old_path: str):
+    """只处理搬走的那几个;其余交给下面的 StaticFiles。"""
+    key = f"/{old_path}.html"
+    if key in _MOVED:
+        return RedirectResponse(_MOVED[key], status_code=308)
+    path = STATIC_DIR / f"{old_path}.html"
+    if path.is_file():
+        return FileResponse(path, media_type="text/html")
+    raise HTTPException(404, "没有这个页面")
+
+
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

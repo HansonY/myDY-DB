@@ -1,60 +1,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>我关注的人 · Douyin-DB</title>
+<link rel="stylesheet" href="/shell.css?v=1786270349">
 <style>
-/* 沿用 index.html 的视觉语言:近黑底、单强调色、数字等宽 */
-:root{
-  --bg:#0b0d11; --surface:#11141a; --surface2:#161a21; --line:#20252e;
-  --fg:#e7ebf0; --dim:#78808c; --dim2:#565e69;
-  --accent:#5b9dd9; --accent-dim:rgba(91,157,217,.13); --accent-line:rgba(91,157,217,.3);
-  --warn:#c9a153; --warn-dim:rgba(201,161,83,.1);
-  --mono:ui-monospace,SFMono-Regular,"SF Mono","JetBrains Mono",Menlo,monospace;
-  --ease:cubic-bezier(.16,1,.3,1);
-}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);
-  font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB",sans-serif;
-  -webkit-font-smoothing:antialiased}
-.wrap{max-width:1120px;margin:0 auto;padding:26px 20px 80px}
-a{color:var(--accent);text-decoration:none}
+/* 只放这页独有的:名单表格 + 角色按钮。其余在 shell.css */
 
-/* ── 页头 ── */
-.top{display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap;
-  padding-bottom:18px;border-bottom:1px solid var(--line);margin-bottom:22px}
-h1{margin:0;font-size:21px;font-weight:600;letter-spacing:-.2px}
-.sub{color:var(--dim);font-size:13px;display:block;margin-top:3px}
-.back{margin-left:auto;font-size:13px;color:var(--dim);
-  border:1px solid var(--line);border-radius:7px;padding:6px 12px;transition:.15s var(--ease)}
-.back:hover{color:var(--fg);border-color:var(--accent-line)}
+.grp2{margin:26px 0 10px;display:flex;align-items:baseline;gap:9px}
+.grp2 h2{margin:0;font-size:13.5px;font-weight:600}
+.grp2 em{font-style:normal;color:var(--dim);font-size:12px}
 
-/* ── 事实条:把「为什么不全爬」摆在脸上 ── */
-.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));
-  gap:1px;background:var(--line);border:1px solid var(--line);
-  border-radius:9px;overflow:hidden;margin-bottom:8px}
-.fact{background:var(--surface);padding:12px 14px}
-.fact b{display:block;font:600 19px/1.25 var(--mono);letter-spacing:-.4px}
-.fact span{color:var(--dim);font-size:11.5px;display:block;margin-top:2px}
-.fact.hot b{color:var(--warn)}
-.fact.on b{color:var(--accent)}
-.note{color:var(--dim);font-size:12.5px;margin:0 0 20px;line-height:1.65}
-.note b{color:var(--warn);font-weight:600}
-
-/* ── 操作条 ── */
-.bar{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-bottom:18px}
-.btn{background:var(--surface2);color:var(--fg);border:1px solid var(--line);
-  border-radius:7px;padding:7px 13px;font-size:13px;cursor:pointer;
-  transition:.15s var(--ease);font-family:inherit}
-.btn:hover:not(:disabled){border-color:var(--accent-line);background:#1b2029}
-.btn:disabled{opacity:.4;cursor:default}
-.btn.go{background:var(--accent-dim);border-color:var(--accent-line);color:#a9cdf0}
-.spacer{flex:1}
-.hint{color:var(--dim2);font-size:12px}
-
-/* ── 名单 ── */
-.grp{margin:26px 0 10px;display:flex;align-items:baseline;gap:9px}
-.grp h2{margin:0;font-size:13.5px;font-weight:600;color:var(--fg)}
-.grp em{font-style:normal;color:var(--dim);font-size:12px}
-.list{border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.list{border:1px solid var(--line);border-radius:10px;overflow:hidden}
 .row{display:grid;grid-template-columns:1fr 58px 70px 132px 92px;
   gap:12px;align-items:center;padding:11px 14px;
   border-top:1px solid var(--line);background:var(--surface);transition:background .12s}
@@ -62,7 +17,6 @@ h1{margin:0;font-size:21px;font-weight:600;letter-spacing:-.2px}
 .row:hover{background:var(--surface2)}
 .row.picked{background:rgba(91,157,217,.06)}
 .row.picked:hover{background:rgba(91,157,217,.1)}
-.ck{width:16px;height:16px;accent-color:var(--accent);cursor:pointer}
 .who{min-width:0}
 .who b{display:block;font-weight:500;font-size:14px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -72,62 +26,53 @@ h1{margin:0;font-size:21px;font-weight:600;letter-spacing:-.2px}
 .num i{font-style:normal;color:var(--dim2);font-size:11px;display:block;margin-top:3px}
 .num.zero{color:var(--dim2)}
 .num.good{color:var(--accent)}
-.cost{font:12px/1.35 var(--mono);color:var(--dim);text-align:right}
-.cost.heavy{color:var(--warn)}
 .st{font-size:11.5px;text-align:right;color:var(--dim2)}
-.st.done{color:#6b9e73}
-.st.part{color:var(--warn)}
+.st.done{color:var(--ok)}
 .head{display:grid;grid-template-columns:1fr 58px 70px 132px 92px;gap:12px;
   padding:0 14px 7px;font-size:11px;color:var(--dim2)}
-.head span:nth-child(n+3){text-align:right}
-.empty{padding:34px;text-align:center;color:var(--dim)}
-@media(max-width:720px){
-  .row,.head{grid-template-columns:1fr 52px 60px}
-  .roles,.cost,.head span:nth-child(4),.head span:nth-child(5){display:none}
-  .row .roles{display:flex;grid-column:1/-1;padding-top:8px}
-  .st{grid-column:1/-1;text-align:left;padding-top:2px}
-}
+.head span:nth-child(n+2){text-align:right}
 
-/* 角色:这个人对我意味着什么。两类的用途完全不同 —— 
+/* 角色:这个人对我意味着什么。两类的用途完全不同 ——
    信息价值要的是他讲的内容,竞品要的是他的打法。 */
 .roles{display:flex;gap:5px;justify-content:flex-end}
 .rb{border:1px solid var(--line);background:var(--surface2);color:var(--dim);
   border-radius:6px;padding:4px 9px;font-size:11.5px;cursor:pointer;
-  transition:.14s var(--ease);font-family:inherit;white-space:nowrap}
+  transition:.14s var(--ease);white-space:nowrap}
 .rb:hover{color:var(--fg);border-color:var(--accent-line)}
 .rb.on-info{background:var(--accent-dim);border-color:var(--accent-line);color:#a9cdf0}
-.rb.on-rival{background:var(--warn-dim);border-color:rgba(201,161,83,.4);color:var(--warn)}
+.rb.on-rival{background:var(--warn-dim);border-color:var(--warn-line);color:var(--warn)}
+
+@media(max-width:720px){
+  .row,.head{grid-template-columns:1fr 52px 60px}
+  .roles,.head span:nth-child(4),.head span:nth-child(5){display:none}
+  .row .roles{display:flex;grid-column:1/-1;padding-top:8px}
+  .st{grid-column:1/-1;text-align:left;padding-top:2px}
+}
 </style>
 
 <div class="wrap">
-  <div class="top">
-    <div>
-      <h1>我关注的人</h1>
-      <span class="sub">挑出要跟的人,每天只抓他们最近三天的新作品</span>
-    </div>
-    <a class="back" href="/">← 回浏览</a>
+  <div class="phead">
+    <h1>我关注的人</h1>
+    <p>选出要跟的人并分类 —— 只有打了标的人会被采集、会进「今天」</p>
   </div>
 
   <div class="facts" id="facts"></div>
-  <p class="note" id="note"></p>
+  <p class="notice info" id="note" style="margin-top:12px"></p>
 
   <div class="bar">
-    <button class="btn" id="sync">刷新关注列表</button>
+    <button class="btn net" id="sync" title="会向抖音发请求(约 5 页)">刷新关注列表</button>
     <button class="btn go" id="crawl" disabled>先给人打标签</button>
-    <a class="btn" href="/daily.html">看简报 →</a>
-    <span class="spacer"></span>
+    <span class="gap"></span>
     <span class="hint" id="msg"></span>
   </div>
 
   <div id="body"><div class="empty">读取中…</div></div>
 </div>
 
+<script src="/shell.js?v=1786270349"></script>
 <script>
 'use strict';
-/* ── 常量必须在使用前声明。之前踩过:const 不会提升,
-   在声明之前引用会抛 ReferenceError,整页白屏且 node --check 查不出来。 ── */
-const $ = s => document.querySelector(s);
-const fmt = n => (n == null ? '—' : Number(n).toLocaleString('en-US'));
+mountNav('creators');
 
 /* 采集节奏:f2 实测每页间隔 8 秒,一页 20 条 */
 const PER_PAGE = 20, SEC_PER_PAGE = 8;
@@ -169,10 +114,6 @@ function rowHtml(u) {
   </div>`;
 }
 
-function esc(s) {
-  return String(s).replace(/[&<>"]/g, m => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[m]));
-}
-
 function render() {
   const saved = ALL.filter(u => u.saved_n > 0);
   const never = ALL.filter(u => !u.saved_n);
@@ -202,31 +143,14 @@ function render() {
   const head = `<div class="head"><span>作者</span>
     <span>我存过</span><span>他共发</span><span>跟不跟 · 跟哪种</span><span>状态</span></div>`;
   $('#body').innerHTML =
-    `<div class="grp"><h2>我存过他作品的</h2><em>${saved.length} 位 · 值得考虑</em></div>
+    `<div class="grp2"><h2>我存过他作品的</h2><em>${saved.length} 位 · 值得考虑</em></div>
      ${head}<div class="list">${saved.map(rowHtml).join('') || '<div class="empty">还没有</div>'}</div>
-     <div class="grp"><h2>关注了但一条没存</h2><em>${never.length} 位 · 一般不必采</em></div>
+     <div class="grp2"><h2>关注了但一条没存</h2><em>${never.length} 位 · 一般不必采</em></div>
      ${head}<div class="list">${never.map(rowHtml).join('') || '<div class="empty">没有</div>'}</div>`;
 
   $('#crawl').disabled = !picked.length;
   $('#crawl').textContent = picked.length
     ? `抓这 ${picked.length} 位最近三天的` : '先给人打标签';
-}
-
-async function api(url, opt) {
-  const r = await fetch(url, opt);
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) {
-    // FastAPI 的 422 detail 是数组,直接模板化会变成 [object Object]
-    const d = j.detail;
-    throw new Error(Array.isArray(d) ? d.map(x => x.msg || JSON.stringify(x)).join('; ')
-      : typeof d === 'string' ? d : JSON.stringify(j));
-  }
-  return j;
-}
-
-function say(t, warn) {
-  $('#msg').textContent = t || '';
-  $('#msg').style.color = warn ? 'var(--warn)' : 'var(--dim2)';
 }
 
 async function load() {
@@ -264,24 +188,24 @@ $('#body').addEventListener('click', async ev => {
       body: JSON.stringify({sec_user_ids: [id], role: next}),
     });
     const name = u ? u.nickname : '';
-    say(next === 'info' ? `${name} → 信息价值(每天抓他的新内容)`
+    say('#msg', next === 'info' ? `${name} → 信息价值(每天抓他的新内容)`
       : next === 'rival' ? `${name} → 竞品(每天算他的打法)`
       : `不跟 ${name} 了`);
   } catch (e) {
     if (u) u.role = prev;            // 存不进去就回滚,别让界面骗人
     render();
-    say('保存失败:' + e.message, true);
+    say('#msg', '保存失败:' + e.message, true);
   }
 });
 
 $('#sync').addEventListener('click', async () => {
   const b = $('#sync');
-  b.disabled = true; b.textContent = '刷新中…'; say('正在读关注列表(约 5 页)');
+  b.disabled = true; b.textContent = '刷新中…'; say('#msg', '正在读关注列表(约 5 页)');
   try {
     const r = await api('/api/following/sync', {method: 'POST'});
-    say(`拿到 ${r.fetched} 位,其中新增 ${r.new} 位`);
+    say('#msg', `拿到 ${r.fetched} 位,其中新增 ${r.new} 位`);
     await load();
-  } catch (e) { say(e.message, true); }
+  } catch (e) { say('#msg', e.message, true); }
   b.disabled = false; b.textContent = '刷新关注列表';
 });
 
@@ -291,15 +215,15 @@ $('#crawl').addEventListener('click', async () => {
     + '每人翻一页左右,一分多钟。抓完去「看简报」。\n\n继续?')) return;
   const b = $('#crawl');
   b.disabled = true; b.textContent = '抓取中…';
-  say('在抓。可以关掉这页,进度不丢。');
+  say('#msg', '在抓。可以关掉这页,进度不丢。');
   try {
     const r = await api('/api/digest/refresh?days=3', {method: 'POST'});
-    say(r.note ? r.note
+    say('#msg', r.note ? r.note
       : r.stopped_on_403 ? `被限流打断,已入库 ${r.new} 条。过一阵再点。`
       : `抓完了:发现 ${r.found} 条 · 新增 ${r.new} 条 —— 去「看简报」`,
       !!r.stopped_on_403);
     await load();
-  } catch (e) { say(e.message, true); }
+  } catch (e) { say('#msg', e.message, true); }
   b.disabled = false; render();
 });
 
