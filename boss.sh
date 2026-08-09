@@ -20,10 +20,14 @@ export BOSS_DB_PATH="${BOSS_DB_PATH:-data/boss.db}"
 case "${1:-web}" in
   login) exec "$PY" backend/boss_cli.py login ;;
   fetch) shift; exec "$PY" backend/boss_cli.py fetch "$@" ;;
+  whoami) exec "$PY" backend/boss_cli.py whoami ;;
   web)
-    echo "BOSS 知识库 → http://localhost:8001   (库:$BOSS_DB_PATH)"
-    exec "$PY" -m uvicorn boss_main:app --app-dir backend --port 8001 --reload \
-         --reload-dir backend
+    # 网页还没做 —— 采集器都还没有,先有数据再谈界面。
+    echo "BOSS 的网页还没做。现在可用:"
+    echo "  ./boss.sh login    扫码登录"
+    echo "  ./boss.sh whoami   看登录态还在不在"
+    echo "  ./boss.sh fetch    抓数据(等接口形态)"
+    exit 2
     ;;
   *) echo "用法: ./boss.sh [web|login|fetch]"; exit 1 ;;
 esac
