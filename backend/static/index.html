@@ -1,7 +1,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>浏览 · Douyin-DB</title>
-<link rel="stylesheet" href="/shell.css?v=1786272435">
+<link rel="stylesheet" href="/shell.css?v=1786273022">
 <style>
 /* 搜索 + 模式切换 */
 .search{display:flex;gap:10px;align-items:stretch;margin-bottom:14px}
@@ -9,32 +9,33 @@
   border:1px solid var(--line);border-radius:9px;padding:0 12px}
 .search .box:focus-within{border-color:var(--accent-line)}
 .search .box svg{width:16px;height:16px;color:var(--dim2);flex:none}
-.search input{flex:1;background:none;border:0;color:var(--fg);font-size:14px;padding:11px 0;outline:none}
+.search input{flex:1;background:none;border:0;color:var(--fg);font-size:13px;padding:11px 0;outline:none}
 .seg{display:flex;background:var(--surface);border:1px solid var(--line);border-radius:9px;padding:3px}
-.seg button{background:none;border:0;color:var(--dim);font-size:13px;padding:7px 13px;
-  border-radius:6px;cursor:pointer;white-space:nowrap}
+.seg button{background:none;border:0;color:var(--dim);font-size:12px;font-weight:500;
+  padding:8px 14px;border-radius:6px;cursor:pointer;white-space:nowrap}
 .seg button.on{background:var(--accent-dim);color:var(--accent-text)}
 
 /* 筛选行 */
 .filters{display:flex;flex-direction:column;gap:9px;margin-bottom:8px}
 .frow{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.frow .lab{font:11px/1 var(--mono);letter-spacing:1px;color:var(--dim2);
-  width:56px;flex:none;text-transform:uppercase}
-.chip{background:var(--surface);border:1px solid var(--line);color:var(--dim);
-  font-size:13px;padding:6px 12px;border-radius:20px;cursor:pointer;transition:.14s var(--ease)}
+.frow .lab{font:500 10px/1 var(--mono);letter-spacing:.8px;color:var(--dim2);
+  width:52px;flex:none;text-transform:uppercase}
+.chip{background:var(--surface);border:1px solid var(--line2);color:var(--dim);
+  font-size:12px;font-weight:400;line-height:1.35;padding:7px 14px;border-radius:8px;
+  cursor:pointer;transition:.14s var(--ease)}
 .chip:hover{color:var(--fg)}
 .chip.on{background:var(--accent-dim);border-color:var(--accent-line);color:var(--accent-text)}
-.chip b{color:var(--dim2);font-weight:400;margin-left:5px;font-size:12px}
+.chip b{color:var(--dim2);font-weight:400;margin-left:5px;font-size:11px}
 .chip.on b{color:var(--accent-text);opacity:.8}
 
-.meta{display:flex;align-items:center;margin:14px 0 12px;color:var(--dim2);font-size:12.5px}
+.meta{display:flex;align-items:center;margin:16px 0 12px;color:#626c7c;font-size:11.5px}
 .meta .gap{flex:1}
 .meta select{background:var(--surface);border:1px solid var(--line);color:var(--dim);
-  border-radius:7px;padding:5px 9px;font-size:12.5px}
+  border-radius:7px;padding:5px 9px;font-size:11.5px}
 
 /* 卡片网格 */
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(186px,1fr));gap:14px}
-.card{background:var(--surface);border:1px solid var(--line);border-radius:10px;
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;
   overflow:hidden;transition:border-color .14s var(--ease)}
 .card:hover{border-color:var(--line2)}
 .thumb{position:relative;aspect-ratio:3/4;background:var(--surface2);overflow:hidden}
@@ -42,12 +43,12 @@
 .thumb .ph{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
   color:var(--dim2);font-size:11px}
 .thumb .cred{position:absolute;top:8px;left:8px}
-.thumb .dur{position:absolute;right:8px;bottom:8px;background:rgba(10,12,15,.8);
-  color:#fff;font:11px/1 var(--mono);padding:3px 6px;border-radius:4px}
+.thumb .dur{position:absolute;right:8px;bottom:8px;background:rgba(10,12,15,.78);
+  color:#c8ced8;font-size:10px;font-weight:500;line-height:1;padding:3px 6px;border-radius:4px}
 .card .info{padding:10px 11px 12px}
-.card .ttl{font-size:13px;line-height:1.5;color:var(--fg);
-  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:39px}
-.card .by{margin-top:7px;display:flex;gap:8px;align-items:center;color:var(--dim2);font-size:11.5px}
+.card .ttl{font-size:12px;font-weight:500;line-height:18.6px;color:#d5dae2;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:37px}
+.card .by{margin-top:7px;display:flex;gap:8px;align-items:center;color:#4e5866;font-size:10.5px}
 .card .by .who{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .card .by .digg{margin-left:auto;flex:none;font-family:var(--mono)}
 .card a.open{color:inherit}
@@ -55,7 +56,7 @@
 /* 底部「没内容」提示条 */
 .warnbar{margin-top:22px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;
   border:1px solid var(--warn-line);background:var(--warn-dim);border-radius:10px;padding:13px 16px}
-.warnbar p{margin:0;font-size:13px;color:var(--fg);line-height:1.6;flex:1;min-width:240px}
+.warnbar p{margin:0;font-size:12px;color:var(--fg);line-height:1.65;flex:1;min-width:240px}
 .warnbar b{color:var(--warn-text)}
 .warnbar .btn{border-color:var(--warn-line);color:var(--warn-text);background:transparent;flex:none}
 .warnbar .btn:hover{background:rgba(255,122,69,.14)}
@@ -66,11 +67,6 @@
 </style>
 
 <div class="wrap wide">
-  <div class="phead">
-    <h1>浏览</h1>
-    <p>抓来的所有内容,一个地方翻、一个地方搜</p>
-  </div>
-
   <div class="search">
     <label class="box">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
@@ -102,7 +98,7 @@
   <div id="tail"></div>
 </div>
 
-<script src="/shell.js?v=1786272435"></script>
+<script src="/shell.js?v=1786273022"></script>
 <script>
 'use strict';
 mountNav('browse');

@@ -137,15 +137,18 @@ button,select,input{font-family:inherit}
   .nav .tabs a{padding:0 11px}
 }
 
-/* ── 页容器 ── */
-.wrap{max-width:1120px;margin:0 auto;padding:24px 20px 88px}
-.wrap.narrow{max-width:940px}
-.wrap.wide{max-width:1360px}
+/* ── 页容器 ── 数值照稿子:内距 28/30/70,最大宽 1400 */
+.wrap{max-width:1400px;margin:0 auto;padding:28px 30px 70px}
+.wrap.narrow{max-width:1000px}
+.wrap.wide{max-width:1400px}
 
-/* ── 页头:每页一句话说清「这页是干嘛的」 ── */
-.phead{margin:0 0 20px;padding-bottom:16px;border-bottom:1px solid var(--line)}
-.phead h1{margin:0;font-size:21px;font-weight:600;letter-spacing:-.3px}
-.phead p{margin:4px 0 0;color:var(--dim);font-size:13.5px}
+/* ── 页头 ──
+   ⚠️ 稿子里**没有页面大标题** —— 顶栏的 tab 名就是标题,内容区直接进正文。
+   所以 .phead 只留给确实需要一句说明的页(比如认识自己的口径说明),
+   而且字号压到和正文一个量级,别做成醒目的大标题。 */
+.phead{margin:0 0 18px}
+.phead h1{margin:0;font-size:15px;font-weight:600;letter-spacing:-.1px}
+.phead p{margin:3px 0 0;color:var(--dim2);font-size:11.5px}
 
 /* ── 按钮三级。层级对应「后果」而不是「好看」 ──
    .btn        普通本地动作(筛选、切换、重算)
@@ -216,8 +219,10 @@ button,select,input{font-family:inherit}
      asr     紫  = 我本地转写的逐字稿(自己补的)
      desc    橙  = 只有作者文案 = 其实什么内容都没有
    混在一起展示等于骗自己,所以哪怕在列表里也一眼要能分清。 */
+/* 字号 9.5/600 是稿子的实测值 —— 徽章要小而密,它是「补充说明」不是主角,
+   做大了会跟卡片标题抢注意力。 */
 .cred{display:inline-flex;align-items:center;gap:4px;border-radius:5px;
-  padding:2px 7px;font-size:11px;font-weight:500;line-height:1.4;white-space:nowrap}
+  padding:2px 6px;font-size:9.5px;font-weight:600;line-height:1.5;white-space:nowrap}
 .cred.summary{background:var(--accent-dim);color:var(--accent-text);border:1px solid var(--accent-line)}
 .cred.asr{background:var(--violet-dim);color:var(--violet-text);border:1px solid var(--violet-line)}
 .cred.desc{background:var(--warn-dim);color:var(--warn-text);border:1px solid var(--warn-line)}
