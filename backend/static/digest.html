@@ -1,7 +1,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>每日简报 · Douyin-DB</title>
-<link rel="stylesheet" href="/shell.css?v=1786286065">
+<link rel="stylesheet" href="/shell.css?v=1786286777">
 <style>
 /* 数值全部照高保真稿实测 */
 .top{display:flex;align-items:flex-start;gap:14px;margin-bottom:20px}
@@ -72,10 +72,12 @@
 </style>
 
 <div class="wrap narrow">
+  <div id="picker"></div>
+  <div id="fetchbar"></div>
   <div id="body"><div class="skel">读取中…</div></div>
 </div>
 
-<script src="/shell.js?v=1786286065"></script>
+<script src="/shell.js?v=1786286777"></script>
 <script>
 'use strict';
 mountNav('digest');
@@ -230,7 +232,12 @@ function render() {
 function wire() {
   $$('[data-days]').forEach(b => b.onclick = () => { DAYS = +b.dataset.days; load(); });
   $$('[data-asp]').forEach(b => b.onclick = () => { ASPECT = b.dataset.asp; render(); });
-  const p = $('#pick'); if (p) p.onclick = () => location.href = '/creators.html';
+  const p = $('#pick');
+  if (p) p.onclick = () => {
+    // 页内展开,不跳走 —— 选人和看简报是同一件事的两半
+    if ($('#picker').innerHTML) { $('#picker').innerHTML = ''; return; }
+    mountPicker('#picker', 'info', () => { load(); });
+  };
   $$('.who .fold').forEach(btn => btn.onclick = () => {
     const card = btn.closest('.who');
     const id = card.dataset.who;
@@ -278,6 +285,7 @@ async function load() {
   try {
     DATA = await api('/api/digest?days=' + DAYS);
     render();
+    mountFetchBar('#fetchbar', 'info', DAYS, load);
   } catch (e) {
     $('#body').innerHTML = `<div class="empty"><b>读取失败</b>${esc(e.message)}</div>`;
   }

@@ -1,7 +1,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>竞品 · Douyin-DB</title>
-<link rel="stylesheet" href="/shell.css?v=1786286126">
+<link rel="stylesheet" href="/shell.css?v=1786286777">
 <style>
 .top{display:flex;align-items:flex-start;gap:14px;margin-bottom:20px}
 .top h1{margin:0;font-size:26px;font-weight:600;color:var(--fg-hi);letter-spacing:-.5px}
@@ -75,10 +75,12 @@ td .dd{font-size:11px;margin-left:5px}
 </style>
 
 <div class="wrap narrow">
+  <div id="picker"></div>
+  <div id="fetchbar"></div>
   <div id="body"><div class="skel">读取中…</div></div>
 </div>
 
-<script src="/shell.js?v=1786286126"></script>
+<script src="/shell.js?v=1786286777"></script>
 <script>
 'use strict';
 mountNav('rival');
@@ -238,7 +240,11 @@ function render() {
 
 function wire() {
   $$('[data-days]').forEach(b => b.onclick = () => { DAYS = +b.dataset.days; load(); });
-  const p = $('#pick'); if (p) p.onclick = () => location.href = '/creators.html';
+  const p = $('#pick');
+  if (p) p.onclick = () => {
+    if ($('#picker').innerHTML) { $('#picker').innerHTML = ''; return; }
+    mountPicker('#picker', 'rival', () => { load(); });
+  };
 }
 
 async function load() {
@@ -246,6 +252,7 @@ async function load() {
   try {
     DATA = await api('/api/digest?days=' + DAYS);
     render();
+    mountFetchBar('#fetchbar', 'rival', DAYS, load);
   } catch (e) {
     $('#body').innerHTML = `<div class="empty"><b>读取失败</b>${esc(e.message)}</div>`;
   }

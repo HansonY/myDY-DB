@@ -550,12 +550,29 @@ async def crawl_recent(
       三天    约 9 条 /  11 页 / 1.5 分钟,零 403 风险
     拿到的东西也不同 —— 全量给的是陈年老作品,这个给的是「今天他们讲了什么」。
 
-    不碰任何游标:每天都从最新开始,本来就该这样。`hard_page_cap` 是兜底,
+    **抓到哪儿为止由这个人自己的水位线决定**,不是死板的 N 天:
+      上次抓完的时刻 `fetched_at`  → 从那之后的新作品
+      从没抓过         → 从 `picked_at`(我开始跟他那天)
+    所以反复点「更新」不会重复翻同样的页,而第一次点会补齐「从选中他那天到现在」。
+    `days` 只是兜底下限:即使水位线很新,也至少看这么久,免得漏掉时间戳有偏差的。
+
+    不碰任何游标:每天都从最新开始翻,本来就该这样。`hard_page_cap` 是兜底,
     防止某人时间戳异常导致一直翻下去。
     """
     store.init_db()
     guard_single_run()
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    started = datetime.now(timezone.utc)
+    cutoff = started - timedelta(days=days)
+    # 水位线比窗口更早时以水位线为准 —— 那说明中间断了几天没抓,要补回来
+    mark = await asyncio.to_thread(store.get_following, sec_user_id)
+    wm = (mark or {}).get("fetched_at") or (mark or {}).get("picked_at")
+    if wm:
+        try:
+            wmt = datetime.fromisoformat(wm)
+            if wmt < cutoff:
+                cutoff = wmt
+        except ValueError:
+            pass
 
     run_id = store.start_run("recent", origin=ORIGIN)
     fetched = inserted = pages = 0
@@ -589,9 +606,13 @@ async def crawl_recent(
 
         store.finish_run(run_id, "done", fetched, inserted)
         await _refresh_tags(inserted)
+        # 水位线记的是**这轮开始的时刻**,不是结束时刻 —— 抓取过程中新发的作品
+        # 会落在两者之间,记结束时刻就会把它们跳过去,而且永远不会被发现。
+        await asyncio.to_thread(store.mark_fetched, sec_user_id,
+                                started.isoformat(timespec="seconds"))
         return {"sec_user_id": sec_user_id, "days": days, "pages": pages,
                 "fetched": fetched, "inserted": inserted,
-                "aweme_ids": fresh_ids,
+                "aweme_ids": fresh_ids, "since": cutoff.isoformat(timespec="seconds"),
                 "hit_cap": pages >= hard_page_cap and not done}
     except Exception as e:
         store.finish_run(run_id, "failed", fetched, inserted, f"{type(e).__name__}: {e}")

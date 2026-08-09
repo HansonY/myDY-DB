@@ -10,7 +10,7 @@ import json
 import os
 import sqlite3
 import zlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -163,7 +163,7 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
             "content_state": "TEXT NOT NULL DEFAULT 'unknown'",
             "saved_at": "TEXT", "saved_exact": "INTEGER DEFAULT 0",
         },
-        "following": {"role": "TEXT"},
+        "following": {"role": "TEXT", "picked_at": "TEXT", "fetched_at": "TEXT"},
         "collect_state": {
             "platform_total": "INTEGER",
             "platform_total_at": "TEXT",
@@ -235,6 +235,11 @@ def init_db() -> None:
         # 的全部历史。把不一致的抹平,以后读的地方一律只看 role。
         conn.execute("UPDATE following SET crawl=0 WHERE role IS NULL AND crawl=1")
         conn.execute("UPDATE following SET crawl=1 WHERE role IS NOT NULL AND crawl=0")
+        # 加 picked_at 之前就打过标的那批:把「起点」补成现在。
+        # 不能留空 —— 留空会让抓取起点退回「窗口起点」,窗口一改起点就跟着变,
+        # 「我从什么时候开始跟他」这个事实就没了。
+        conn.execute("UPDATE following SET picked_at=? "
+                     "WHERE role IS NOT NULL AND picked_at IS NULL", (_now(),))
         # 把早期只存在 videos.source 的归属关系补进 video_sources。
         # 幂等,可反复执行。
         conn.execute(
@@ -940,12 +945,69 @@ def set_following_role(sec_user_ids: Iterable[str], role: str | None) -> int:
         return 0
     if role is not None and role not in ROLES:
         raise ValueError(f"role 只能是 {ROLES} 或 None,收到 {role!r}")
+    now = _now()
     with connect() as conn:
-        conn.executemany(
-            "UPDATE following SET role=?, crawl=? WHERE sec_user_id=?",
-            [(role, 1 if role else 0, i) for i in ids])
+        if role:
+            # picked_at 只在**第一次**选中时写,之后改类型(info↔rival)不动它 ——
+            # 它是「我从什么时候开始跟这个人」的起点,换个类型不代表重新开始。
+            conn.executemany(
+                "UPDATE following SET role=?, crawl=1, "
+                "  picked_at=COALESCE(picked_at, ?) WHERE sec_user_id=?",
+                [(role, now, i) for i in ids])
+        else:
+            # 取消跟随:水位线一起清掉。下次再选就是全新的起点,
+            # 留着旧的 fetched_at 会让「从上次抓到现在」跨过一段没跟的空白期。
+            conn.executemany(
+                "UPDATE following SET role=NULL, crawl=0, "
+                "  picked_at=NULL, fetched_at=NULL WHERE sec_user_id=?",
+                [(i,) for i in ids])
         conn.commit()
         return conn.total_changes
+
+
+def get_following(sec_user_id: str) -> dict[str, Any] | None:
+    with connect() as conn:
+        r = conn.execute("SELECT * FROM following WHERE sec_user_id=?",
+                         (sec_user_id,)).fetchone()
+    return dict(r) if r else None
+
+
+def mark_fetched(sec_user_id: str, when: str | None = None) -> None:
+    """记下「这个人抓到这个时间点了」。下次从这里往后接着抓。"""
+    with connect() as conn:
+        conn.execute("UPDATE following SET fetched_at=? WHERE sec_user_id=?",
+                     (when or _now(), sec_user_id))
+        conn.commit()
+
+
+def creators_pending(days: int, role: str | None = None) -> list[dict[str, Any]]:
+    """列出「这个窗口里还没抓过」的博主 —— 界面上的待抓清单。
+
+    判据:`fetched_at` 为空(从没抓过),或早于窗口起点(窗口内有缺口)。
+    反过来,`fetched_at` 在窗口内说明这段时间已经抓过了,不用重复打抖音接口。
+
+    返回里带上 `since` —— 这次实际会从哪个时间点开始抓,让人点之前就看得到。
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
+    sql = ("SELECT sec_user_id, nickname, avatar, role, aweme_count, "
+           "       picked_at, fetched_at "
+           "FROM following WHERE role IS NOT NULL")
+    params: list[Any] = []
+    if role:
+        sql += " AND role=?"
+        params.append(role)
+    sql += " ORDER BY COALESCE(fetched_at, '') ASC, nickname"
+    out = []
+    with connect() as conn:
+        for r in conn.execute(sql, params):
+            d = dict(r)
+            fetched = d.get("fetched_at")
+            d["stale"] = (not fetched) or fetched < cutoff
+            # 实际抓取起点:上次抓完的时刻;从没抓过就从选中那天开始。
+            # 两者都没有(理论上不该发生)就退回窗口起点。
+            d["since"] = fetched or d.get("picked_at") or cutoff
+            out.append(d)
+    return out
 
 
 def save_following_progress(sec_user_id: str, done: bool = False) -> None:

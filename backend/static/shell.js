@@ -102,6 +102,130 @@ const postJSON = (url, body) => api(url, {
   body: JSON.stringify(body),
 });
 
+/* ── 待抓清单 + 页内选博主 ────────────────────────────────────
+   简报页和竞品页共用。两件事必须在同一屏解决,否则每次都要跳走再跳回来。 */
+
+/** 相对时间:给水位线用(「3 小时前抓过」比一串 ISO 有用得多) */
+function ago(iso) {
+  if (!iso) return '从没抓过';
+  const h = (Date.now() - new Date(iso).getTime()) / 3.6e6;
+  if (h < 1) return '刚刚抓过';
+  if (h < 24) return `${Math.round(h)} 小时前抓过`;
+  return `${Math.round(h / 24)} 天前抓过`;
+}
+
+const ROLE_LABEL = {info: '有价值', rival: '竞品'};
+
+/**
+ * 渲染「待抓 N 位」条 + 抓取按钮。
+ * @param sel      容器选择器
+ * @param role     'info' | 'rival'
+ * @param days     当前窗口
+ * @param onDone   抓完的回调(通常是重新 load 页面数据)
+ */
+async function mountFetchBar(sel, role, days, onDone) {
+  const box = document.querySelector(sel);
+  if (!box) return;
+  let d;
+  try { d = await api(`/api/creators/pending?days=${days}&role=${role}`); }
+  catch (e) { box.innerHTML = ''; return; }
+
+  if (!d.total) { box.innerHTML = ''; return; }        // 一个都没选,交给空状态去引导
+
+  const stale = d.items.filter(x => x.stale);
+  if (!stale.length) {
+    const last = d.items.map(x => x.fetched_at).filter(Boolean).sort().pop();
+    box.innerHTML = `<div class="fetchbar ok">
+      <div class="t"><b>这 ${days} 天的内容都抓过了</b>
+        <div class="who">${d.total} 位${ROLE_LABEL[role]}博主 · ${ago(last)}</div></div>
+      <button class="btn" data-fetch="1">再抓一次</button></div>`;
+  } else {
+    // 把「会从哪天开始抓」摆出来 —— 点之前就知道要发生什么,不做黑盒
+    const since = stale.map(x => x.since).sort()[0];
+    box.innerHTML = `<div class="fetchbar">
+      <div class="t"><b>${stale.length} 位需要抓取</b>
+        <div class="who">${stale.map(x => esc(x.nickname)).join(' · ')}
+          <br>会从 ${(since || '').slice(0, 10)} 之后的新作品开始抓,已经抓过的不重复翻</div></div>
+      <button class="btn" data-fetch="1">抓这 ${stale.length} 位</button></div>`;
+  }
+
+  box.querySelector('[data-fetch]').onclick = async (e) => {
+    const btn = e.target;
+    btn.disabled = true; btn.textContent = '抓取中…';
+    try {
+      const r = await api(`/api/digest/refresh?days=${Math.min(days, 30)}&role=${role}`,
+        {method: 'POST'});
+      btn.textContent = r.stopped_on_403
+        ? `被限流,已入库 ${r.new} 条` : `抓完:新增 ${r.new} 条`;
+      if (onDone) setTimeout(onDone, 700);
+    } catch (err) {
+      btn.textContent = '失败:' + err.message.slice(0, 24);
+      btn.disabled = false;
+    }
+  };
+}
+
+/**
+ * 页内选博主面板。展开后能直接打标/取消,不用离开当前页。
+ * @param sel     容器选择器
+ * @param role    这一页关心的角色('info' 或 'rival')
+ * @param onChange 打标后的回调
+ */
+async function mountPicker(sel, role, onChange) {
+  const box = document.querySelector(sel);
+  if (!box) return;
+  let all = [];
+  try { all = (await api('/api/following')).items || []; }
+  catch (e) { box.innerHTML = `<div class="empty">读取关注列表失败:${esc(e.message)}</div>`; return; }
+
+  let kw = '';
+  const render = () => {
+    // 排序:已选中的排前面,其余按「我存过他几条」降序 —— 那是唯一有实证的价值信号
+    const list = all
+      .filter(u => !kw || (u.nickname || '').toLowerCase().includes(kw))
+      .sort((a, b) => (b.role ? 2 : 0) - (a.role ? 2 : 0) || (b.saved_n - a.saved_n))
+      .slice(0, 60);
+    box.innerHTML = `<div class="picker">
+      <div class="hd"><b>挑博主</b>
+        <span class="dim">已选 ${all.filter(u => u.role === role).length} 位${ROLE_LABEL[role]}
+          · 共关注 ${all.length} 位</span>
+        <span class="gap"></span>
+        <input id="pk-q" placeholder="搜名字…" value="${esc(kw)}">
+        <button class="btn sm" data-close="1">收起</button></div>
+      <div class="list">${list.map(u => `<div class="prow" data-id="${esc(u.sec_user_id)}">
+        <span class="nm">${esc(u.nickname || '(无名)')}</span>
+        <span class="st">我存过 ${u.saved_n} · 他发 ${fmt(u.aweme_count)}</span>
+        <span class="acts">
+          <button data-role="info" class="${u.role === 'info' ? 'on-info' : ''}">有价值</button>
+          <button data-role="rival" class="${u.role === 'rival' ? 'on-rival' : ''}">竞品</button>
+          <button data-role="">不跟</button>
+        </span></div>`).join('') || '<div class="empty">没有匹配的</div>'}</div></div>`;
+
+    box.querySelector('#pk-q').oninput = e => {
+      kw = e.target.value.trim().toLowerCase();
+      const p = e.target.selectionStart;
+      render();
+      const n = box.querySelector('#pk-q'); n.focus(); n.setSelectionRange(p, p);
+    };
+    box.querySelector('[data-close]').onclick = () => { box.innerHTML = ''; };
+    box.querySelectorAll('.prow .acts button').forEach(btn => btn.onclick = async () => {
+      const id = btn.closest('.prow').dataset.id;
+      const val = btn.dataset.role || null;
+      const u = all.find(x => x.sec_user_id === id);
+      const before = u.role;
+      u.role = val; render();                     // 先本地生效,界面不卡
+      try {
+        await postJSON('/api/following/role', {sec_user_ids: [id], role: val});
+        if (onChange) onChange();
+      } catch (e) {
+        u.role = before; render();                // 存不进去就回滚,别让界面骗人
+        alert('保存失败:' + e.message);
+      }
+    });
+  };
+  render();
+}
+
 /** 状态行。warn=true 用警示色 —— 只给「有代价 / 出问题」用,别滥用 */
 function say(sel, text, warn) {
   const el = typeof sel === 'string' ? $(sel) : sel;

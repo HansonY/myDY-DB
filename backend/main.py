@@ -386,6 +386,26 @@ async def post_following_role(body: dict[str, Any] = Body(...)) -> dict[str, Any
     return {"updated": n, "role": body.get("role")}
 
 
+@app.get("/api/creators/pending")
+async def get_creators_pending(
+    days: int = Query(3, ge=1, le=90),
+    role: str | None = Query(None, pattern="^(info|rival)$"),
+) -> dict[str, Any]:
+    """待抓清单:这个窗口里还没抓过的博主。
+
+    每人一条水位线(`fetched_at`),早于窗口起点就说明有缺口。
+    `since` 是这次实际会从哪个时间点开始抓 —— 点之前就看得到,不做黑盒。
+    """
+    items = await asyncio.to_thread(store.creators_pending, days, role)
+    stale = [x for x in items if x["stale"]]
+    return {
+        "items": items, "total": len(items),
+        "stale": len(stale),
+        "stale_ids": [x["sec_user_id"] for x in stale],
+        "days": days, "role": role,
+    }
+
+
 # ── 每日简报 ────────────────────────────────────────────────
 
 @app.get("/api/digest")

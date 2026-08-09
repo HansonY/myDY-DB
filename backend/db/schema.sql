@@ -141,7 +141,18 @@ CREATE TABLE IF NOT EXISTS following (
     aweme_count   INTEGER,                  -- 他一共发了多少(决定爬他要多久)
     follower_count INTEGER,
     rank_recent   INTEGER,                  -- 在「按最近关注」列表里的位次,越小越新关注
-    crawl         INTEGER NOT NULL DEFAULT 0,   -- 1=每天抓他的新作品
+    crawl         INTEGER NOT NULL DEFAULT 0,   -- 1=每天抓他的新作品(由 role 决定,不单独开关)
+    -- ── 抓取水位线 ────────────────────────────────────────
+    -- 这两个字段决定「下次从哪儿开始抓」,是每日增量的核心。
+    --   picked_at   第一次把他标成 info/rival 的时间 = **抓取起点**。
+    --               在这之前的老作品一概不抓 —— 用户要的是「从我开始跟他之后」,
+    --               不是把他的历史全刨出来(那是已经删掉的错误方向)。
+    --   fetched_at  上一次成功抓完的时间。下次从这里往后抓,不重复翻。
+    --               为空 = 从没抓过,那就从 picked_at 开始。
+    -- 判断「这个窗口有没有缺口」也靠它:fetched_at 早于窗口起点,
+    -- 说明窗口内的新作品还没抓过,界面上要把这个人列进「待抓清单」。
+    picked_at     TEXT,
+    fetched_at    TEXT,
     -- 这个人对我意味着什么。两类的用法完全不同,不能混:
     --   info   信息价值主播 —— 我要的是他讲的**内容**(进知识库、能被检索问答)
     --   rival  竞品主播     —— 我要的是他的**打法**(选题/时长/发布节奏/互动效果),
