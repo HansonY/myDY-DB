@@ -31,14 +31,10 @@ case "${1:-web}" in
   fetch) shift; exec "$PY" backend/boss_cli.py fetch "$@" ;;
   whoami) exec "$PY" backend/boss_cli.py whoami ;;
   web)
-    # 网页还没做 —— 采集器都还没有,先有数据再谈界面。
-    echo "BOSS 的网页还没做。现在可用:"
-    echo "  ./boss.sh snippet  ← 推荐:控制台片段,用你已登录的浏览器,不碰 cookie"
-    echo "  ./boss.sh inspect  看录到了什么接口和字段"
-    echo "  ./boss.sh probe    测 cookie 直连行不行(要先填 BOSS_COOKIE)"
-    echo "  ./boss.sh record   备选:程序开浏览器常驻录制(要重新登录一次)"
-    echo "  ./boss.sh whoami   看登录态还在不在"
-    exit 2
+    echo "BOSS 本地服务 → http://localhost:8001   (库:$BOSS_DB_PATH)"
+    echo "插件会把你浏览过的岗位送到这里。"
+    exec "$PY" -m uvicorn boss_main:app --app-dir backend --port 8001 --reload \
+         --reload-dir backend
     ;;
   *) echo "用法: ./boss.sh [web|login|fetch]"; exit 1 ;;
 esac

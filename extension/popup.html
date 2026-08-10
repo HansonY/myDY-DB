@@ -1,0 +1,24 @@
+<meta charset="utf-8">
+<style>
+  body{margin:0;padding:14px;width:270px;background:#0a0c0f;color:#e9ecf1;
+    font:13px/1.6 -apple-system,"PingFang SC",sans-serif}
+  h1{margin:0 0 2px;font-size:14px;font-weight:600}
+  .sub{color:#4e5866;font-size:11px;margin-bottom:12px}
+  .row{display:flex;justify-content:space-between;padding:6px 0;
+    border-top:1px solid #1e242d;font-size:12px}
+  .row:first-of-type{border-top:0}
+  .row b{font-family:ui-monospace,monospace;font-weight:600}
+  .ok{color:#5cb87a} .warn{color:#ff7a45}
+  .note{margin-top:11px;font-size:11px;color:#4e5866;line-height:1.55}
+  button{width:100%;margin-top:10px;background:#12151a;color:#e9ecf1;
+    border:1px solid #242a33;border-radius:7px;padding:7px;font-size:12px;cursor:pointer}
+  button:hover{border-color:#4c8dff}
+</style>
+<h1>我的岗位库</h1>
+<div class="sub">你浏览过的岗位 → 本机知识库</div>
+<div class="row"><span>已送入库</span><b id="sent">–</b></div>
+<div class="row"><span>排队中</span><b id="pending">–</b></div>
+<div class="row"><span>本地服务</span><b id="svc">–</b></div>
+<button id="flush">立即发送</button>
+<div class="note" id="note"></div>
+<script src="popup.js"></script>
