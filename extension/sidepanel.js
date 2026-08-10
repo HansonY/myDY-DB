@@ -44,9 +44,9 @@ async function readPage() {
   const box = $('#now');
   if (!t || !/zhipin\.com/.test(t.url || '')) {
     page = null;
-    box.innerHTML = '<div class="kind">当前页面</div>'
-      + '<div class="warn">不是 BOSS 页面 —— 打开 zhipin.com 再来</div>';
-    $('#save').disabled = true;
+    box.innerHTML = '<div class="k">当前页面</div>'
+      + '<div class="t" style="color:var(--dim);font-weight:400">不是 BOSS 页面</div>';
+    layout();
     return;
   }
   try {
@@ -56,9 +56,10 @@ async function readPage() {
     page = r.result;
   } catch (e) {
     page = null;
-    box.innerHTML = '<div class="kind">当前页面</div>'
-      + `<div class="warn">读不到页面:${esc(e.message).slice(0, 60)}</div>`;
-    $('#save').disabled = true;
+    box.innerHTML = '<div class="k">当前页面</div>'
+      + `<div class="t" style="color:var(--warn);font-weight:400">读不到页面:${
+          esc(e.message).slice(0, 60)}</div>`;
+    layout();
     return;
   }
   // 问后端这是不是岗位页(只读接口,不写库)
@@ -74,24 +75,79 @@ async function readPage() {
   page.kind = v?.kind || 'other';
 
   const label = v
-    ? ({ detail: '岗位详情', list: '岗位列表', other: '不是岗位页' })[v.kind]
+    ? ({ detail: '岗位详情', list: '岗位列表', other: '不像岗位页' })[v.kind]
     : '本地服务没开,无法判定';
-  const sig = v ? `<div class="sig">${
-      (v.hit || []).map(h => `<i class="on">${esc(h.label)}</i>`).join('')
-    }${(v.miss || []).map(m => `<i>${esc(m)}</i>`).join('')}</div>` : '';
-  box.innerHTML = `<div class="kind">当前页面 · ${label}</div>
+  // 信号只显示命中的那几个。把「未命中」也列出来会挤满半屏 ——
+  // 那是调试信息,不是每次都要看的东西(需要时看后端 /detect 的完整返回)。
+  const sig = v?.hit?.length
+    ? `<div class="sig">${v.hit.map(h => `<i class="on">${esc(h.label)}</i>`).join('')}</div>` : '';
+  box.innerHTML = `<div class="k${v?.is_job ? ' yes' : ''}">${esc(label)}</div>
     <div class="t">${esc(page.h1 || page.title) || '(没有标题)'}</div>
-    <div class="m">${page.len ?? 0} 字可提取</div>
-    ${v ? `<div class="why ${v.is_job ? 'yes' : 'no'}">${esc(v.why)}</div>${sig}` : ''}`;
-  // other 也允许手动存 —— 判断可能不准,不该因为我猜错就拦着你
-  $('#save').disabled = page.len < 80;
-  $('#save').textContent = v && !v.is_job ? '仍然存入(我判它不是岗位页)' : '存入当前这一页';
+    <div class="m">${page.len ?? 0} 字${v ? ' · 命中 ' + (v.hit?.length || 0) + ' 类信号' : ''}</div>
+    ${sig}`;
+  layout();
 }
+
+/* 主操作跟着当前页变 —— **同一时刻只有一个大按钮**。
+ *
+ * 以前 5 个平级按钮并排(存入 / 提取 / 打开库 / 批量开始 / 指一下),
+ * 用户说「很难用」——因为看不出该点哪个。现在:
+ *   列表页 → 主操作是「抓这一页的岗位」(批量选项也只在这时出现)
+ *   详情页 → 主操作是「存这一页」(详情页没有「下一页」可翻,批量选项藏掉)
+ *   其它页 → 没有合适的主操作,直接说清楚该去哪儿
+ */
+let running = false;      // 批量在跑时主按钮变「停止」
+
+function layout() {
+  const kind = page?.kind || null;
+  const btn = $('#primary'), hint = $('#phint');
+  const onList = kind === 'list';
+  $('#bulkopt').hidden = !onList || running;
+  $('#save').hidden = !onList;      // 列表页才需要「只存原文不抓详情」这个次选
+
+  if (running) {
+    btn.className = 'go stop'; btn.disabled = false;
+    btn.textContent = '停止';
+    btn.dataset.act = 'stop';
+    hint.textContent = '正在逐个打开岗位。停下来不会丢已存的。';
+    return;
+  }
+  if (!page) {
+    btn.className = ''; btn.disabled = true;
+    btn.textContent = '不是 BOSS 页面';
+    btn.dataset.act = '';
+    hint.textContent = '打开 zhipin.com 的岗位列表或详情页。';
+    return;
+  }
+  btn.disabled = false;
+  if (onList) {
+    btn.className = 'go'; btn.dataset.act = 'run';
+    const n = $('#autonext').checked ? `,最多翻 ${$('#pgn').value} 页` : '';
+    btn.textContent = `抓这一页的岗位${n}`;
+    hint.textContent = '逐个打开这一页的岗位存下原文(职位描述从详情页来)。已存过的会跳过。';
+  } else if (kind === 'detail') {
+    btn.className = 'go'; btn.dataset.act = 'save';
+    btn.textContent = '存这一页';
+    hint.textContent = '存下原文,之后由 AI 提取成结构。';
+  } else {
+    btn.className = 'go'; btn.dataset.act = 'save';
+    btn.textContent = '仍然存这一页';
+    hint.textContent = '我判它不像岗位页,但判断可能错 —— 想存就存,AI 会过滤。';
+  }
+}
+
+$('#primary').onclick = () => {
+  const act = $('#primary').dataset.act;
+  if (act === 'stop') chrome.runtime.sendMessage({ type: 'stopRun' });
+  else if (act === 'run') startRun();
+  else if (act === 'save') save(false);
+};
 
 async function save(auto) {
   if (!page || !tab) return;
-  const btn = $('#save');
-  btn.disabled = true; btn.textContent = '提取中…';
+  const btn = $('#primary');
+  const back = btn.textContent;
+  btn.disabled = true; btn.textContent = '存入中…';
   try {
     const r = await fetch(API + '/api/boss/ingest_text', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -109,7 +165,7 @@ async function save(auto) {
       ? '连不上本地服务 —— 在项目目录跑 ./boss.sh web'
       : '出错:' + e.message, 'bad');
   }
-  btn.textContent = '存入当前这一页';
+  btn.textContent = back;
   btn.disabled = false;
 }
 
@@ -118,17 +174,25 @@ function msg(t, cls) { const m = $('#msg'); m.textContent = t || ''; m.className
 async function refresh() {
   try {
     const d = await (await fetch(API + '/api/boss/jobs?limit=8')).json();
-    $('#cnt').textContent = d.total ? `${d.total} 个` : '';
+    // 顶部两个数字:库里多少、还有多少没提取。这是「我干到哪儿了」的唯一答案,
+    // 所以放在最显眼处,不藏在列表标题里。
+    $('#cJobs').textContent = `${d.total || 0} 个岗位`;
+    $('#cJobs').className = 'chip n' + (d.total ? ' ok' : '');
     const pend = d.pending || 0;
+    const cp = $('#cPend');
+    cp.hidden = !pend;
+    cp.textContent = `${pend} 待提取`;
+    cp.className = 'chip n warn';
+    $('#cnt').textContent = d.total > 8 ? `共 ${d.total}` : '';
     const eb = $('#extract');
     eb.disabled = !pend;
-    eb.textContent = pend ? `提取待处理的 ${pend} 页` : '没有待提取的';
+    eb.textContent = pend ? `AI 提取这 ${pend} 页` : '没有待提取的';
     $('#list').innerHTML = (d.items || []).length
       ? d.items.map(j => `<div class="it">
           <div class="t">${esc(j.title) || '(无标题)'}</div>
           <div class="m">${esc(j.company || '')}${j.salary_text ? ' · ' + esc(j.salary_text) : ''}</div>
         </div>`).join('')
-      : '<div class="empty">还没有。打开一个岗位页,点上面「存入」。</div>';
+      : '<div class="empty">还没有岗位。到 BOSS 的岗位列表页,点上面那个按钮。</div>';
   } catch (e) {
     $('#list').innerHTML = '<div class="empty">本地服务没开 —— 跑 ./boss.sh web</div>';
   }
@@ -152,6 +216,8 @@ $('#extract').onclick = async () => {
   b.disabled = false;
 };
 
+// 列表页上的次选:只存这一页列表的原文,不逐个打开详情。
+// (想快速留个底、不想等几十次打开时用。)
 $('#save').onclick = () => save(false);
 $('#open').onclick = () => chrome.tabs.create({ url: API + '/' });
 $('#autochk').onchange = e => chrome.storage.local.set({ auto: e.target.checked });
@@ -212,7 +278,7 @@ async function autoStat() {
           `<div class="ml ${l.ok ? 'ok' : 'bad'}">${l.ok ? '✓' : '✗'} ${
             esc(l.title || l.url || '')?.slice(0, 34)} ${esc(l.note || '')}</div>`).join('');
     $('#bgo').textContent = b.running ? '停止' : '逐个打开并存入';
-    if (b.running) { const d = document.querySelector('details'); if (d) d.open = true; }
+    if (b.running) $('#more').open = true;      // 跑起来就展开,否则进度藏在收起的地方
   } else { bb.innerHTML = ''; }
 }
 
@@ -267,20 +333,18 @@ async function pickInfo() {
       msg('已忘掉 —— 重新指一次', ''); pickInfo();
     };
   } else if (d.pickState?.cancelled) {
-    box.innerHTML = '<span class="dimz">上次取消了 —— 还没记住任何按钮</span>';
+    box.innerHTML = '上次取消了 —— 还没记住任何按钮';
   } else {
-    box.innerHTML = '<span class="dimz">还没指过 —— 不指也能跑,但那是我按「下一页」三个字猜的,可能猜错</span>';
+    box.innerHTML = '还没指过 —— 不指也能跑(按「下一页」三个字猜),指一次更稳';
   }
 }
 
 /* ── 批量存入:本页存完 → 翻下一页 ───────────────────────── */
 
-// 「自动下一页」是开关:不勾就只做当前这一页,那时「翻几次」和「指按钮」都是多余的
+// 「自动翻下一页」是开关:不勾就只做当前这一页,那时「翻几页」和「指按钮」都是多余的
 function syncNextBox() {
   $('#nextbox').hidden = !$('#autonext').checked;
-  $('#rgo').textContent = $('#autonext').checked
-    ? `开始:逐页存入(最多翻 ${$('#pgn').value} 次)`
-    : '开始:只存当前这一页的岗位';
+  layout();      // 主按钮文案要跟着变(「抓这一页的岗位,最多翻 5 页」)
 }
 $('#autonext').onchange = e => {
   chrome.storage.local.set({ autonext: e.target.checked });
@@ -291,9 +355,7 @@ chrome.storage.local.get('autonext').then(d => {
   $('#autonext').checked = !!d.autonext; syncNextBox();
 });
 
-$('#rgo').onclick = async () => {
-  const d = await chrome.storage.local.get('run');
-  if (d.run?.running) { chrome.runtime.sendMessage({ type: 'stopRun' }); return; }
+async function startRun() {
   const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!t || !/zhipin\.com/.test(t.url || '')) { msg('先切到 BOSS 的岗位列表页', 'bad'); return; }
   const autoNext = $('#autonext').checked;
@@ -311,14 +373,18 @@ $('#rgo').onclick = async () => {
   if (r?.error) msg(r.error, 'bad');
   else msg(`跑完 ${r.rounds} 页 · 存了 ${r.saved} 页原文 · 岗位 ${r.jobs} 个`
     + (r.failed ? ` · 失败 ${r.failed}` : '')
-    + ' → 回岗位库点「提取」让 AI 出结构', 'ok');
-};
+    + ' → 点下面「AI 提取」出结构', 'ok');
+}
 
 async function runStat() {
   let d = {};
   try { d = await chrome.runtime.sendMessage({ type: 'runStat' }) || {}; } catch (e) { return; }
   const r = d.run || {};
   const box = $('#rstat');
+  // ⚠️ running 的同步必须在早退**之前**。放在后面的话,
+  // 一旦 run 状态被清空(没有 rounds 也没有 log)就直接 return,
+  // running 永远停在 true —— 主按钮卡在「停止」,批量选项也一直藏着,人就没法再开始了。
+  if (running !== !!r.running) { running = !!r.running; layout(); }
   if (!r.rounds && !r.log?.length) { box.innerHTML = ''; return; }
   // 两层进度都要显示:第几页 + 这一页的第几个岗位。
   // 只显示一个总数的话,卡住时分不出是卡在翻页还是卡在某个岗位上。
@@ -327,8 +393,6 @@ async function runStat() {
     + ` · 已存 ${r.saved || 0}${r.failed ? ` · 失败 ${r.failed}` : ''}</div>`
     + (r.log || []).slice(0, 8).map(l =>
         `<div class="ml ${l.bad ? 'bad' : 'ok'}">${esc(l.t)}</div>`).join('');
-  $('#rgo').textContent = r.running ? '停止' : ($('#autonext').checked
-    ? `开始:逐页存入(最多翻 ${$('#pgn').value} 次)` : '开始:只存当前这一页的岗位');
 }
 
 $('#harvest').onclick = async () => {
