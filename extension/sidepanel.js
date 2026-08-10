@@ -81,7 +81,7 @@ async function readPage() {
     }${(v.miss || []).map(m => `<i>${esc(m)}</i>`).join('')}</div>` : '';
   box.innerHTML = `<div class="kind">当前页面 · ${label}</div>
     <div class="t">${esc(page.h1 || page.title) || '(没有标题)'}</div>
-    <div class="m">${page.len} 字可提取</div>
+    <div class="m">${page.len ?? 0} 字可提取</div>
     ${v ? `<div class="why ${v.is_job ? 'yes' : 'no'}">${esc(v.why)}</div>${sig}` : ''}`;
   // other 也允许手动存 —— 判断可能不准,不该因为我猜错就拦着你
   $('#save').disabled = page.len < 80;
@@ -272,54 +272,62 @@ async function pickInfo() {
   }
 }
 
-/* ── 自动翻页 ───────────────────────────────────────── */
-$('#pgo').onclick = async () => {
-  const d = await chrome.storage.local.get('paging');
-  if (d.paging?.running) { chrome.runtime.sendMessage({ type: 'stopPaging' }); return; }
+/* ── 批量存入:本页存完 → 翻下一页 ───────────────────────── */
+
+// 「自动下一页」是开关:不勾就只做当前这一页,那时「翻几次」和「指按钮」都是多余的
+function syncNextBox() {
+  $('#nextbox').hidden = !$('#autonext').checked;
+  $('#rgo').textContent = $('#autonext').checked
+    ? `开始:逐页存入(最多翻 ${$('#pgn').value} 次)`
+    : '开始:只存当前这一页的岗位';
+}
+$('#autonext').onchange = e => {
+  chrome.storage.local.set({ autonext: e.target.checked });
+  syncNextBox();
+};
+$('#pgn').oninput = syncNextBox;
+chrome.storage.local.get('autonext').then(d => {
+  $('#autonext').checked = !!d.autonext; syncNextBox();
+});
+
+$('#rgo').onclick = async () => {
+  const d = await chrome.storage.local.get('run');
+  if (d.run?.running) { chrome.runtime.sendMessage({ type: 'stopRun' }); return; }
   const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!t || !/zhipin\.com/.test(t.url || '')) { msg('先切到 BOSS 的列表页', 'bad'); return; }
-  msg('开始翻页 —— 别关这个标签页,翻完会把抓到的链接填进下面的框', 'ok');
+  if (!t || !/zhipin\.com/.test(t.url || '')) { msg('先切到 BOSS 的岗位列表页', 'bad'); return; }
+  const autoNext = $('#autonext').checked;
+  if (autoNext) {
+    const { nextSel } = await chrome.storage.local.get('nextSel');
+    if (!nextSel?.sels?.length) {
+      msg('还没指过「下一页」—— 不指也能跑(我按文字猜),但建议先指一次更稳', '');
+    }
+  }
+  msg('开跑 —— 别关那个列表标签页。详情会在另一个后台标签页里轮流打开。', 'ok');
   const r = await chrome.runtime.sendMessage({
-    type: 'startPaging', tabId: t.id, want: parseInt($('#pgn').value, 10) || 5,
+    type: 'startRun', tabId: t.id, autoNext,
+    rounds: parseInt($('#pgn').value, 10) || 5,
   });
   if (r?.error) msg(r.error, 'bad');
-  else {
-    msg(`翻了 ${r.pages} 页 · 存了 ${r.saved} 页原文 · 抓到 ${r.links} 个岗位链接`, 'ok');
-    fillPagedLinks();
-  }
+  else msg(`跑完 ${r.rounds} 页 · 存了 ${r.saved} 页原文 · 岗位 ${r.jobs} 个`
+    + (r.failed ? ` · 失败 ${r.failed}` : '')
+    + ' → 回岗位库点「提取」让 AI 出结构', 'ok');
 };
 
-/** 翻页抓到的链接填进批量框,顺手把已存过的剔掉 */
-async function fillPagedLinks() {
-  const d = await chrome.runtime.sendMessage({ type: 'pagingStat' });
-  const links = d?.pagedLinks || [];
-  if (!links.length) return;
-  let fresh = links, known = [];
-  try {
-    const k = await (await fetch(API + '/api/boss/known', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ urls: links }),
-    })).json();
-    fresh = k.fresh || links; known = k.known || [];
-  } catch (e) { /* 服务没开就不筛 */ }
-  $('#links').value = fresh.join('\n');
-  msg(`抓到 ${links.length} 个链接`
-    + (known.length ? `,${known.length} 个已存过(已剔除)` : '')
-    + ` → 待补详情 ${fresh.length} 个。点下面「开始」。`, fresh.length ? 'ok' : '');
-}
-
-async function pagingStat() {
+async function runStat() {
   let d = {};
-  try { d = await chrome.runtime.sendMessage({ type: 'pagingStat' }) || {}; } catch (e) { return; }
-  const p = d.paging || {};
-  const box = $('#pstat');
-  if (!p.want) { box.innerHTML = ''; return; }
-  box.innerHTML = `<div class="bp">${p.running ? '翻页中' : '已结束'} · `
-    + `翻了 ${p.done || 0}/${p.want} 页 · 存 ${p.saved || 0} 页 · 链接 ${p.links || 0} 个</div>`
-    + (p.log || []).slice(0, 6).map(l => `<div class="ml ${l.note ? 'bad' : 'ok'}">`
-        + `${esc(l.label || '')} ${l.note ? esc(l.note)
-          : `${l.n} 个岗位(新 ${l.fresh})· ${l.chars} 字`}</div>`).join('');
-  $('#pgo').textContent = p.running ? '停止' : '开始';
+  try { d = await chrome.runtime.sendMessage({ type: 'runStat' }) || {}; } catch (e) { return; }
+  const r = d.run || {};
+  const box = $('#rstat');
+  if (!r.rounds && !r.log?.length) { box.innerHTML = ''; return; }
+  // 两层进度都要显示:第几页 + 这一页的第几个岗位。
+  // 只显示一个总数的话,卡住时分不出是卡在翻页还是卡在某个岗位上。
+  box.innerHTML = `<div class="bp">${r.running ? '进行中' : '已结束'} · `
+    + `第 ${r.round || 0}/${r.rounds || 1} 页 · 岗位 ${r.jobsDone || 0}/${r.jobsTotal || 0}`
+    + ` · 已存 ${r.saved || 0}${r.failed ? ` · 失败 ${r.failed}` : ''}</div>`
+    + (r.log || []).slice(0, 8).map(l =>
+        `<div class="ml ${l.bad ? 'bad' : 'ok'}">${esc(l.t)}</div>`).join('');
+  $('#rgo').textContent = r.running ? '停止' : ($('#autonext').checked
+    ? `开始:逐页存入(最多翻 ${$('#pgn').value} 次)` : '开始:只存当前这一页的岗位');
 }
 
 $('#harvest').onclick = async () => {
@@ -371,5 +379,5 @@ $('#bgo').onclick = async () => {
   autoStat();
 };
 
-readPage(); refresh(); autoStat(); pagingStat(); pickInfo();
-setInterval(() => { refresh(); autoStat(); pagingStat(); pickInfo(); }, 3000);
+readPage(); refresh(); autoStat(); runStat(); pickInfo();
+setInterval(() => { refresh(); autoStat(); runStat(); pickInfo(); }, 2500);

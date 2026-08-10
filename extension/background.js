@@ -282,7 +282,7 @@ async function autoSave(tabId, url, via) {
     return finish({ lastErr: '不是 zhipin 页面,跳过' });
   if (!(await isAutoOn()))
     return finish({ lastErr: '「自动存」没勾上' });
-  if (batch.running || filling || paging.running)
+  if (batch.running || filling || run.running)
     return finish({ lastErr: '批量/翻页任务在跑,自动存让路' });
 
   // 同一页别反复存。去重记录也放 storage —— worker 重启后内存里的 Map 就没了。
@@ -458,7 +458,7 @@ chrome.runtime.onMessage.addListener((msg, _s, reply) => {
  * 4–9 秒随机间隔、指纹不变立刻停、硬上限 30 页、随时可停。
  * ══════════════════════════════════════════════════════════════ */
 
-const MAX_PAGES = 30;
+const MAX_ROUNDS = 20;      // 翻页次数上限,别让它无限跑
 
 /** 页面指纹:拿前若干个岗位链接拼起来。翻页成功它必然变。 */
 function pageFingerprintInPage() {
@@ -504,96 +504,152 @@ function clickNextInPage() {
   return { ok: true, tag: btn.tagName, cls: String(btn.className || '').slice(0, 40) };
 }
 
-let paging = { running: false, want: 0, done: 0, saved: 0, links: 0, log: [] };
+/* ── 一趟跑完:本页所有岗位存完 → 点「下一页」→ 再来一轮 ─────────
+ *
+ * 顺序是**嵌套**的,不是先翻完再补:
+ *   ① 存这一页列表的原文(一屏十几个岗位,AI 一次全提出来,只是没有职位描述)
+ *   ② 抓这一页的岗位链接,筛掉已经存过的
+ *   ③ 逐个打开这些岗位,存详情原文(职位描述就是从这儿来的)
+ *   ④ 「自动下一页」开着就点一次「下一页」,回到 ①
+ *
+ * **详情必须用另一个标签页开。**
+ * 列表页所在的标签页一旦被导航到详情,列表就没了 —— 它是单页应用,
+ * 翻到哪儿是它内部状态,不是 URL 决定的,退回来未必能复原。
+ * 所以:列表页那个标签页全程不动,详情在一个专用标签页里轮流打开。
+ *
+ * ⚠️ 这会产生你没有亲手点过的请求。所以:必须点按钮才开始、
+ * 每个岗位之间 4–9 秒随机、连错三次就停、随时可停、翻页次数有上限。
+ */
+let run = {
+  running: false, round: 0, rounds: 1, autoNext: false,
+  jobsDone: 0, jobsTotal: 0, saved: 0, failed: 0, links: 0, log: [],
+};
 
-async function startPaging(tabId, want) {
-  if (paging.running) return { error: '已经在翻了' };
-  want = Math.min(MAX_PAGES, Math.max(1, parseInt(want, 10) || 5));
+const putRun = () => chrome.storage.local.set({ run });
 
+async function startRun(tabId, autoNext, rounds) {
+  if (run.running) return { error: '已经在跑了' };
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   if (!tab || !/^https:\/\/[^/]*zhipin\.com\//.test(tab.url || ''))
     return { error: '当前标签页不是 BOSS 页面' };
 
-  paging = { running: true, want, done: 0, saved: 0, links: 0, log: [] };
-  const found = new Map();
-  await chrome.storage.local.set({ paging });
+  // 不开自动下一页就只做当前这一页
+  rounds = autoNext ? Math.min(MAX_ROUNDS, Math.max(1, parseInt(rounds, 10) || 5)) : 1;
+  run = { running: true, round: 0, rounds, autoNext: !!autoNext,
+          jobsDone: 0, jobsTotal: 0, saved: 0, failed: 0, links: 0, log: [] };
+  await putRun();
   keepAlive(true);
 
-  const run = async (fn) => {
-    const [r] = await chrome.scripting.executeScript({ target: { tabId }, func: fn, world: 'MAIN' });
+  const inList = async (fn, args) => {
+    const [r] = await chrome.scripting.executeScript(
+      { target: { tabId }, func: fn, ...(args ? { args } : {}) });
     return r?.result;
   };
-
-  // 先把当前页收了 —— 人已经翻到第 6 页了,这一页不该漏掉
-  const collect = async (label) => {
-    const page = await readTabSettled(tabId);
-    if (page && page.len >= MIN_CHARS) {
-      await saveText(page, { auto: true, force: true });
-      paging.saved++;
-    }
-    const h = await run(harvestLinksInPage);
-    let fresh = 0;
-    for (const l of (h?.links || [])) {
-      const k = l.split('?')[0];
-      if (!found.has(k)) { found.set(k, l); fresh++; }
-    }
-    paging.links = found.size;
-    paging.log.unshift({ label, n: h?.links?.length || 0, fresh, chars: page?.len || 0 });
-    paging.log = paging.log.slice(0, 40);
-    await chrome.storage.local.set({ paging });
+  const say = (t, bad) => {
+    run.log.unshift({ t, bad: !!bad });
+    run.log = run.log.slice(0, 60);
+    return putRun();
   };
 
+  let worker = null;      // 开详情专用的标签页
   try {
-    await collect('当前页');
+    for (let r0 = 1; r0 <= rounds; r0++) {
+      if (!run.running) break;
+      run.round = r0;
+      await putRun();
 
-    for (let i = 0; i < want; i++) {
-      if (!paging.running) break;
-      const before = await run(pageFingerprintInPage);
+      // ① 存这一页列表原文
+      const listPage = await readTabSettled(tabId);
+      if (listPage && listPage.len >= MIN_CHARS) {
+        try { await saveText(listPage, { auto: true, force: true }); run.saved++; }
+        catch (e) { await say('列表页存失败:' + String(e.message).slice(0, 50), true); }
+      }
 
-      // **先用你指过的那个**。没指过才退回「按文字猜」——
-      // 猜是兜底,不是主路:猜错了会一遍遍抓同一页。
+      // ② 抓链接 + 筛掉已存过的
+      const h = await inList(harvestLinksInPage);
+      const links = h?.links || [];
+      run.links += links.length;
+      if (!links.length) {
+        await say(`第 ${r0} 轮:这一页没抓到岗位链接,停止`, true);
+        break;
+      }
+      let todo = links;
+      try {
+        const k = await (await fetch('http://localhost:8001/api/boss/known', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ urls: links }),
+        })).json();
+        todo = k.fresh || links;
+        await say(`第 ${r0} 轮:${links.length} 个岗位,${(k.known || []).length} 个已存过,要开 ${todo.length} 个`);
+      } catch (e) {
+        await say(`第 ${r0} 轮:${links.length} 个岗位(本地服务没应答,不筛重复)`);
+      }
+
+      // ③ 逐个打开存详情
+      run.jobsTotal += todo.length;
+      let miss = 0;
+      for (let i = 0; i < todo.length; i++) {
+        if (!run.running) break;
+        const url = todo[i];
+        try {
+          if (!worker) worker = await chrome.tabs.create({ url, active: false });
+          else await chrome.tabs.update(worker.id, { url });
+          await waitLoaded(worker.id);
+          await sleep(900);
+          const page = await readTabSettled(worker.id);
+          if (!page || page.len < MIN_CHARS) throw new Error(`只有 ${page?.len ?? 0} 字`);
+          await saveText(page, { auto: true, force: true });
+          run.saved++; miss = 0;
+          await say(`  ✓ ${(page.h1 || page.title || '').slice(0, 30)}`);
+        } catch (e) {
+          run.failed++; miss++;
+          await say(`  ✗ ${String(e.message).slice(0, 46)}`, true);
+          // 连错三次就收手 —— 多半是被限流了,继续打只会更糟
+          if (miss >= 3) { await say('连续三个失败,停止', true); run.running = false; break; }
+        }
+        run.jobsDone++;
+        await putRun();
+        if (i < todo.length - 1 && run.running) await sleep(4000 + Math.random() * 5000);
+      }
+      if (!run.running) break;
+
+      // ④ 翻下一页
+      if (!run.autoNext || r0 === rounds) break;
+      const before = await inList(pageFingerprintInPage);
       const { nextSel } = await chrome.storage.local.get('nextSel');
       let c;
       if (nextSel?.sels?.length) {
-        const [r2] = await chrome.scripting.executeScript({
-          target: { tabId }, func: clickLearnedInPage, args: [nextSel],
-        });
-        c = r2?.result;
-        if (c?.used && !paging.usedSel) paging.usedSel = c.used;
+        c = await inList(clickLearnedInPage, [nextSel]);
       } else {
-        c = await run(clickNextInPage);
-        paging.guessed = true;
+        // 没指过就按文字猜。猜是兜底不是主路 —— 猜错会一直抓同一页。
+        c = await inList(clickNextInPage);
+        await say('没指过「下一页」,这次是按文字猜的');
       }
-      if (c?.error) { paging.log.unshift({ label: '停止', note: c.error }); break; }
+      if (c?.error) { await say('翻页停止:' + c.error, true); break; }
 
-      // **验证真的翻动了。** 轮询指纹,最多等 10 秒。
+      // **验证真的翻动了。** 不验证的话,选错元素会一遍遍抓同一页,
+      // 然后报「跑了 5 轮」—— 看着在工作,其实一页没动。
       let changed = false;
-      for (let t = 0; t < 20; t++) {
+      for (let t = 0; t < 24; t++) {
         await sleep(500);
-        const now = await run(pageFingerprintInPage);
-        if (now && now.fp && now.fp !== before?.fp) { changed = true; break; }
+        const now = await inList(pageFingerprintInPage);
+        if (now?.fp && now.fp !== before?.fp) { changed = true; break; }
       }
       if (!changed) {
-        // 这是最重要的一条:没翻动就别继续。继续下去会一遍遍抓同一页,
-        // 然后报「翻了 10 页」—— 看着在工作,其实一页没动。
-        paging.log.unshift({ label: '停止',
-          note: '点了「下一页」但内容没变 —— 可能已到最后一页,或者点到的不是真的翻页按钮' });
+        await say('点了「下一页」但列表没变 —— 可能到最后一页了,或者点到的不是真按钮', true);
         break;
       }
-      await sleep(900);         // 让异步内容渲染完
-      paging.done++;
-      await collect(`第 ${paging.done + 1} 页`);
-      if (i < want - 1 && paging.running) await sleep(4000 + Math.random() * 5000);
+      await sleep(1000);
     }
   } catch (e) {
-    paging.log.unshift({ label: '出错', note: String(e.message).slice(0, 80) });
+    await say('出错:' + String(e.message).slice(0, 80), true);
   } finally {
-    paging.running = false;
+    run.running = false;
     keepAlive(false);
-    // 抓到的链接交给「批量存入」去补职位描述 —— 翻页只拿广度和线索
-    await chrome.storage.local.set({ paging, pagedLinks: [...found.values()] });
+    await putRun();
+    if (worker) chrome.tabs.remove(worker.id).catch(() => {});
   }
-  return { pages: paging.done + 1, saved: paging.saved, links: found.size };
+  return { rounds: run.round, jobs: run.jobsDone, saved: run.saved, failed: run.failed };
 }
 
 /* harvestLinks 的副本。executeScript 把函数序列化后注入页面,**拿不到外层作用域**,
@@ -624,11 +680,11 @@ chrome.runtime.onMessage.addListener((msg, _s, reply) => {
     return;
   }
   if (msg?.type === 'forgetNext') { chrome.storage.local.remove(['nextSel', 'pickState']); reply?.({ ok: true }); }
-  if (msg?.type === 'startPaging') { startPaging(msg.tabId, msg.want).then(r => reply(r)); return true; }
-  if (msg?.type === 'stopPaging') { paging.running = false; reply({ ok: true }); }
-  if (msg?.type === 'pagingStat') {
-    chrome.storage.local.get(['paging', 'pagedLinks']).then(d => reply(d)); return true;
+  if (msg?.type === 'startRun') {
+    startRun(msg.tabId, msg.autoNext, msg.rounds).then(r => reply(r)); return true;
   }
+  if (msg?.type === 'stopRun') { run.running = false; reply({ ok: true }); }
+  if (msg?.type === 'runStat') { chrome.storage.local.get('run').then(d => reply(d)); return true; }
 });
 
 
