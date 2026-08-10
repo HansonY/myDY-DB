@@ -3,55 +3,168 @@
 <title>我的岗位库</title>
 <link rel="stylesheet" href="/shell.css">
 <style>
+ html,body{overflow:hidden}
  body{padding:0}
- .wrap{max-width:900px;margin:0 auto;padding:28px 24px 70px}
- h1{margin:0 0 3px;font-size:20px;font-weight:600}
- .sub{color:var(--dim2);font-size:12px;margin-bottom:20px}
- table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:8px}
+ .app{display:flex;flex-direction:column;height:100vh}
+ .top{flex:0 0 auto;display:flex;align-items:center;gap:14px;padding:14px 24px;
+   border-bottom:1px solid var(--line);background:var(--surface)}
+ .top h1{margin:0;font-size:15px;font-weight:600}
+ .top .dbp{font-family:var(--mono);font-size:10.5px;color:var(--dim2)}
+ .top .sp{margin-left:auto;display:flex;gap:8px;align-items:center}
+ .scroll{flex:1 1 auto;overflow-y:auto;padding:22px 24px 70px}
+ .wrap{max-width:960px;margin:0 auto}
+ h2{font-size:12px;font-weight:600;color:var(--dim);letter-spacing:.4px;
+   margin:26px 0 4px;text-transform:none}
+ h2:first-of-type{margin-top:0}
+ .lead{font-size:11.5px;color:var(--dim2);line-height:1.65;margin:0 0 12px}
+ .facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:4px}
+ .fact{border:1px solid var(--line);border-radius:10px;background:var(--surface);padding:12px 14px}
+ .fact b{display:block;font-family:var(--mono);font-size:21px;font-weight:600;color:var(--fg);line-height:1.1}
+ .fact span{font-size:10.5px;color:var(--dim2)}
+ .fact.warn{border-color:var(--warn-line);background:var(--warn-dim)}
+ .fact.warn b{color:var(--warn-text)}
+ .fact.on{border-color:var(--ok-line);background:var(--ok-dim)}
+ .fact.on b{color:var(--ok)}
+ .box{border:1px solid var(--line);border-radius:12px;background:var(--surface);overflow:hidden}
+ table{width:100%;border-collapse:collapse;font-size:12.5px}
  th{text-align:left;font-size:10px;font-weight:500;color:var(--dim2);letter-spacing:.6px;
    padding:9px 12px;background:#0f1217;border-bottom:1px solid var(--line);white-space:nowrap}
  td{padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
  tr:last-child td{border-bottom:0}
- td.n{text-align:right;font-family:var(--mono);color:var(--accent-text)}
- td.u{font-family:var(--mono);font-size:11px;color:var(--dim)}
+ td.n{text-align:right;font-family:var(--mono);color:var(--accent-text);white-space:nowrap}
  td.t{font-family:var(--mono);font-size:11px;color:var(--dim2);white-space:nowrap}
- .box{border:1px solid var(--line);border-radius:12px;background:var(--surface);overflow:hidden}
+ td.co{color:var(--dim)}
+ .pill{display:inline-block;font-size:10px;padding:1.5px 6px;border-radius:5px;
+   border:1px solid var(--line);color:var(--dim2)}
+ .pill.have{border-color:var(--ok-line);background:var(--ok-dim);color:var(--ok)}
+ .btn{background:var(--surface2,#1a1f27);border:1px solid var(--line);border-radius:8px;
+   padding:7px 13px;color:var(--fg);font-size:12px;cursor:pointer}
+ .btn:hover:not(:disabled){border-color:var(--accent-line)}
+ .btn:disabled{opacity:.45;cursor:default}
+ .btn.go{background:var(--accent-dim,#1c2740);border-color:var(--accent-line)}
+ .msg{font-size:11.5px;line-height:1.6;margin-top:10px;padding:9px 12px;border-radius:8px;
+   border:1px solid var(--line);background:var(--bg);display:none}
+ .msg.ok{border-color:var(--ok-line);background:var(--ok-dim);color:var(--ok)}
+ .msg.bad{border-color:var(--warn-line);background:var(--warn-dim);color:var(--warn-text)}
+ .empty{padding:26px 20px;text-align:center;color:var(--dim);font-size:12px;line-height:1.8}
+ .dot{width:6px;height:6px;border-radius:50%;display:inline-block;margin-right:5px}
 </style>
-<div class="wrap">
-  <h1>我的岗位库</h1>
-  <div class="sub">你浏览过的 BOSS 岗位 · 全部存在本机 · <span id="db"></span></div>
-  <div class="facts" id="facts"></div>
-  <div class="sec"><h2>最近存了什么</h2><em id="hint"></em></div>
-  <div class="box"><table id="tb"><tr><td class="dim">读取中…</td></tr></table></div>
+
+<div class="app">
+  <div class="top">
+    <h1>我的岗位库</h1>
+    <span class="dbp" id="db"></span>
+    <div class="sp">
+      <span class="pill" id="ai">AI …</span>
+      <button class="btn go" id="extract" disabled>提取</button>
+    </div>
+  </div>
+
+  <div class="scroll"><div class="wrap">
+    <div class="facts" id="facts"></div>
+    <div class="msg" id="msg"></div>
+
+    <h2>已入库的岗位</h2>
+    <p class="lead">去重按 <b>公司 + 岗位名</b> —— 同一个岗位反复浏览只有一行,
+      信息只会往上补(列表页看到的没有职位描述,详情页看到了就补上),不会互相冲掉。</p>
+    <div class="box"><table id="jobs"><tr><td class="dim">读取中…</td></tr></table></div>
+
+    <h2>待提取</h2>
+    <p class="lead">插件存进来的**页面原文**先排在这儿,攒一批一次交给 AI ——
+      逐页调用又慢又贵。提取失败的会留着下次再试,原文一条都不会丢。</p>
+    <div class="box"><table id="pend"><tr><td class="dim">读取中…</td></tr></table></div>
+  </div></div>
 </div>
+
 <script>
-const $=s=>document.querySelector(s);
-const esc=s=>String(s??'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
-async function load(){
-  const [st,rc]=await Promise.all([
-    fetch('/api/boss/stats').then(r=>r.json()),
-    fetch('/api/boss/recent?limit=40').then(r=>r.json()),
-  ]);
-  $('#db').textContent=st.db;
-  $('#facts').innerHTML=`
-    <div class="fact"><b>${st.jobs}</b><span>已入库岗位</span></div>
-    <div class="fact"><b>${st.jd_have}</b><span>有职位描述</span></div>
-    <div class="fact on"><b>${st.capture_files||0}</b><span>捕获批次</span></div>
-    <div class="fact"><b>${st.fragments}</b><span>知识片段</span></div>`;
-  const items=rc.items||[];
-  $('#hint').textContent=items.length
-    ? `共 ${rc.total_files} 批 · 下面是最近 ${items.length} 条`
-    : '还没有捕获';
-  $('#tb').innerHTML=items.length
-    ? '<tr><th>时间</th><th style="text-align:right">条数</th><th>样例</th><th>接口</th></tr>'
-      + items.map(i=>`<tr>
-          <td class="t">${esc((i.at||'').replace('T',' ').slice(5,19))}</td>
-          <td class="n">${i.records||1}</td>
-          <td>${esc(i.sample)||'<span class="dim">(没挖到标题)</span>'}</td>
-          <td class="u">${esc(i.url).slice(0,40)}</td></tr>`).join('')
-    : `<tr><td style="padding:30px;text-align:center;color:var(--dim)">
-         还没存到东西。装好插件后,点开 BOSS 的「我的投递 / 感兴趣」等<b>列表页</b>并往下滚 ——
-         停在首页不会有岗位接口。</td></tr>`;
+'use strict';
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g,
+  m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+const bold = t => esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+// lead 里写了 **粗体**,渲染掉,不然显示成裸星号
+document.querySelectorAll('.lead').forEach(e => e.innerHTML = bold(e.textContent));
+
+function msg(t, cls) {
+  const m = $('#msg');
+  m.style.display = t ? 'block' : 'none';
+  m.className = 'msg ' + (cls || ''); m.innerHTML = bold(t || '');
 }
+
+async function load() {
+  let st, jb, pd;
+  try {
+    [st, jb, pd] = await Promise.all([
+      fetch('/api/boss/stats').then(r => r.json()),
+      fetch('/api/boss/jobs?limit=60').then(r => r.json()),
+      fetch('/api/boss/pending?limit=60').then(r => r.json()),
+    ]);
+  } catch (e) {
+    $('#jobs').innerHTML = `<tr><td class="empty">读不到本地服务</td></tr>`;
+    return;
+  }
+  $('#db').textContent = st.db || '';
+
+  // AI 状态:三态。**「填了 key」不等于「能用」** —— 不能把「填了」显示成「可用」。
+  const a = st.ai || {};
+  const pill = $('#ai');
+  pill.className = 'pill' + (a.state === 'ok' ? ' have' : '');
+  pill.textContent = 'AI ' + (a.label || '?') + (a.provider ? ' · ' + a.provider : '');
+  pill.title = a.error || '';
+
+  const pend = pd.total || 0;
+  $('#facts').innerHTML = `
+    <div class="fact"><b>${st.jobs || 0}</b><span>已入库岗位</span></div>
+    <div class="fact${st.jd_have ? ' on' : ''}"><b>${st.jd_have || 0}</b><span>有职位描述</span></div>
+    <div class="fact${pend ? ' warn' : ''}"><b>${pend}</b><span>待提取页面</span></div>
+    <div class="fact"><b>${st.fragments || 0}</b><span>知识片段</span></div>`;
+
+  const eb = $('#extract');
+  eb.disabled = !pend;
+  eb.textContent = pend ? `提取这 ${pend} 页` : '没有待提取';
+
+  const jobs = jb.items || [];
+  $('#jobs').innerHTML = jobs.length
+    ? '<tr><th>岗位</th><th>公司</th><th>城市</th><th>薪资</th><th>职位描述</th><th>更新</th></tr>'
+      + jobs.map(j => `<tr>
+          <td>${esc(j.title) || '<span class="dim">(无标题)</span>'}</td>
+          <td class="co">${esc(j.company || '')}</td>
+          <td class="co">${esc(j.city || '')}</td>
+          <td class="n">${esc(j.salary_text || '')}</td>
+          <td><span class="pill${j.jd_state === 'have' ? ' have' : ''}">${
+              {have: '有', none: '没有', unknown: '还没看到'}[j.jd_state] || '?'}</span></td>
+          <td class="t">${esc((j.updated_at || '').replace('T', ' ').slice(5, 16))}</td>
+        </tr>`).join('')
+    : `<tr><td class="empty">还没有岗位。<br>
+         装好插件 → 打开一个 BOSS 岗位页 → 插件自动存原文 → 回这里点「提取」。</td></tr>`;
+
+  const items = pd.items || [];
+  $('#pend').innerHTML = items.length
+    ? '<tr><th>标题</th><th>判定</th><th>字数</th><th>存入</th></tr>'
+      + items.map(i => `<tr>
+          <td>${esc(i.title) || '<span class="dim">(无标题)</span>'}</td>
+          <td><span class="pill">${{detail: '岗位详情', list: '岗位列表'}[i.kind] || esc(i.kind || '?')}</span></td>
+          <td class="n">${i.chars || 0}</td>
+          <td class="t">${esc((i.at || '').replace('T', ' ').slice(5, 16))}</td>
+        </tr>`).join('')
+    : `<tr><td class="empty">队列是空的 —— 浏览 BOSS 岗位页时插件会自动存进来。</td></tr>`;
+}
+
+$('#extract').onclick = async () => {
+  const b = $('#extract'); const old = b.textContent;
+  b.disabled = true; b.textContent = '提取中…(多页一次,请稍等)';
+  msg('');
+  try {
+    const d = await (await fetch('/api/boss/extract', { method: 'POST' })).json();
+    if (d.error) msg(d.error, 'bad');
+    else msg(`新增 ${d.extracted} 个岗位`
+      + (d.updated ? `,更新 ${d.updated} 个` : '')
+      + ` · 用了 ${d.ai_calls} 次 AI 调用`
+      + (d.failed?.length ? ` · ${d.failed.length} 批失败:${d.failed[0]}` : ''),
+      d.extracted || d.updated ? 'ok' : '');
+  } catch (e) { msg('出错:' + e.message, 'bad'); }
+  b.textContent = old; load();
+};
+
 load(); setInterval(load, 5000);
 </script>

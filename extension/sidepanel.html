@@ -16,6 +16,15 @@ h1{margin:0 0 2px;font-size:14px;font-weight:600}
 .now .t{font-size:14px;font-weight:600;color:var(--fg-hi);line-height:1.4}
 .now .m{font-size:11.5px;color:var(--dim);margin-top:3px}
 .now .warn{color:var(--warn);font-size:11.5px}
+/* 判定依据 —— 摊开给人看它凭什么认。不摊开就没法发现它在瞎认:
+   这个项目栽过一次「界面显示已入库 5,实际全是噪音」。 */
+.now .why{font-size:10.5px;line-height:1.55;margin-top:7px;padding-top:7px;
+  border-top:1px solid var(--line);color:var(--dim)}
+.now .why.yes{color:var(--ok)} .now .why.no{color:var(--dim2)}
+.sig{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}
+.sig i{font-style:normal;font-size:9.5px;padding:1px 5px;border-radius:4px;
+  border:1px solid var(--line2);color:var(--dim2)}
+.sig i.on{border-color:rgba(92,184,122,.4);background:rgba(92,184,122,.1);color:var(--ok)}
 
 button{width:100%;background:var(--accent-dim);color:var(--accent-t);
   border:1px solid rgba(76,141,255,.35);border-radius:8px;padding:9px;
@@ -53,7 +62,7 @@ button.ghost:hover{color:var(--fg);border-color:var(--dim2)}
 <button class="ghost" id="extract" title="攒一批一起交给 AI —— 比一页一次快也便宜">没有待提取的</button>
 <button class="ghost" id="open">打开岗位库 ↗</button>
 <label class="auto"><input type="checkbox" id="autochk">
-  自动存(每打开一个岗位就存)</label>
+  自动存(打开岗位页就自动存,非岗位页会跳过)</label>
 <div class="msg" id="msg"></div>
 
 <div class="hd"><b>已存</b><span id="cnt"></span></div>

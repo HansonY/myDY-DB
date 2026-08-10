@@ -91,31 +91,61 @@ async def ingest(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
 PENDING_DIR = ROOT / "data" / "boss_pending"
 
 
+@app.post("/api/boss/detect")
+async def detect(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """只判断「这是不是岗位页」,**不写任何东西**。侧边栏用它做预览。
+
+    单独开一个只读接口,是为了让「判断」和「存」能分开验证 ——
+    否则你没法在不污染库的前提下看它判得准不准。
+    """
+    import boss_detect as bd
+    return bd.classify(body.get("text") or "", body.get("url") or "", body.get("title") or "")
+
+
 @app.post("/api/boss/ingest_text")
 async def ingest_text(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    """收一个页面的纯文本,入队。**不在这里调 AI。**
+    """收一个页面的纯文本,判断是不是岗位页,是就入队。**不在这里调 AI。**
 
     为什么不当场提取:一次 API 往返几秒,点一下要等几秒体验很差,
     而且逐页调用比多页一次贵得多。这里只落盘,提取由 /extract 批量做。
+
+    **判断放在这里,不放在插件里** —— 只有一份实现。插件那边再写一份
+    早晚会跟这边漂移,而漂移出来的 bug 最难查。
+
+    `force=true`(手动点「存入」)跳过判断:我的判断可能错,
+    不该因为我猜错就拦着人存。自动存则必须过判断,否则你随便浏览个网页
+    都往库里灌东西。
     """
+    import boss_detect as bd
+
     text = (body.get("text") or "").strip()
-    if len(text) < 80:
-        return {"queued": 0, "note": "页面文字太少,没入队"}
+    url = str(body.get("url") or "")
+    title = str(body.get("title") or "")
+    auto = bool(body.get("auto"))
+    force = bool(body.get("force"))
+
+    verdict = bd.classify(text, url, title)
+    if not force and not verdict["is_job"]:
+        # 没存也要说清为什么 —— 「静默不存」会让人以为在存,
+        # 这个项目已经吃过一次「看着像在工作」的亏。
+        return {"queued": 0, "skipped": True, "detect": verdict, "note": verdict["why"]}
 
     PENDING_DIR.mkdir(parents=True, exist_ok=True)
-    url = str(body.get("url") or "")
-    # 同一个 url 只留最新一份 —— 反复打开同一个岗位不该排好几次
-    key = re.sub(r"[^a-zA-Z0-9]+", "_", url.split("?")[0])[-80:] or "page"
+    # 去重键 = 公司+岗位名(取自标题整串,不解析格式),标题拿不到才退回 URL。
+    # 同一个岗位反复打开 → 同一个文件 → **覆盖**,不堆积。
+    key = bd.dedupe_key(title, url)
     f = PENDING_DIR / f"{key}.json"
+    replaced = f.exists()
     f.write_text(json.dumps({
-        "url": url, "title": body.get("title"), "kind": body.get("kind"),
+        "url": url, "title": title, "kind": verdict["kind"],
         "text": text, "at": datetime.now().isoformat(timespec="seconds"),
-        "auto": bool(body.get("auto")),
+        "auto": auto, "detect_score": verdict["score"],
     }, ensure_ascii=False), encoding="utf-8")
 
     n = len(list(PENDING_DIR.glob("*.json")))
-    return {"queued": 1, "pending": n,
-            "note": f"已入队,待提取 {n} 页" if n > 1 else "已入队"}
+    return {"queued": 1, "replaced": replaced, "detect": verdict, "pending": n,
+            "note": (f"已更新(同一岗位,覆盖上次)· 待提取 {n}" if replaced
+                     else f"已入队 · 待提取 {n}")}
 
 
 @app.post("/api/boss/extract")
@@ -204,6 +234,11 @@ async def do_extract(
             "jobs_total": st["jobs"], "failed": failed}
 
 
+def _norm(s: str) -> str:
+    """归一化后再做键:空格和全半角差异不该产生重复行。"""
+    return re.sub(r"\s+", "", s).lower()
+
+
 def _job_key(j: dict[str, Any], url: str | None) -> str:
     """岗位 id。
 
@@ -212,7 +247,9 @@ def _job_key(j: dict[str, Any], url: str | None) -> str:
     否则库里会堆一堆重复。
     """
     import hashlib
-    seed = "|".join(str(j.get(k) or "") for k in ("company", "title", "salary_text"))
+    # **公司 + 岗位名**,不含薪资。带上薪资是错的 —— 同一个岗位改了薪资
+    # 就会变成两行,而它明明是同一个岗位(用户要的就是「覆盖」)。
+    seed = "|".join(_norm(str(j.get(k) or "")) for k in ("company", "title"))
     if not seed.strip("|"):
         seed = str(url or "")
     return "t_" + hashlib.sha1(seed.encode("utf-8")).hexdigest()[:16]
@@ -285,6 +322,28 @@ async def recent(limit: int = Query(30, ge=1, le=200)) -> dict[str, Any]:
     return {"items": out, "total_files": len(list(CAPTURE_DIR.glob("*.json")))}
 
 
+@app.get("/api/boss/pending")
+async def pending(limit: int = Query(60, ge=1, le=300)) -> dict[str, Any]:
+    """待提取队列里都有什么。
+
+    队列必须**看得见**。只显示一个数字的话,分不出排着的是真岗位还是噪音 ——
+    这个项目栽过一次:界面显示「已送入库 5」,实际 5 条全是性能监控。
+    """
+    if not PENDING_DIR.exists():
+        return {"items": [], "total": 0}
+    files = sorted(PENDING_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+    out = []
+    for f in files[:limit]:
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+        except ValueError:
+            continue
+        out.append({"title": d.get("title"), "kind": d.get("kind"),
+                    "chars": len(d.get("text") or ""), "at": d.get("at"),
+                    "url": d.get("url"), "score": d.get("detect_score")})
+    return {"items": out, "total": len(files)}
+
+
 @app.get("/api/boss/stats")
 async def stats() -> dict[str, Any]:
     s = bs.stats()
@@ -298,6 +357,12 @@ async def stats() -> dict[str, Any]:
             pass
     s["capture_files"] = len(caps)
     s["capture_records_recent"] = n
+    s["db"] = str(bs.db_file())
+    s["pending"] = len(list(PENDING_DIR.glob("*.json"))) if PENDING_DIR.exists() else 0
+    # AI 三态。**别只报「key 填没填」** —— 填了也可能是 402 用不了,
+    # 把「填了」显示成「可用」是假承诺。
+    import llm as _llm
+    s["ai"] = _llm.status()
     return s
 
 

@@ -11,7 +11,13 @@ let tab = null, page = null;
 const esc = s => String(s ?? '').replace(/[&<>"]/g,
   m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
 
-/** 在页面里跑:抽正文文字 + 猜这是什么页 */
+/** 在页面里跑:只抽文字,**不做判断**。
+ *
+ * 判断「是不是岗位页」全部交给后端 boss_detect.py —— 只有一份实现。
+ * 插件里再写一份,两边早晚漂移,而漂移出来的 bug 最难查。
+ * 这里也不再看 URL:BOSS 的岗位会出现在 /job_detail、/chat、/web/geek/job、
+ * 搜索结果、推荐流里,路径五花八门,靠路径判必漏;平台改一次路由就全废。
+ */
 function grab() {
   // 去掉导航/页脚/脚本这类噪音,留主内容。抓不准也没关系 ——
   // 后面是 AI 提取,它能从啰嗦的文本里挑出岗位信息。
@@ -22,17 +28,13 @@ function grab() {
   clone.querySelectorAll(drop).forEach(e => e.remove());
   const text = (clone.innerText || '').replace(/\n{3,}/g, '\n\n').trim();
 
-  // 页面类型:只用 URL 判断,不依赖 class 名(那个最容易变)
-  const u = location.pathname;
-  const kind = /job_detail|\/job\//.test(u) ? 'detail'
-             : /chat|geek\/(recommend|job|myjob)|recommend/.test(u) ? 'list'
-             : 'other';
-  // 标题:h1 优先,退回 document.title
-  const h1 = document.querySelector('h1,.job-name,.name');
+  // 标题用 document.title —— 它天然带公司名+岗位名,而且**整串当去重键不用解析**。
+  // h1 只作补充:h1 依赖 class/结构,是最容易被改版打断的东西。
   return {
-    url: location.href.split('?')[0],
-    title: (h1 && h1.innerText || document.title || '').trim().slice(0, 80),
-    kind, text: text.slice(0, 24000), len: text.length,
+    url: location.href,
+    title: (document.title || '').trim().slice(0, 120),
+    h1: (document.querySelector('h1')?.innerText || '').trim().slice(0, 80),
+    text: text.slice(0, 24000), len: text.length,
   };
 }
 
@@ -59,12 +61,31 @@ async function readPage() {
     $('#save').disabled = true;
     return;
   }
-  const label = { detail: '岗位详情', list: '岗位列表', other: '其它页面' }[page.kind];
+  // 问后端这是不是岗位页(只读接口,不写库)
+  let v = null;
+  try {
+    const r = await fetch(API + '/api/boss/detect', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: page.text, url: page.url, title: page.title }),
+    });
+    v = await r.json();
+  } catch (e) { /* 服务没开 —— 下面照样显示页面信息,只是没有判定 */ }
+  page.verdict = v;
+  page.kind = v?.kind || 'other';
+
+  const label = v
+    ? ({ detail: '岗位详情', list: '岗位列表', other: '不是岗位页' })[v.kind]
+    : '本地服务没开,无法判定';
+  const sig = v ? `<div class="sig">${
+      (v.hit || []).map(h => `<i class="on">${esc(h.label)}</i>`).join('')
+    }${(v.miss || []).map(m => `<i>${esc(m)}</i>`).join('')}</div>` : '';
   box.innerHTML = `<div class="kind">当前页面 · ${label}</div>
-    <div class="t">${esc(page.title) || '(没有标题)'}</div>
-    <div class="m">${page.len} 字可提取</div>`;
-  // other 也允许存 —— 判断可能不准,不该因为我猜错就拦着你
+    <div class="t">${esc(page.h1 || page.title) || '(没有标题)'}</div>
+    <div class="m">${page.len} 字可提取</div>
+    ${v ? `<div class="why ${v.is_job ? 'yes' : 'no'}">${esc(v.why)}</div>${sig}` : ''}`;
+  // other 也允许手动存 —— 判断可能不准,不该因为我猜错就拦着你
   $('#save').disabled = page.len < 80;
+  $('#save').textContent = v && !v.is_job ? '仍然存入(我判它不是岗位页)' : '存入岗位库';
 }
 
 async function save(auto) {
@@ -74,7 +95,9 @@ async function save(auto) {
   try {
     const r = await fetch(API + '/api/boss/ingest_text', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...page, auto: !!auto }),
+      // 手动点 = force:我的判断可能错,人点了就该存。
+      // 自动存不 force,由后端判 —— 否则随便浏览个网页都往库里灌。
+      body: JSON.stringify({ ...page, auto: !!auto, force: !auto }),
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || ('HTTP ' + r.status));
@@ -139,8 +162,10 @@ chrome.tabs.onUpdated.addListener(async (id, info) => {
   if (info.status !== 'complete') return;
   await readPage();
   const { auto } = await chrome.storage.local.get('auto');
-  // 自动存只在岗位详情上做 —— 列表页自动存会把没看过的也灌进来
-  if (auto && page && page.kind === 'detail') save(true);
+  // 每个 BOSS 页面都送去判一次,**存不存由后端说** ——
+  // 前端不再用 kind 自己拦(那等于把判断写两遍)。列表页也存:
+  // 它一屏十几个岗位,一次 AI 调用就能全提出来,比逐个点开划算得多。
+  if (auto && page && page.len >= 80) save(true);
 });
 readPage(); refresh();
 setInterval(refresh, 6000);
