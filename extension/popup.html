@@ -13,6 +13,9 @@
   button{width:100%;margin-top:10px;background:#12151a;color:#e9ecf1;
     border:1px solid #242a33;border-radius:7px;padding:7px;font-size:12px;cursor:pointer}
   button:hover{border-color:#4c8dff}
+  button:disabled{opacity:.45;cursor:default}
+  #fill{border-color:rgba(255,122,69,.5);color:#ff9166;background:rgba(255,122,69,.08)}
+  #fill:hover:not(:disabled){background:rgba(255,122,69,.16)}
   .u{display:flex;justify-content:space-between;gap:8px;font-size:10.5px;
     color:#8b93a1;padding:3px 0;font-family:ui-monospace,monospace}
   .u span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -24,7 +27,9 @@
 <div class="row"><span>已送入库</span><b id="sent">–</b></div>
 <div class="row"><span>排队中</span><b id="pending">–</b></div>
 <div class="row"><span>本地服务</span><b id="svc">–</b></div>
+<div class="row"><span>待补详情</span><b id="todo">–</b></div>
 <div id="urls" style="margin-top:10px"></div>
+<button id="fill">补齐详情</button>
 <button id="flush" title="后台是攒 4 秒发一批;排队中为 0 时点它没作用">立即发送</button>
 <div class="note" id="note"></div>
 <script src="popup.js"></script>

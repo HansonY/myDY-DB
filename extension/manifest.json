@@ -1,28 +1,44 @@
 {
   "manifest_version": 3,
   "name": "BOSS → 我的岗位库",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "你正常浏览 BOSS 直聘,把看过的岗位存进本机知识库。不发额外请求、不碰 cookie、数据只到 localhost。",
-  "permissions": ["storage"],
+  "permissions": [
+    "storage",
+    "tabs"
+  ],
   "host_permissions": [
     "https://*.zhipin.com/*",
     "http://localhost:8001/*",
     "http://127.0.0.1:8001/*"
   ],
-  "background": { "service_worker": "background.js" },
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
-      "matches": ["https://*.zhipin.com/*"],
-      "js": ["content.js"],
+      "matches": [
+        "https://*.zhipin.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     },
     {
-      "matches": ["https://*.zhipin.com/*"],
-      "js": ["bridge.js"],
+      "matches": [
+        "https://*.zhipin.com/*"
+      ],
+      "js": [
+        "bridge.js"
+      ],
       "run_at": "document_start",
       "world": "ISOLATED"
     }
   ],
-  "action": { "default_popup": "popup.html", "default_title": "我的岗位库" }
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "我的岗位库"
+  }
 }
