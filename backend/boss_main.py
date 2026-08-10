@@ -11,7 +11,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -82,6 +84,145 @@ async def ingest(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
         u = str(it.get("url", "?")).split("?")[0]
         urls[u] = urls.get(u, 0) + 1
     return {"saved": len(items), "file": f.name, "by_url": urls}
+
+
+# 待提取队列。**存文字是瞬间的,提取才要花时间和钱** ——
+# 所以分开:侧边栏点「存入」只入队(立刻返回),提取攒一批再做。
+PENDING_DIR = ROOT / "data" / "boss_pending"
+
+
+@app.post("/api/boss/ingest_text")
+async def ingest_text(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """收一个页面的纯文本,入队。**不在这里调 AI。**
+
+    为什么不当场提取:一次 API 往返几秒,点一下要等几秒体验很差,
+    而且逐页调用比多页一次贵得多。这里只落盘,提取由 /extract 批量做。
+    """
+    text = (body.get("text") or "").strip()
+    if len(text) < 80:
+        return {"queued": 0, "note": "页面文字太少,没入队"}
+
+    PENDING_DIR.mkdir(parents=True, exist_ok=True)
+    url = str(body.get("url") or "")
+    # 同一个 url 只留最新一份 —— 反复打开同一个岗位不该排好几次
+    key = re.sub(r"[^a-zA-Z0-9]+", "_", url.split("?")[0])[-80:] or "page"
+    f = PENDING_DIR / f"{key}.json"
+    f.write_text(json.dumps({
+        "url": url, "title": body.get("title"), "kind": body.get("kind"),
+        "text": text, "at": datetime.now().isoformat(timespec="seconds"),
+        "auto": bool(body.get("auto")),
+    }, ensure_ascii=False), encoding="utf-8")
+
+    n = len(list(PENDING_DIR.glob("*.json")))
+    return {"queued": 1, "pending": n,
+            "note": f"已入队,待提取 {n} 页" if n > 1 else "已入队"}
+
+
+@app.post("/api/boss/extract")
+async def do_extract(
+    max_pages: int = Query(20, ge=1, le=60),
+) -> dict[str, Any]:
+    """把队列里的页面批量交给 AI 提取,写进 jobs 表。
+
+    按字符预算打包,**一次调用处理多页**。提取成功的从队列移除;
+    失败的留着 —— 下次还能再试,不会因为一次网络抖动就丢数据。
+    """
+    from knowledge import boss_fragments as bfr
+    import boss_extract as bx
+
+    if not PENDING_DIR.exists():
+        return {"extracted": 0, "note": "队列是空的"}
+    files = sorted(PENDING_DIR.glob("*.json"))[:max_pages]
+    if not files:
+        return {"extracted": 0, "note": "队列是空的"}
+
+    if not bx.available():
+        return {"extracted": 0, "pending": len(files),
+                "error": "没配 DASHSCOPE_API_KEY —— 原文已留在队列里,配好 key 再点提取"}
+
+    pages, keep = [], []
+    for f in files:
+        try:
+            pages.append(json.loads(f.read_text(encoding="utf-8")))
+            keep.append(f)
+        except ValueError:
+            f.unlink(missing_ok=True)
+
+    saved = skipped = calls = 0
+    failed: list[str] = []
+    for batch in bx.pack(pages):
+        base = pages.index(batch[0])
+        try:
+            got = await asyncio.to_thread(bx.extract_batch, batch)
+            calls += 1
+        except bx.NoKey as e:
+            return {"extracted": saved, "error": str(e)}
+        except Exception as e:      # noqa: BLE001 —— 一批失败不该拖垮其它批
+            failed.append(f"{type(e).__name__}: {str(e)[:90]}")
+            continue
+
+        for item in got:
+            page = batch[item["idx"]]
+            for j in item["jobs"]:
+                jid = _job_key(j, page.get("url"))
+                exists = bs.get_job(jid)
+                # jd 只升不降:列表页提出来的没有 jd,不能把详情页存的冲掉
+                bs.upsert_jobs([{
+                    "job_id": jid, "url": page.get("url"),
+                    "title": j.get("title"), "company": j.get("company"),
+                    "city": j.get("city"), "district": j.get("district"),
+                    "salary_text": j.get("salary_text"),
+                    "salary_min": j.get("salary_min"), "salary_max": j.get("salary_max"),
+                    "salary_months": j.get("salary_months"),
+                    "experience": j.get("experience"), "degree": j.get("degree"),
+                    "jd": j.get("jd"),
+                    "jd_state": "have" if (j.get("jd") or "").strip() else "unknown",
+                    "tags": j.get("tags") or [],
+                    "hr_name": j.get("hr_name"), "hr_title": j.get("hr_title"),
+                    "raw": {"from_page": page.get("url"), "extracted": j},
+                }])
+                if j.get("my_status"):
+                    bs.save_interaction(jid, "viewed", note=str(j["my_status"])[:60])
+                # 片段:JD 全文是核心,标题/公司/薪资兜底
+                job = bs.get_job(jid) or {}
+                bs.save_fragments(jid, bfr.build(job))
+                skipped += 1 if exists else 0
+                saved += 0 if exists else 1
+        # 这一批处理完了,从队列移除
+        for p_ in batch:
+            idx = pages.index(p_)
+            keep[idx].unlink(missing_ok=True)
+
+    st = bs.stats()
+    return {"extracted": saved, "updated": skipped, "ai_calls": calls,
+            "pending": len(list(PENDING_DIR.glob("*.json"))),
+            "jobs_total": st["jobs"], "failed": failed}
+
+
+def _job_key(j: dict[str, Any], url: str | None) -> str:
+    """岗位 id。
+
+    没有平台 id 可用(我们走的是页面文字这条路),所以用
+    公司+标题+薪资 做稳定指纹 —— 同一个岗位反复浏览要落到同一行,
+    否则库里会堆一堆重复。
+    """
+    import hashlib
+    seed = "|".join(str(j.get(k) or "") for k in ("company", "title", "salary_text"))
+    if not seed.strip("|"):
+        seed = str(url or "")
+    return "t_" + hashlib.sha1(seed.encode("utf-8")).hexdigest()[:16]
+
+
+@app.get("/api/boss/jobs")
+async def list_jobs(limit: int = Query(30, ge=1, le=200)) -> dict[str, Any]:
+    """已入库的岗位。侧边栏和状态页都用它。"""
+    with bs.connect() as c:
+        rows = [dict(r) for r in c.execute(
+            "SELECT job_id, title, company, city, salary_text, jd_state, updated_at "
+            "FROM jobs ORDER BY updated_at DESC LIMIT ?", (limit,))]
+        total = c.execute("SELECT COUNT(*) n FROM jobs").fetchone()["n"]
+    pend = len(list(PENDING_DIR.glob("*.json"))) if PENDING_DIR.exists() else 0
+    return {"items": rows, "total": total, "pending": pend}
 
 
 @app.get("/api/boss/recent")

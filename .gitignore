@@ -46,3 +46,4 @@ logs/
 
 # BOSS 录制的接口响应,含投递记录等个人信息
 data/boss_capture/
+data/boss_pending/

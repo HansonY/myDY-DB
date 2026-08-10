@@ -1,11 +1,14 @@
 {
   "manifest_version": 3,
-  "name": "BOSS → 我的岗位库",
-  "version": "0.2.0",
-  "description": "你正常浏览 BOSS 直聘,把看过的岗位存进本机知识库。不发额外请求、不碰 cookie、数据只到 localhost。",
+  "name": "我的岗位库",
+  "version": "0.3.0",
+  "description": "在 BOSS 浏览时,一键把当前页面的岗位信息存进本机知识库。AI 提取,不用管接口。数据只到 localhost。",
   "permissions": [
     "storage",
-    "tabs"
+    "tabs",
+    "sidePanel",
+    "scripting",
+    "activeTab"
   ],
   "host_permissions": [
     "https://*.zhipin.com/*",
@@ -38,7 +41,9 @@
     }
   ],
   "action": {
-    "default_popup": "popup.html",
     "default_title": "我的岗位库"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
   }
 }

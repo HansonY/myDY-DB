@@ -1,0 +1,62 @@
+<meta charset="utf-8">
+<style>
+:root{--bg:#0a0c0f;--surface:#12151a;--surface2:#161b22;--line:#1e242d;--line2:#242a33;
+  --fg:#e9ecf1;--fg-hi:#f2f5f9;--dim:#8b93a1;--dim2:#4e5866;
+  --accent:#4c8dff;--accent-t:#7fb0ff;--accent-dim:rgba(76,141,255,.16);
+  --warn:#ff7a45;--ok:#5cb87a;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+  font:13px/1.6 -apple-system,"PingFang SC",sans-serif;padding:14px}
+h1{margin:0 0 2px;font-size:14px;font-weight:600}
+.sub{color:var(--dim2);font-size:10.5px;margin-bottom:14px}
+
+.now{border:1px solid var(--line);border-radius:10px;background:var(--surface);
+  padding:12px;margin-bottom:10px}
+.now .kind{font-size:10px;color:var(--dim2);letter-spacing:.5px;margin-bottom:6px}
+.now .t{font-size:14px;font-weight:600;color:var(--fg-hi);line-height:1.4}
+.now .m{font-size:11.5px;color:var(--dim);margin-top:3px}
+.now .warn{color:var(--warn);font-size:11.5px}
+
+button{width:100%;background:var(--accent-dim);color:var(--accent-t);
+  border:1px solid rgba(76,141,255,.35);border-radius:8px;padding:9px;
+  font-size:12.5px;font-weight:500;cursor:pointer;margin-bottom:7px}
+button:hover:not(:disabled){background:rgba(76,141,255,.26)}
+button:disabled{opacity:.4;cursor:default}
+button.ghost{background:transparent;border-color:var(--line2);color:var(--dim);font-weight:400}
+button.ghost:hover{color:var(--fg);border-color:var(--dim2)}
+
+.auto{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--dim);
+  padding:7px 0 11px}
+.auto input{accent-color:var(--accent)}
+
+.msg{font-size:11px;color:var(--dim2);min-height:16px;line-height:1.5;margin-bottom:10px}
+.msg.ok{color:var(--ok)} .msg.bad{color:var(--warn)}
+
+.hd{display:flex;align-items:baseline;gap:7px;margin:14px 0 7px}
+.hd b{font-size:11.5px;font-weight:600}
+.hd span{font-size:10px;color:var(--dim2)}
+.list{display:flex;flex-direction:column;gap:1px}
+.it{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.it .t{font-size:12px;color:var(--fg);line-height:1.4;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.it .m{font-size:10px;color:var(--dim2);font-family:var(--mono);margin-top:2px}
+.empty{color:var(--dim2);font-size:11px;line-height:1.6;padding:14px 0}
+</style>
+
+<h1>我的岗位库</h1>
+<div class="sub">存在本机 · 不外传</div>
+
+<div class="now" id="now"><div class="kind">当前页面</div>
+  <div class="t" style="color:var(--dim)">读取中…</div></div>
+
+<button id="save">存入岗位库</button>
+<button class="ghost" id="extract" title="攒一批一起交给 AI —— 比一页一次快也便宜">没有待提取的</button>
+<button class="ghost" id="open">打开岗位库 ↗</button>
+<label class="auto"><input type="checkbox" id="autochk">
+  自动存(每打开一个岗位就存)</label>
+<div class="msg" id="msg"></div>
+
+<div class="hd"><b>已存</b><span id="cnt"></span></div>
+<div class="list" id="list"><div class="empty">还没有。打开一个岗位页,点上面「存入」。</div></div>
+
+<script src="sidepanel.js"></script>

@@ -1,3 +1,9 @@
+/* 点扩展图标就开侧边栏,不弹小窗 —— 侧边栏是常驻的,更适合边浏览边看 */
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true })
+    .catch(() => {});
+});
+
 /* 后台:攒一批再发,别每个响应都打一次本地服务。
  * 数据**只发到 localhost**,不去任何别的地方。 */
 const ENDPOINT = 'http://localhost:8001/api/boss/ingest';
