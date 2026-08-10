@@ -1,4 +1,4 @@
-"""从页面文字里提取岗位信息 —— 用千问,**一次调用处理多页**。
+"""从页面文字里提取岗位信息 —— **一次调用处理多页**,供应商无关。
 
 **为什么走这条路而不是解析接口。**
 之前一直卡在「我不知道 BOSS 的字段叫什么」:接口路径会变、字段名会变、
@@ -9,8 +9,12 @@
 一次读几页。按字符预算打包而不是按页数 —— 详情页几千字、列表页可能两万字,
 按页数打包会一会儿太空一会儿超限。
 
-没有 DASHSCOPE_API_KEY 时**不假装能提取**:原文照样存下来(待处理),
-等配好 key 再补。宁可留一批待处理,也不要瞎猜出错的结构化数据。
+用哪家模型由 .env 的 LLM_PROVIDER 决定(千问 / MiniMax / DeepSeek / 本地 Ollama …)——
+它们都是 OpenAI 兼容的 chat/completions,差别只有 base_url、model、key,
+所以统一走 llm.py,这里不认任何一家。
+
+没配 key 时**不假装能提取**:原文照样存下来(待处理),配好再补。
+宁可留一批待处理,也不要瞎猜出错的结构化数据。
 """
 
 from __future__ import annotations
@@ -19,14 +23,9 @@ import json
 import re
 from typing import Any
 
-import httpx
+import llm
 
-from config import settings
-
-ENDPOINT = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
-MODEL = "qwen-plus"          # 不用带慢思考的型号 —— 那个会挂到分钟级
-
-# 一次调用塞多少字。qwen-plus 上下文很大,但塞太满会让它偷懒漏页 ——
+# 一次调用塞多少字。现在这几家上下文都很大,但塞太满会让模型偷懒漏页 ——
 # 18K 字符大概是 4–6 个详情页,或 1–2 个长列表页。
 CHARS_PER_CALL = 18000
 
@@ -51,12 +50,10 @@ idx 必须和输入的 n 一致(没提到岗位的页面给空 jobs 数组):
 "hr_name":null,"hr_title":null,"my_status":null}]}]}"""
 
 
-class NoKey(RuntimeError):
-    """没配 DASHSCOPE_API_KEY。调用方应把原文留作待处理,不要丢。"""
-
-
-def available() -> bool:
-    return bool(settings.dashscope_api_key.strip())
+# 供应商无关 —— 千问 / MiniMax / DeepSeek 都行,换家只改 .env。
+# 之前把千问的端点和模型名写死在这里,想换一家就得改代码。
+NoKey = llm.NoKey
+available = llm.available
 
 
 def pack(pages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
@@ -81,9 +78,8 @@ def extract_batch(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     只发**一次** API 请求。调用方要处理更多页时先用 `pack()` 分批。
     """
-    key = settings.dashscope_api_key.strip()
-    if not key:
-        raise NoKey("没有 DASHSCOPE_API_KEY")
+    if not llm.available():
+        raise llm.NoKey("没配 LLM 的 API key")
     if not pages:
         return []
 
@@ -96,28 +92,9 @@ def extract_batch(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         head += "]"
         parts.append(f"{head}\n{(p.get('text') or '')[:CHARS_PER_CALL]}")
 
-    r = httpx.post(
-        ENDPOINT,
-        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-        json={
-            "model": MODEL,
-            "messages": [{"role": "system", "content": PROMPT},
-                         {"role": "user", "content": "\n\n".join(parts)}],
-            "temperature": 0.1,          # 提取任务,不要创造性
-            "response_format": {"type": "json_object"},
-        },
-        timeout=180,                      # 多页一次,给足时间
-        # 国内接口绕开系统代理 —— 抖音那边实测走代理必 SSL EOF
-        trust_env=False,
-    )
-    r.raise_for_status()
-    content = r.json()["choices"][0]["message"]["content"]
-    # 即使要求了 json_object,也可能被围栏包住 —— 兜一下
-    content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip())
-    try:
-        data = json.loads(content)
-    except ValueError as e:
-        raise RuntimeError(f"模型没返回合法 JSON:{content[:200]}") from e
+    data = llm.chat_json(PROMPT, "\n\n".join(parts), timeout=180)
+    if not isinstance(data, dict):
+        raise RuntimeError(f"模型返回的不是对象:{str(data)[:120]}")
 
     out: list[dict[str, Any]] = []
     for pg in (data.get("pages") or []):

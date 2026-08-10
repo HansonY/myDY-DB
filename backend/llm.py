@@ -1,0 +1,157 @@
+"""统一的 LLM 出口 —— 换供应商只改配置,不改代码。
+
+之前把通义千问的端点和模型名写死在提取代码里,结果想换 MiniMax 就得改代码。
+这几家(千问 / MiniMax / DeepSeek / 月之暗面 / 智谱 / 本地 Ollama)**都是
+OpenAI 兼容的 chat/completions**,差别只有三个:base_url、model、api_key。
+所以做成一张表 + 三个可覆盖的配置项。
+
+配置(写 .env):
+    LLM_PROVIDER=qwen | minimax | deepseek | moonshot | zhipu | ollama | custom
+    LLM_API_KEY=…            不填就回退去找该家的专用键(见 _KEY_FALLBACK)
+    LLM_BASE_URL=…           想用表里没有的服务就填这个,provider=custom
+    LLM_MODEL=…              覆盖默认模型
+
+⚠️ 表里的端点和模型名**我没有全部实测过**。各家改版很勤,所以:
+  1. 三项都可以在 .env 里覆盖
+  2. 提供 `probe()` 自检 —— 配完先跑一次,别等到提取时才发现不通
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+from typing import Any
+
+import httpx
+
+from config import ROOT, settings
+
+# provider → (base_url, 默认模型)
+# 默认模型都挑「快而便宜、够做提取」的那档 —— 提取是结构化任务,
+# 不需要推理型号,那些又慢又贵。
+_PROVIDERS: dict[str, tuple[str, str]] = {
+    "qwen":     ("https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus"),
+    "minimax":  ("https://api.minimaxi.com/v1", "MiniMax-Text-01"),
+    "deepseek": ("https://api.deepseek.com/v1", "deepseek-chat"),
+    "moonshot": ("https://api.moonshot.cn/v1", "moonshot-v1-32k"),
+    "zhipu":    ("https://open.bigmodel.cn/api/paas/v4", "glm-4-flash"),
+    "ollama":   ("http://localhost:11434/v1", "qwen2.5:7b"),
+}
+
+# 没配 LLM_API_KEY 时,按 provider 去找它自己的键 ——
+# 抖音那侧一直用 DASHSCOPE_API_KEY,不能因为加了这一层就让它失效。
+_KEY_FALLBACK = {
+    "qwen": "DASHSCOPE_API_KEY",
+    "minimax": "MINIMAX_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+    "moonshot": "MOONSHOT_API_KEY",
+    "zhipu": "ZHIPU_API_KEY",
+}
+
+
+class NoKey(RuntimeError):
+    """没配 key。调用方应把原始数据留着待处理,不要丢。"""
+
+
+def _env(name: str) -> str:
+    v = os.environ.get(name, "").strip()
+    if v:
+        return v
+    f = ROOT / ".env"
+    if f.exists():
+        for ln in f.read_text(encoding="utf-8").splitlines():
+            ln = ln.strip()
+            if ln.startswith(f"{name}="):
+                return ln.split("=", 1)[1].strip().strip('"').strip("'")
+    return ""
+
+
+def config() -> dict[str, str]:
+    """当前生效的 LLM 配置。**不含 key 的值**,只说配没配。"""
+    prov = (_env("LLM_PROVIDER") or "qwen").lower()
+    base, model = _PROVIDERS.get(prov, _PROVIDERS["qwen"])
+    base = _env("LLM_BASE_URL") or base
+    model = _env("LLM_MODEL") or model
+    key = _env("LLM_API_KEY")
+    if not key:
+        alt = _KEY_FALLBACK.get(prov)
+        if alt:
+            key = _env(alt) or (settings.dashscope_api_key.strip()
+                                if alt == "DASHSCOPE_API_KEY" else "")
+    return {"provider": prov, "base_url": base, "model": model, "_key": key}
+
+
+def available() -> bool:
+    c = config()
+    # ollama 跑在本机,不需要 key
+    return bool(c["_key"]) or c["provider"] == "ollama"
+
+
+def chat_json(system: str, user: str, timeout: float = 180.0,
+              temperature: float = 0.1) -> Any:
+    """要一个 JSON 回复。返回已解析的对象。
+
+    `response_format=json_object` 不是所有家都支持,所以**不依赖它** ——
+    带上是锦上添花,解析时照样兜围栏和前后废话。
+    """
+    c = config()
+    if not c["_key"] and c["provider"] != "ollama":
+        raise NoKey(f"没配 {c['provider']} 的 API key")
+
+    headers = {"Content-Type": "application/json"}
+    if c["_key"]:
+        headers["Authorization"] = f"Bearer {c['_key']}"
+
+    r = httpx.post(
+        c["base_url"].rstrip("/") + "/chat/completions",
+        headers=headers,
+        json={
+            "model": c["model"],
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": user}],
+            "temperature": temperature,
+            "response_format": {"type": "json_object"},
+        },
+        timeout=timeout,
+        # 国内接口绕开系统代理 —— 抖音那边实测走代理必 SSL EOF
+        trust_env=False,
+    )
+    if r.status_code >= 400:
+        # 把服务端的原话带出来 —— 「模型名不对」「余额不足」这类只有它说得清
+        raise RuntimeError(f"{c['provider']} HTTP {r.status_code}: {r.text[:220]}")
+    content = r.json()["choices"][0]["message"]["content"]
+    content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip())
+    try:
+        return json.loads(content)
+    except ValueError:
+        # 有些模型会在 JSON 前后多说两句 —— 抠出最外层大括号再试一次
+        m = re.search(r"\{.*\}", content, re.S)
+        if m:
+            return json.loads(m.group())
+        raise RuntimeError(f"{c['model']} 没返回合法 JSON:{content[:200]}")
+
+
+def probe() -> dict[str, Any]:
+    """自检:当前配置到底能不能用。
+
+    各家端点和模型名改得很勤,而我表里的默认值**没有全部实测过** ——
+    与其等到提取时才炸,不如配完先跑这个。
+    """
+    c = config()
+    out = {"provider": c["provider"], "base_url": c["base_url"],
+           "model": c["model"], "key_set": bool(c["_key"])}
+    if not c["_key"] and c["provider"] != "ollama":
+        out["ok"] = False
+        out["error"] = f"没配 key。填 LLM_API_KEY 或 {_KEY_FALLBACK.get(c['provider'], '?')}"
+        return out
+    try:
+        got = chat_json('只输出 JSON:{"ok":true}', "回一个 {\"ok\":true}", timeout=45)
+        out["ok"] = bool(isinstance(got, dict) and got.get("ok"))
+        out["reply"] = got
+    except Exception as e:      # noqa: BLE001
+        out["ok"] = False
+        out["error"] = f"{type(e).__name__}: {str(e)[:220]}"
+        out["hint"] = ("模型名或端点可能不对 —— 在 .env 里用 LLM_MODEL / "
+                       "LLM_BASE_URL 覆盖成该家文档上的值")
+    return out

@@ -410,13 +410,18 @@ async def post_following_role(body: dict[str, Any] = Body(...)) -> dict[str, Any
 #   3. 写回时保留 .env 里其它行和注释,不整个重写
 
 _EDITABLE = {
-    "DASHSCOPE_API_KEY": "通义千问 API Key(问答、AI 画像用;不填这些功能就空着,不影响检索)",
+    # LLM 供应商可换 —— 都是 OpenAI 兼容端点,差别只有这三项。
+    # 换完记得跑 ./boss.sh llmtest 验证一下,各家模型名改得挺勤。
+    "LLM_PROVIDER": "用哪家模型:qwen / minimax / deepseek / moonshot / zhipu / ollama",
+    "LLM_API_KEY": "上面那家的 API Key(留空则回退去找该家专用键,如 DASHSCOPE_API_KEY)",
+    "LLM_MODEL": "覆盖默认模型名(留空用默认;各家改版勤,不通就来这里改)",
+    "DASHSCOPE_API_KEY": "通义千问 API Key(LLM_PROVIDER=qwen 时的回退键)",
     "DOUYIN_COOKIE": "抖音 cookie(采集必需)。⚠️ 等同账号控制权,只存本机",
     "DOUYIN_SEC_USER_ID": "我自己的 sec_user_id(采点赞/我的作品要)",
     "ASR_MODEL": "语音转写模型(默认 large-v3-turbo)",
     "EMBED_MODEL": "嵌入模型(默认 BAAI/bge-m3,中英互通)",
 }
-_SECRET_KEYS = {"DASHSCOPE_API_KEY", "DOUYIN_COOKIE"}
+_SECRET_KEYS = {"DASHSCOPE_API_KEY", "DOUYIN_COOKIE", "LLM_API_KEY"}
 
 
 def _mask(v: str) -> str:
@@ -430,7 +435,12 @@ def _mask(v: str) -> str:
 async def get_settings() -> dict[str, Any]:
     """当前配置。**密钥只回尾四位**,不回明文。"""
     config.reload()
+    import llm as _llm
+    lc = _llm.config()
     cur = {
+        "LLM_PROVIDER": lc["provider"],
+        "LLM_API_KEY": lc["_key"],
+        "LLM_MODEL": lc["model"],
         "DASHSCOPE_API_KEY": settings.dashscope_api_key,
         "DOUYIN_COOKIE": settings.douyin_cookie,
         "DOUYIN_SEC_USER_ID": settings.douyin_sec_user_id,
@@ -453,7 +463,7 @@ async def get_settings() -> dict[str, Any]:
         # 各功能当前能不能用 —— 比单看「key 填没填」有用
         "features": {
             "collect": bool(settings.has_cookie),
-            "ask": bool(settings.dashscope_api_key.strip()),
+            "ask": _llm.available(),
             "search": True,        # 本地向量,不需要任何 key
             "asr": True,           # 本地 whisper,不需要任何 key
         },
