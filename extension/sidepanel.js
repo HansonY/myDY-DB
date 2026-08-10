@@ -243,6 +243,85 @@ function harvestLinks() {
   return { links: [...out.values()], anchors: document.querySelectorAll('a[href]').length };
 }
 
+/* ── 「指一下下一页」───────────────────────────────────
+ * 不让我猜元素:你在页面上点一次那个按钮,我把它的定位方式记下来。 */
+$('#pick').onclick = async () => {
+  const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!t || !/zhipin\.com/.test(t.url || '')) { msg('先切到 BOSS 的列表页', 'bad'); return; }
+  await chrome.storage.local.remove('pickState');
+  const r = await chrome.runtime.sendMessage({ type: 'armPicker', tabId: t.id });
+  if (r?.error) { msg(r.error, 'bad'); return; }
+  msg('已就绪 —— 切到 BOSS 那个标签页,点一下「下一页」按钮(按 Esc 取消)', 'ok');
+};
+
+async function pickInfo() {
+  const d = await chrome.storage.local.get(['nextSel', 'pickState']);
+  const box = $('#pickinfo');
+  if (d.nextSel?.sels?.length) {
+    box.innerHTML = `<span class="ok">已记住:「${esc(d.nextSel.text || d.nextSel.tag)}」`
+      + ` · ${d.nextSel.sels.length + (d.nextSel.parentSels?.length || 0)} 种定位方式</span>`
+      + ` <a id="forget">忘掉重指</a>`;
+    $('#forget').onclick = async () => {
+      await chrome.runtime.sendMessage({ type: 'forgetNext' });
+      msg('已忘掉 —— 重新指一次', ''); pickInfo();
+    };
+  } else if (d.pickState?.cancelled) {
+    box.innerHTML = '<span class="dimz">上次取消了 —— 还没记住任何按钮</span>';
+  } else {
+    box.innerHTML = '<span class="dimz">还没指过 —— 不指也能跑,但那是我按「下一页」三个字猜的,可能猜错</span>';
+  }
+}
+
+/* ── 自动翻页 ───────────────────────────────────────── */
+$('#pgo').onclick = async () => {
+  const d = await chrome.storage.local.get('paging');
+  if (d.paging?.running) { chrome.runtime.sendMessage({ type: 'stopPaging' }); return; }
+  const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!t || !/zhipin\.com/.test(t.url || '')) { msg('先切到 BOSS 的列表页', 'bad'); return; }
+  msg('开始翻页 —— 别关这个标签页,翻完会把抓到的链接填进下面的框', 'ok');
+  const r = await chrome.runtime.sendMessage({
+    type: 'startPaging', tabId: t.id, want: parseInt($('#pgn').value, 10) || 5,
+  });
+  if (r?.error) msg(r.error, 'bad');
+  else {
+    msg(`翻了 ${r.pages} 页 · 存了 ${r.saved} 页原文 · 抓到 ${r.links} 个岗位链接`, 'ok');
+    fillPagedLinks();
+  }
+};
+
+/** 翻页抓到的链接填进批量框,顺手把已存过的剔掉 */
+async function fillPagedLinks() {
+  const d = await chrome.runtime.sendMessage({ type: 'pagingStat' });
+  const links = d?.pagedLinks || [];
+  if (!links.length) return;
+  let fresh = links, known = [];
+  try {
+    const k = await (await fetch(API + '/api/boss/known', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ urls: links }),
+    })).json();
+    fresh = k.fresh || links; known = k.known || [];
+  } catch (e) { /* 服务没开就不筛 */ }
+  $('#links').value = fresh.join('\n');
+  msg(`抓到 ${links.length} 个链接`
+    + (known.length ? `,${known.length} 个已存过(已剔除)` : '')
+    + ` → 待补详情 ${fresh.length} 个。点下面「开始」。`, fresh.length ? 'ok' : '');
+}
+
+async function pagingStat() {
+  let d = {};
+  try { d = await chrome.runtime.sendMessage({ type: 'pagingStat' }) || {}; } catch (e) { return; }
+  const p = d.paging || {};
+  const box = $('#pstat');
+  if (!p.want) { box.innerHTML = ''; return; }
+  box.innerHTML = `<div class="bp">${p.running ? '翻页中' : '已结束'} · `
+    + `翻了 ${p.done || 0}/${p.want} 页 · 存 ${p.saved || 0} 页 · 链接 ${p.links || 0} 个</div>`
+    + (p.log || []).slice(0, 6).map(l => `<div class="ml ${l.note ? 'bad' : 'ok'}">`
+        + `${esc(l.label || '')} ${l.note ? esc(l.note)
+          : `${l.n} 个岗位(新 ${l.fresh})· ${l.chars} 字`}</div>`).join('');
+  $('#pgo').textContent = p.running ? '停止' : '开始';
+}
+
 $('#harvest').onclick = async () => {
   const btn = $('#harvest');
   btn.disabled = true; btn.textContent = '抓取中…';
@@ -292,5 +371,5 @@ $('#bgo').onclick = async () => {
   autoStat();
 };
 
-readPage(); refresh(); autoStat();
-setInterval(() => { refresh(); autoStat(); }, 4000);
+readPage(); refresh(); autoStat(); pagingStat(); pickInfo();
+setInterval(() => { refresh(); autoStat(); pagingStat(); pickInfo(); }, 3000);

@@ -50,6 +50,17 @@ button.ghost:hover{color:var(--fg);border-color:var(--dim2)}
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .it .m{font-size:10px;color:var(--dim2);font-family:var(--mono);margin-top:2px}
 .empty{color:var(--dim2);font-size:11px;line-height:1.6;padding:14px 0}
+.row{display:flex;align-items:center;gap:6px;margin-bottom:8px}
+.row .lbl{font-size:11.5px;color:var(--dim);white-space:nowrap}
+.row input[type=number]{width:52px;background:var(--surface);border:1px solid var(--line);
+  border-radius:6px;padding:5px 6px;color:var(--fg);font:12px var(--mono);text-align:center}
+.row input:focus{outline:none;border-color:rgba(76,141,255,.45)}
+button.inl{width:auto;margin:0 0 0 auto;padding:6px 12px}
+#pickinfo{font-size:10.5px;line-height:1.55;margin:-3px 0 8px}
+#pickinfo .ok{color:var(--ok)} #pickinfo .dimz{color:var(--dim2)}
+#pickinfo a{color:var(--accent-t);cursor:pointer;text-decoration:underline}
+#pstat{font-size:11px;margin-bottom:10px}
+#pstat .bp{color:var(--accent-t);margin-bottom:3px}
 
 /* 自动存战果 —— 自动的东西必须显示它干了什么,否则等于蒙眼信它 */
 #astat{font-size:11px;line-height:1.5;margin:-4px 0 10px}
@@ -84,7 +95,18 @@ textarea:focus{outline:none;border-color:rgba(76,141,255,.45)}
 <div class="hd"><b>自动存</b><span>断在哪一环一眼能看到</span></div>
 <div id="astat"></div>
 
-<div class="hd"><b>批量存入</b><span>从列表页抓链接,逐个打开→存→关</span></div>
+<div class="hd"><b>自动翻页</b><span>你指一次「下一页」,之后照着点</span></div>
+<button class="ghost" id="pick">指一下「下一页」在哪</button>
+<div id="pickinfo"></div>
+<div class="row">
+  <span class="lbl">往后翻</span>
+  <input id="pgn" type="number" min="1" max="30" value="5">
+  <span class="lbl">页</span>
+  <button class="ghost inl" id="pgo">开始</button>
+</div>
+<div id="pstat"></div>
+
+<div class="hd"><b>批量存入</b><span>抓到的链接逐个打开取职位描述</span></div>
 <button class="ghost" id="harvest"
   title="只读已经加载出来的页面,不发任何请求。列表是懒加载的,先往下滚几屏">抓本页岗位链接</button>
 <textarea id="links" placeholder="点上面「抓本页岗位链接」自动填,

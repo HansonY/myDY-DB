@@ -282,8 +282,8 @@ async function autoSave(tabId, url, via) {
     return finish({ lastErr: '不是 zhipin 页面,跳过' });
   if (!(await isAutoOn()))
     return finish({ lastErr: '「自动存」没勾上' });
-  if (batch.running || filling)
-    return finish({ lastErr: '批量任务在跑,自动存让路' });
+  if (batch.running || filling || paging.running)
+    return finish({ lastErr: '批量/翻页任务在跑,自动存让路' });
 
   // 同一页别反复存。去重记录也放 storage —— worker 重启后内存里的 Map 就没了。
   const bare = String(url).split('#')[0];
@@ -436,3 +436,352 @@ chrome.runtime.onMessage.addListener((msg, _s, reply) => {
     return true;
   }
 });
+
+
+/* ══════════════════════════════════════════════════════════════
+ * 模拟点「下一页」自动翻页
+ *
+ * 为什么点按钮而不是改 URL 的 page 参数:
+ * 不用假设它怎么分页。BOSS 是单页应用,改 query 未必触发它自己的路由;
+ * 而「下一页」这个按钮是它自己的翻页入口,点它等于走它设计好的那条路。
+ *
+ * **找按钮靠文字,不靠 class。** class 名是最容易被改版打断的东西,
+ * 而「下一页」这三个字是给人看的,不会随便改。
+ *
+ * **最关键的一条:每次点完都验证内容真的换了。**
+ * 如果选错了元素(比如点到一个没反应的 span),循环会一遍遍抓同一页,
+ * 然后报告「成功翻了 10 页」—— 界面显示在工作、实际一页没动。
+ * 这个项目已经栽过一次同类的(「已送入库 5」其实全是噪音),
+ * 所以这里用**内容指纹**判断:指纹没变就是没翻动,立刻停,如实说。
+ *
+ * ⚠️ 这会产生你没有亲手点过的请求。所以:必须点按钮才开始、
+ * 4–9 秒随机间隔、指纹不变立刻停、硬上限 30 页、随时可停。
+ * ══════════════════════════════════════════════════════════════ */
+
+const MAX_PAGES = 30;
+
+/** 页面指纹:拿前若干个岗位链接拼起来。翻页成功它必然变。 */
+function pageFingerprintInPage() {
+  const hrefs = [...document.querySelectorAll('a[href]')]
+    .map(a => { try { return new URL(a.getAttribute('href'), location.href).pathname; }
+                catch (e) { return ''; } })
+    .filter(p => /job_detail|\/job\//.test(p));
+  return { fp: hrefs.slice(0, 12).join('|'), n: hrefs.length, url: location.href };
+}
+
+/** 找到并点「下一页」。找不到 / 已禁用都如实回报,不假装点了。 */
+function clickNextInPage() {
+  const WANT = /^(下一页|下页|next|›|»|>)$/i;
+  let label = null;
+  for (const e of document.querySelectorAll('a,button,li,span,div,i,em')) {
+    const t = (e.textContent || '').trim();
+    if (!WANT.test(t)) continue;
+    // 别选到「包着按钮的外层容器」—— 点容器往往没反应
+    if (e.querySelector('a,button')) continue;
+    label = e; break;
+  }
+  if (!label) return { error: '页面上找不到「下一页」' };
+
+  // 文字可能在 <span> 里,真正可点的是外面的 <a>/<button>/<li>
+  let btn = label;
+  for (let i = 0; i < 4; i++) {
+    if (/^(A|BUTTON)$/.test(btn.tagName)) break;
+    const p = btn.parentElement;
+    if (!p) break;
+    if (/^(A|BUTTON|LI)$/.test(p.tagName)) { btn = p; break; }
+    btn = p;
+  }
+
+  // 到最后一页时按钮通常被置灰 —— 但**不能只靠这个判断**,
+  // 各家写法不一样。真正的判据是点完指纹有没有变(见调用方)。
+  const cls = `${label.className || ''} ${btn.className || ''}`;
+  if (/disabled|is-disabled|no-more|cur-last/i.test(String(cls))
+      || btn.getAttribute?.('aria-disabled') === 'true'
+      || btn.hasAttribute?.('disabled')) {
+    return { error: '「下一页」是禁用状态,已经是最后一页' };
+  }
+  btn.click();
+  return { ok: true, tag: btn.tagName, cls: String(btn.className || '').slice(0, 40) };
+}
+
+let paging = { running: false, want: 0, done: 0, saved: 0, links: 0, log: [] };
+
+async function startPaging(tabId, want) {
+  if (paging.running) return { error: '已经在翻了' };
+  want = Math.min(MAX_PAGES, Math.max(1, parseInt(want, 10) || 5));
+
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab || !/^https:\/\/[^/]*zhipin\.com\//.test(tab.url || ''))
+    return { error: '当前标签页不是 BOSS 页面' };
+
+  paging = { running: true, want, done: 0, saved: 0, links: 0, log: [] };
+  const found = new Map();
+  await chrome.storage.local.set({ paging });
+  keepAlive(true);
+
+  const run = async (fn) => {
+    const [r] = await chrome.scripting.executeScript({ target: { tabId }, func: fn, world: 'MAIN' });
+    return r?.result;
+  };
+
+  // 先把当前页收了 —— 人已经翻到第 6 页了,这一页不该漏掉
+  const collect = async (label) => {
+    const page = await readTabSettled(tabId);
+    if (page && page.len >= MIN_CHARS) {
+      await saveText(page, { auto: true, force: true });
+      paging.saved++;
+    }
+    const h = await run(harvestLinksInPage);
+    let fresh = 0;
+    for (const l of (h?.links || [])) {
+      const k = l.split('?')[0];
+      if (!found.has(k)) { found.set(k, l); fresh++; }
+    }
+    paging.links = found.size;
+    paging.log.unshift({ label, n: h?.links?.length || 0, fresh, chars: page?.len || 0 });
+    paging.log = paging.log.slice(0, 40);
+    await chrome.storage.local.set({ paging });
+  };
+
+  try {
+    await collect('当前页');
+
+    for (let i = 0; i < want; i++) {
+      if (!paging.running) break;
+      const before = await run(pageFingerprintInPage);
+
+      // **先用你指过的那个**。没指过才退回「按文字猜」——
+      // 猜是兜底,不是主路:猜错了会一遍遍抓同一页。
+      const { nextSel } = await chrome.storage.local.get('nextSel');
+      let c;
+      if (nextSel?.sels?.length) {
+        const [r2] = await chrome.scripting.executeScript({
+          target: { tabId }, func: clickLearnedInPage, args: [nextSel],
+        });
+        c = r2?.result;
+        if (c?.used && !paging.usedSel) paging.usedSel = c.used;
+      } else {
+        c = await run(clickNextInPage);
+        paging.guessed = true;
+      }
+      if (c?.error) { paging.log.unshift({ label: '停止', note: c.error }); break; }
+
+      // **验证真的翻动了。** 轮询指纹,最多等 10 秒。
+      let changed = false;
+      for (let t = 0; t < 20; t++) {
+        await sleep(500);
+        const now = await run(pageFingerprintInPage);
+        if (now && now.fp && now.fp !== before?.fp) { changed = true; break; }
+      }
+      if (!changed) {
+        // 这是最重要的一条:没翻动就别继续。继续下去会一遍遍抓同一页,
+        // 然后报「翻了 10 页」—— 看着在工作,其实一页没动。
+        paging.log.unshift({ label: '停止',
+          note: '点了「下一页」但内容没变 —— 可能已到最后一页,或者点到的不是真的翻页按钮' });
+        break;
+      }
+      await sleep(900);         // 让异步内容渲染完
+      paging.done++;
+      await collect(`第 ${paging.done + 1} 页`);
+      if (i < want - 1 && paging.running) await sleep(4000 + Math.random() * 5000);
+    }
+  } catch (e) {
+    paging.log.unshift({ label: '出错', note: String(e.message).slice(0, 80) });
+  } finally {
+    paging.running = false;
+    keepAlive(false);
+    // 抓到的链接交给「批量存入」去补职位描述 —— 翻页只拿广度和线索
+    await chrome.storage.local.set({ paging, pagedLinks: [...found.values()] });
+  }
+  return { pages: paging.done + 1, saved: paging.saved, links: found.size };
+}
+
+/* harvestLinks 的副本。executeScript 把函数序列化后注入页面,**拿不到外层作用域**,
+ * 所以不能复用侧边栏里那份。两处逻辑必须一致 ——
+ * 改这里记得改 extension/sidepanel.js 里的 harvestLinks。 */
+function harvestLinksInPage() {
+  const out = new Map();
+  for (const a of document.querySelectorAll('a[href]')) {
+    let u;
+    try { u = new URL(a.getAttribute('href'), location.href); } catch (e) { continue; }
+    if (!/zhipin\.com$/.test(u.hostname.replace(/^www\./, ''))) continue;
+    if (!/job_detail|\/job\//.test(u.pathname)) continue;
+    const key = u.origin + u.pathname;
+    if (!out.has(key)) out.set(key, u.href);
+  }
+  return { links: [...out.values()] };
+}
+
+chrome.runtime.onMessage.addListener((msg, _s, reply) => {
+  if (msg?.type === 'armPicker') { armPicker(msg.tabId).then(r => reply(r)); return true; }
+  if (msg?.type === 'pickedNext') {
+    if (msg.cancelled) { chrome.storage.local.set({ pickState: { cancelled: true } }); return; }
+    // 学到的东西必须落 storage:MV3 的 worker 说没就没,模块变量留不住
+    chrome.storage.local.set({
+      nextSel: { sels: msg.sels, parentSels: msg.parentSels, text: msg.text, tag: msg.tag },
+      pickState: { got: true, text: msg.text, n: (msg.sels || []).length },
+    });
+    return;
+  }
+  if (msg?.type === 'forgetNext') { chrome.storage.local.remove(['nextSel', 'pickState']); reply?.({ ok: true }); }
+  if (msg?.type === 'startPaging') { startPaging(msg.tabId, msg.want).then(r => reply(r)); return true; }
+  if (msg?.type === 'stopPaging') { paging.running = false; reply({ ok: true }); }
+  if (msg?.type === 'pagingStat') {
+    chrome.storage.local.get(['paging', 'pagedLinks']).then(d => reply(d)); return true;
+  }
+});
+
+
+/* ══════════════════════════════════════════════════════════════
+ * 「你指一次,我记住」—— 学「下一页」在哪
+ *
+ * 上一版靠文字找按钮(匹配「下一页」三个字)。能用,但仍然是**我在猜**:
+ * 匹配到的可能是个没反应的 span,也可能页面上有好几个类似的东西。
+ *
+ * 现在改成学:你点一下「指一下下一页」,然后**在页面上点那个按钮**。
+ * 我把它的定位方式记下来(不止一种,见下),之后照着点就行。
+ * 这跟这个项目里「学详情接口模板」是同一套思路 ——
+ * **我没见过的东西就别猜,让用户指一次。**
+ *
+ * 记多种定位方式并按顺序回退,是因为单一种都可能失效:
+ *   ① id —— 最准,但很多按钮没有,且可能是随机生成的
+ *   ② ka / aria-label / data-* —— BOSS 用 ka 做埋点,语义稳定(如 ka="page-next")
+ *   ③ tag + class 组合 —— 过滤掉看起来是构建工具生成的(css-xxx / 长数字)
+ *   ④ nth-child 路径 —— 最后手段,DOM 一动就失效,所以放最后
+ * 同时记下按钮文字,点之前核对一下,防止选中了位置相同但含义不同的元素。
+ * ══════════════════════════════════════════════════════════════ */
+
+/* 注入到 **ISOLATED** world:那里既能操作 DOM,又能用 chrome.runtime
+ * (MAIN world 拿不到 chrome.runtime —— 这个坑在 content.js 那边已经踩过一次)。 */
+function armPickerInPage() {
+  if (window.__pickArmed) return { ok: true, already: true };
+  window.__pickArmed = true;
+
+  const tip = document.createElement('div');
+  tip.textContent = '点一下「下一页」按钮 —— 按 Esc 取消';
+  tip.style.cssText = 'position:fixed;z-index:2147483647;left:50%;top:14px;transform:translateX(-50%);'
+    + 'background:#4c8dff;color:#fff;font:13px/1 -apple-system,sans-serif;padding:10px 16px;'
+    + 'border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,.4);pointer-events:none';
+  document.body.appendChild(tip);
+
+  let hot = null;
+  const paint = e => {
+    if (hot) hot.style.outline = '';
+    hot = e.target;
+    if (hot && hot.style) hot.style.outline = '2px solid #4c8dff';
+  };
+
+  const cssEsc = s => (window.CSS && CSS.escape) ? CSS.escape(s) : String(s).replace(/[^\w-]/g, '\\$&');
+
+  function cssPath(el) {
+    const parts = [];
+    for (let e = el; e && e.nodeType === 1 && parts.length < 6; e = e.parentElement) {
+      let p = e.tagName.toLowerCase();
+      if (e.parentElement) {
+        const sibs = [...e.parentElement.children].filter(x => x.tagName === e.tagName);
+        if (sibs.length > 1) p += `:nth-of-type(${sibs.indexOf(e) + 1})`;
+      }
+      parts.unshift(p);
+      if (e.id) { parts[0] = '#' + cssEsc(e.id); break; }
+    }
+    return parts.join(' > ');
+  }
+
+  function selectorsFor(el) {
+    const out = [];
+    const tag = el.tagName.toLowerCase();
+    // ① id(排除看起来是随机生成的)
+    if (el.id && !/^\d/.test(el.id) && !/\d{5,}/.test(el.id)) out.push('#' + cssEsc(el.id));
+    // ② 语义属性 —— BOSS 的 ka 是埋点标记,比 class 稳定
+    for (const a of ['ka', 'data-ka', 'aria-label', 'data-testid', 'title']) {
+      const v = el.getAttribute && el.getAttribute(a);
+      if (v && v.length < 40 && !/["\\]/.test(v)) out.push(`${tag}[${a}="${v}"]`);
+    }
+    // ③ class 组合,过掉构建工具生成的
+    const cls = String(el.className || '').split(/\s+/)
+      .filter(c => c && c.length < 30 && !/\d{3,}/.test(c) && !/^(css|sc|jsx)-/.test(c));
+    if (cls.length) out.push(tag + '.' + cls.map(cssEsc).join('.'));
+    // ④ 路径,最后手段
+    out.push(cssPath(el));
+    return [...new Set(out)];
+  }
+
+  const cleanup = () => {
+    if (hot) hot.style.outline = '';
+    tip.remove();
+    window.__pickArmed = false;
+    document.removeEventListener('mouseover', paint, true);
+    document.removeEventListener('click', onClick, true);
+    document.removeEventListener('keydown', onKey, true);
+  };
+
+  const onKey = e => { if (e.key === 'Escape') { cleanup(); chrome.runtime.sendMessage({ type: 'pickedNext', cancelled: true }); } };
+
+  const onClick = e => {
+    // 拦住这一次点击:此刻是「指给我」,不是真要翻页
+    e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+    const el = e.target;
+    const sels = selectorsFor(el);
+    const text = (el.textContent || '').trim().slice(0, 24);
+    cleanup();
+    chrome.runtime.sendMessage({
+      type: 'pickedNext', sels, text, tag: el.tagName,
+      // 记一下祖先里最近的 a/button —— 有时文字在 span 上,真正可点的是外面那层
+      parentSels: (() => {
+        let p = el.parentElement;
+        for (let i = 0; i < 3 && p; i++, p = p.parentElement) {
+          if (/^(A|BUTTON|LI)$/.test(p.tagName)) return selectorsFor(p);
+        }
+        return [];
+      })(),
+    });
+  };
+
+  document.addEventListener('mouseover', paint, true);
+  document.addEventListener('click', onClick, true);
+  document.addEventListener('keydown', onKey, true);
+  return { ok: true };
+}
+
+/** 照记下来的定位方式点。按顺序试,报告用了哪一条 —— 失败时能看出是哪种定位失效了。 */
+function clickLearnedInPage(learned) {
+  // **按定位方式的可靠度排序,而不是按「自身优先/祖先优先」。**
+  // 实测暴露的问题:你点在 <span class="txt">下一页</span> 上时,
+  // 自身定位是 `span.txt` —— 真实页面上这种 class 可能匹配到别处几十个 span;
+  // 而祖先定位里的 `a[ka="page-next"]` 是语义属性,准确得多。
+  // 按 自身/祖先 排序会先试那个弱的,所以改成按质量排:
+  //   #id > 语义属性([ka]/[aria-label]/…) > class 组合 > nth-of-type 路径
+  const rank = (sel) => sel.startsWith('#') ? 0
+    : /\[[a-z-]+=/.test(sel) ? 1
+    : sel.includes('.') ? 2
+    : 3;
+  const all = [...(learned.sels || []), ...(learned.parentSels || [])]
+    .filter(Boolean)
+    .sort((a, b) => rank(a) - rank(b));
+  for (const sel of all) {
+    let el;
+    try { el = document.querySelector(sel); } catch (e) { continue; }
+    if (!el) continue;
+    // 核对文字:防止选中了位置相同但含义不同的元素(页面改版后很容易发生)
+    const t = (el.textContent || '').trim().slice(0, 24);
+    if (learned.text && t && t !== learned.text && !t.includes(learned.text)) continue;
+    // 文字在 span 上时点它本身可能没反应 —— 往上找一层可点的
+    let btn = el;
+    for (let i = 0; i < 3; i++) {
+      if (/^(A|BUTTON)$/.test(btn.tagName)) break;
+      const p = btn.parentElement;
+      if (!p || /^(A|BUTTON|LI)$/.test(p.tagName)) { btn = p || btn; break; }
+      btn = p;
+    }
+    (btn || el).click();
+    return { ok: true, used: sel, text: t };
+  }
+  return { error: `记下的 ${all.length} 种定位方式都没找到元素 —— 页面可能变了,重新指一次` };
+}
+
+async function armPicker(tabId) {
+  const [r] = await chrome.scripting.executeScript({
+    target: { tabId }, func: armPickerInPage,      // ISOLATED —— 要用 chrome.runtime
+  });
+  return r?.result || { error: '注入失败' };
+}
