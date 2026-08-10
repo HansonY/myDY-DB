@@ -44,9 +44,9 @@ async function readPage() {
   const box = $('#now');
   if (!t || !/zhipin\.com/.test(t.url || '')) {
     page = null;
-    box.innerHTML = '<div class="kind">当前页面</div>'
-      + '<div class="warn">不是 BOSS 页面 —— 打开 zhipin.com 再来</div>';
-    $('#save').disabled = true;
+    box.innerHTML = '<div class="k">当前页面</div>'
+      + '<div class="t" style="color:var(--dim);font-weight:400">不是 BOSS 页面</div>';
+    syncButtons();
     return;
   }
   try {
@@ -56,9 +56,10 @@ async function readPage() {
     page = r.result;
   } catch (e) {
     page = null;
-    box.innerHTML = '<div class="kind">当前页面</div>'
-      + `<div class="warn">读不到页面:${esc(e.message).slice(0, 60)}</div>`;
-    $('#save').disabled = true;
+    box.innerHTML = '<div class="k">当前页面</div>'
+      + `<div class="t" style="color:var(--warn);font-weight:400">读不到页面:${
+          esc(e.message).slice(0, 60)}</div>`;
+    syncButtons();
     return;
   }
   // 问后端这是不是岗位页(只读接口,不写库)
@@ -76,22 +77,46 @@ async function readPage() {
   const label = v
     ? ({ detail: '岗位详情', list: '岗位列表', other: '不像岗位页' })[v.kind]
     : '本地服务没开,无法判定';
-  const sig = v ? `<div class="sig">${
-      (v.hit || []).map(h => `<i class="on">${esc(h.label)}</i>`).join('')
-    }${(v.miss || []).map(m => `<i>${esc(m)}</i>`).join('')}</div>` : '';
-  box.innerHTML = `<div class="kind">当前页面 · ${label}</div>
+  // 只显示命中几类,不把未命中的也铺出来 —— 那会占掉半屏,而且属于调试信息
+  // (要看细节就看后端 /api/boss/detect 的完整返回)。
+  const sig = v?.hit?.length ? ` · 命中 ${v.hit.length} 类信号` : '';
+  box.innerHTML = `<div class="k${v?.is_job ? ' yes' : ''}">当前页面 · ${esc(label)}</div>
     <div class="t">${esc(page.h1 || page.title) || '(没有标题)'}</div>
-    <div class="m">${page.len ?? 0} 字</div>
-    ${v ? `<div class="why ${v.is_job ? 'yes' : 'no'}">${esc(v.why)}</div>${sig}` : ''}`;
-  // other 也允许手动存 —— 判断可能不准,不该因为我猜错就拦着你
-  $('#save').disabled = page.len < 80;
-  $('#save').textContent = v && !v.is_job ? '仍然存这一页' : '存这一页的原文';
+    <div class="m">${page.len ?? 0} 字${sig}</div>`;
+  syncButtons();
+}
+
+/* 三个抓取动作各自一个按钮,按钮名就是它干的事:
+ *   抓取这页内容      → 只存当前这一页原文
+ *   抓取该页所有岗位  → 逐个打开这一页每个岗位存原文
+ *   自动翻页抓取      → 上面那件事每页做一遍,做完点「下一页」
+ * 以前是「一个开始按钮 + 一个自动下一页勾选框」,点之前看不出会发生什么。
+ *
+ * 后两项只在**列表页**有意义(详情页没有岗位列表、也没有下一页),
+ * 所以在详情页直接禁用并写清原因,而不是让人点了才发现没反应。
+ */
+let running = false;
+
+function syncButtons() {
+  const onList = page?.kind === 'list';
+  const has = !!page && (page.len || 0) >= 80;
+  $('#save').disabled = running || !has;
+  $('#runOne').disabled = running || !onList;
+  $('#runAll').disabled = running || !onList;
+  $('#pgrow').hidden = running || !onList;
+  $('#pickinfo').hidden = running || !onList;
+  $('#stop').hidden = !running;
+  const why = !page ? '打开 zhipin.com 的岗位页再来'
+    : onList ? '' : '这两项要在岗位列表页用(推荐职位 / 搜索结果 / 我的收藏)';
+  $('#runOne').querySelector('i').textContent = why || '逐个打开这一页的每个岗位,存入原文';
+  $('#runAll').querySelector('i').textContent = why || '每页都这么抓,抓完自动翻下一页';
 }
 
 async function save(auto) {
   if (!page || !tab) return;
-  const btn = $('#save');
-  btn.disabled = true; btn.textContent = '提取中…';
+  const btn = $('#save'), lab = btn.querySelector('b');
+  const back = lab.textContent;
+  btn.disabled = true; lab.textContent = '存入中…';
   try {
     const r = await fetch(API + '/api/boss/ingest_text', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -109,50 +134,43 @@ async function save(auto) {
       ? '连不上本地服务 —— 在项目目录跑 ./boss.sh web'
       : '出错:' + e.message, 'bad');
   }
-  btn.textContent = '存这一页的原文';
-  btn.disabled = false;
+  lab.textContent = back;
+  syncButtons();
 }
 
 function msg(t, cls) { const m = $('#msg'); m.textContent = t || ''; m.className = 'msg ' + (cls || ''); }
 
 async function refresh() {
   try {
-    const d = await (await fetch(API + '/api/boss/jobs?limit=8')).json();
-    $('#cnt').textContent = d.total ? `${d.total} 个` : '';
-    const pend = d.pending || 0;
-    const eb = $('#extract');
-    eb.disabled = !pend;
-    eb.textContent = pend ? `AI 提取这 ${pend} 页` : 'AI 提取(暂无)';
-    $('#list').innerHTML = (d.items || []).length
-      ? d.items.map(j => `<div class="it">
+    const [jb, st] = await Promise.all([
+      (await fetch(API + '/api/boss/jobs?limit=8')).json(),
+      (await fetch(API + '/api/boss/stats')).json(),
+    ]);
+    // 三个数字回答「我干到哪儿了」:原文攒了多少还没提取、提取出多少岗位、
+    // 其中多少真拿到了职位描述(只在列表页见过的那些没有描述)。
+    $('#sPend').textContent = jb.pending || 0;
+    $('#sJobs').textContent = jb.total || 0;
+    $('#sJd').textContent = st.jd_have || 0;
+    $('#cnt').textContent = jb.total > 8 ? `共 ${jb.total}` : '';
+    $('#list').innerHTML = (jb.items || []).length
+      ? jb.items.map(j => `<div class="it">
           <div class="t">${esc(j.title) || '(无标题)'}</div>
           <div class="m">${esc(j.company || '')}${j.salary_text ? ' · ' + esc(j.salary_text) : ''}</div>
         </div>`).join('')
-      : '<div class="empty">还没有。打开一个岗位页,点上面「存入」。</div>';
+      : '<div class="empty">还没有。到 BOSS 打开一个岗位页,点上面「抓取这页内容」。</div>';
   } catch (e) {
-    $('#list').innerHTML = '<div class="empty">本地服务没开 —— 跑 ./boss.sh web</div>';
+    for (const id of ['#sPend', '#sJobs', '#sJd']) $(id).textContent = '–';
+    $('#list').innerHTML = '<div class="empty">本地服务没开 —— 在项目目录跑 ./boss.sh web</div>';
   }
 }
 
-$('#extract').onclick = async () => {
-  const b = $('#extract');
-  b.disabled = true; b.textContent = '提取中…(多页一次,请稍等)';
-  try {
-    const r = await fetch(API + '/api/boss/extract', { method: 'POST' });
-    const d = await r.json();
-    if (d.error) msg(d.error, 'bad');
-    else msg(`新增 ${d.extracted} 个岗位` +
-      (d.updated ? `,更新 ${d.updated} 个` : '') +
-      ` · 用了 ${d.ai_calls} 次 AI 调用` +
-      (d.failed?.length ? ` · ${d.failed.length} 批失败` : ''), 'ok');
-    refresh();
-  } catch (e) {
-    msg(/Failed to fetch/.test(e.message) ? '本地服务没开' : '出错:' + e.message, 'bad');
-  }
-  b.disabled = false;
-};
+// AI 提取移到知识库页了(那边能看到队列、失败原因、模型状态)——
+// 面板只管抓,不管提取。顶部「知识库 ↗」是入口。
 
 $('#save').onclick = () => save(false);
+$('#runOne').onclick = () => startRun(false);
+$('#runAll').onclick = () => startRun(true);
+$('#stop').onclick = () => chrome.runtime.sendMessage({ type: 'stopRun' });
 $('#open').onclick = () => chrome.tabs.create({ url: API + '/' });
 $('#autochk').onchange = e => chrome.storage.local.set({ auto: e.target.checked });
 
@@ -212,7 +230,7 @@ async function autoStat() {
           `<div class="ml ${l.ok ? 'ok' : 'bad'}">${l.ok ? '✓' : '✗'} ${
             esc(l.title || l.url || '')?.slice(0, 34)} ${esc(l.note || '')}</div>`).join('');
     $('#bgo').textContent = b.running ? '停止' : '逐个打开并存入';
-    if (b.running) { const d = document.querySelector('details'); if (d) d.open = true; }
+    if (b.running) $('#more').open = true;   // 跑起来就展开,否则进度藏在收起处
   } else { bb.innerHTML = ''; }
 }
 
@@ -275,28 +293,9 @@ async function pickInfo() {
 
 /* ── 批量存入:本页存完 → 翻下一页 ───────────────────────── */
 
-// 「自动下一页」是开关:不勾就只做当前这一页,那时「翻几次」和「指按钮」都是多余的
-function syncNextBox() {
-  $('#nextbox').hidden = !$('#autonext').checked;
-  $('#rgo').textContent = $('#autonext').checked
-    ? `抓这一页,再往后翻 ${$('#pgn').value} 页`
-    : '抓这一页的岗位';
-}
-$('#autonext').onchange = e => {
-  chrome.storage.local.set({ autonext: e.target.checked });
-  syncNextBox();
-};
-$('#pgn').oninput = syncNextBox;
-chrome.storage.local.get('autonext').then(d => {
-  $('#autonext').checked = !!d.autonext; syncNextBox();
-});
-
-$('#rgo').onclick = async () => {
-  const d = await chrome.storage.local.get('run');
-  if (d.run?.running) { chrome.runtime.sendMessage({ type: 'stopRun' }); return; }
+async function startRun(autoNext) {
   const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!t || !/zhipin\.com/.test(t.url || '')) { msg('先切到 BOSS 的岗位列表页', 'bad'); return; }
-  const autoNext = $('#autonext').checked;
   if (autoNext) {
     const { nextSel } = await chrome.storage.local.get('nextSel');
     if (!nextSel?.sels?.length) {
@@ -306,19 +305,22 @@ $('#rgo').onclick = async () => {
   msg('开跑了。别关这个列表标签页 —— 岗位会在另一个后台标签页里轮流打开。', 'ok');
   const r = await chrome.runtime.sendMessage({
     type: 'startRun', tabId: t.id, autoNext,
-    rounds: parseInt($('#pgn').value, 10) || 5,
+    rounds: autoNext ? (parseInt($('#pgn').value, 10) || 5) : 1,
   });
   if (r?.error) msg(r.error, 'bad');
   else msg(`跑完 ${r.rounds} 页 · 存了 ${r.saved} 页原文 · 岗位 ${r.jobs} 个`
     + (r.failed ? ` · 失败 ${r.failed}` : '')
-    + ' → 回岗位库点「提取」让 AI 出结构', 'ok');
-};
+    + ' → 到知识库页点「提取」让 AI 出结构', 'ok');
+}
 
 async function runStat() {
   let d = {};
   try { d = await chrome.runtime.sendMessage({ type: 'runStat' }) || {}; } catch (e) { return; }
   const r = d.run || {};
   const box = $('#rstat');
+  // ⚠️ running 的同步必须在早退**之前**:run 状态一被清空就 return 的话,
+  // running 永远停在 true,按钮全灰着、停止键也不消失,人就没法再开始了。
+  if (running !== !!r.running) { running = !!r.running; syncButtons(); }
   if (!r.rounds && !r.log?.length) { box.innerHTML = ''; return; }
   // 两层进度都要显示:第几页 + 这一页的第几个岗位。
   // 只显示一个总数的话,卡住时分不出是卡在翻页还是卡在某个岗位上。
@@ -327,8 +329,6 @@ async function runStat() {
     + ` · 已存 ${r.saved || 0}${r.failed ? ` · 失败 ${r.failed}` : ''}</div>`
     + (r.log || []).slice(0, 8).map(l =>
         `<div class="ml ${l.bad ? 'bad' : 'ok'}">${esc(l.t)}</div>`).join('');
-  $('#rgo').textContent = r.running ? '停止' : ($('#autonext').checked
-    ? `抓这一页,再往后翻 ${$('#pgn').value} 页` : '抓这一页的岗位');
 }
 
 $('#harvest').onclick = async () => {

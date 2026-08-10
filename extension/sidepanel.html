@@ -1,150 +1,167 @@
 <meta charset="utf-8">
 <style>
-:root{--bg:#0a0c0f;--surface:#12151a;--surface2:#161b22;--line:#1e242d;--line2:#242a33;
+:root{--bg:#0a0c0f;--surface:#12151a;--line:#1e242d;--line2:#242a33;
   --fg:#e9ecf1;--fg-hi:#f2f5f9;--dim:#8b93a1;--dim2:#4e5866;
-  --accent:#4c8dff;--accent-t:#7fb0ff;--accent-dim:rgba(76,141,255,.16);
+  --accent:#4c8dff;--accent-t:#7fb0ff;--accent-dim:rgba(76,141,255,.14);
   --warn:#ff7a45;--ok:#5cb87a;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);
-  font:13px/1.6 -apple-system,"PingFang SC",sans-serif;padding:14px}
-h1{margin:0 0 2px;font-size:14px;font-weight:600}
-.sub{color:var(--dim2);font-size:10.5px;margin-bottom:14px}
+  font:13px/1.5 -apple-system,"PingFang SC",sans-serif;padding:0 13px 24px}
 
-/* ⚠️ 这里以前用负 margin 收紧间距(#astat / #pickinfo 各 -4px / -3px),
-   结果在窄侧边栏里文字换行一多就**压到上一个元素上**。
-   要收紧就调上一个元素的 margin-bottom,别用负 margin 往上顶。 */
+/* ⚠️ 别用负 margin 收紧间距 —— 以前 #astat/-4px、#pickinfo/-3px 这么干过,
+   窄侧边栏里文字一换行就压到上一个元素上。要收紧就调上一个元素的 margin-bottom。 */
 
-.now{border:1px solid var(--line);border-radius:10px;background:var(--surface);
-  padding:12px;margin-bottom:10px}
-.now .kind{font-size:10px;color:var(--dim2);letter-spacing:.5px;margin-bottom:6px}
-.now .t{font-size:14px;font-weight:600;color:var(--fg-hi);line-height:1.4}
-.now .m{font-size:11.5px;color:var(--dim);margin-top:3px}
-.now .warn{color:var(--warn);font-size:11.5px}
-/* 判定依据 —— 摊开给人看它凭什么认。不摊开就没法发现它在瞎认:
-   这个项目栽过一次「界面显示已入库 5,实际全是噪音」。 */
-.now .why{font-size:10.5px;line-height:1.55;margin-top:7px;padding-top:7px;
-  border-top:1px solid var(--line);color:var(--dim)}
-.now .why.yes{color:var(--ok)} .now .why.no{color:var(--dim2)}
-.sig{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}
-.sig i{font-style:normal;font-size:9.5px;padding:1px 5px;border-radius:4px;
-  border:1px solid var(--line2);color:var(--dim2)}
-.sig i.on{border-color:rgba(92,184,122,.4);background:rgba(92,184,122,.1);color:var(--ok)}
+/* ── 顶部:标题 + 知识库入口 ──
+   面板只管抓数据。提取、检索、分析都在知识库那一页做,这里只留一个入口。 */
+.top{display:flex;align-items:center;gap:8px;padding:12px 0 10px}
+.top h1{margin:0;font-size:13.5px;font-weight:600;flex:1 1 auto}
+.top a{font-size:11px;color:var(--accent-t);text-decoration:none;cursor:pointer;
+  border:1px solid rgba(76,141,255,.3);border-radius:6px;padding:4px 9px;white-space:nowrap}
+.top a:hover{background:var(--accent-dim)}
 
-button{width:100%;background:var(--accent-dim);color:var(--accent-t);
-  border:1px solid rgba(76,141,255,.35);border-radius:8px;padding:9px;
-  font-size:12.5px;font-weight:500;cursor:pointer;margin-bottom:7px}
-button:hover:not(:disabled){background:rgba(76,141,255,.26)}
-button:disabled{opacity:.4;cursor:default}
-button.ghost{background:transparent;border-color:var(--line2);color:var(--dim);font-weight:400}
-button.ghost:hover{color:var(--fg);border-color:var(--dim2)}
-button.sm{padding:6px;font-size:11.5px}
+/* ── 统计:一眼看到干到哪儿了 ── */
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:11px}
+.stats div{border:1px solid var(--line);border-radius:8px;background:var(--surface);
+  padding:8px 4px;text-align:center}
+.stats b{display:block;font-family:var(--mono);font-size:17px;font-weight:600;line-height:1.15}
+.stats span{font-size:9.5px;color:var(--dim2)}
+.stats .w{border-color:rgba(255,122,69,.32);background:rgba(255,122,69,.07)}
+.stats .w b{color:var(--warn)}
+.stats .g b{color:var(--ok)}
 
-.auto{display:flex;align-items:flex-start;gap:7px;font-size:11.5px;color:var(--dim);
-  padding:4px 0 8px;line-height:1.45}
-.auto input{accent-color:var(--accent);margin-top:2px;flex:0 0 auto}
+/* ── 当前页 ── */
+.now{border:1px solid var(--line);border-radius:8px;background:var(--surface);
+  padding:9px 10px;margin-bottom:12px}
+.now .k{font-size:9.5px;color:var(--dim2);margin-bottom:3px}
+.now .k.yes{color:var(--ok)}
+.now .t{font-size:12.5px;font-weight:600;color:var(--fg-hi);line-height:1.35;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.now .m{font-size:10px;color:var(--dim2);font-family:var(--mono);margin-top:2px}
 
-.msg{font-size:11px;color:var(--dim2);line-height:1.5;margin-bottom:10px}
-.msg.ok{color:var(--ok)} .msg.bad{color:var(--warn)}
-.msg:empty{margin:0}
+.hd{display:flex;align-items:baseline;gap:6px;margin:0 0 7px}
+.hd b{font-size:11px;font-weight:600;color:var(--dim)}
+.hd span{font-size:9.5px;color:var(--dim2);margin-left:auto}
 
-.hd{display:flex;align-items:baseline;gap:7px;flex-wrap:wrap;margin:18px 0 6px}
-.hd b{font-size:11.5px;font-weight:600}
-.hd span{font-size:10px;color:var(--dim2)}
-.list{display:flex;flex-direction:column;gap:1px}
-.it{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
-.it .t{font-size:12px;color:var(--fg);line-height:1.4;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.it .m{font-size:10px;color:var(--dim2);font-family:var(--mono);margin-top:2px}
-.empty{color:var(--dim2);font-size:11px;line-height:1.6;padding:14px 0}
+/* ── 开关 ── */
+label.sw{display:flex;align-items:flex-start;gap:7px;cursor:pointer;
+  border:1px solid var(--line);border-radius:8px;background:var(--surface);
+  padding:8px 10px;margin-bottom:6px}
+label.sw input{accent-color:var(--accent);margin:1px 0 0;flex:0 0 auto}
+label.sw b{display:block;font-size:12px;font-weight:500;color:var(--fg)}
+label.sw i{display:block;font-style:normal;font-size:10px;color:var(--dim2);
+  line-height:1.45;margin-top:1px}
 
-.row{display:flex;align-items:center;gap:6px;margin:0 0 8px}
-.row .lbl{font-size:11.5px;color:var(--dim);white-space:nowrap}
-.row input[type=number]{width:50px;background:var(--surface);border:1px solid var(--line);
-  border-radius:6px;padding:5px 6px;color:var(--fg);font:12px var(--mono);text-align:center}
+/* ── 动作按钮:名字在上,这一步到底干什么在下。
+   「一个按钮 + 一个勾选框」看不出会发生什么 —— 所以三种抓法各自成一个按钮。 ── */
+button{width:100%;text-align:left;cursor:pointer;font-family:inherit;
+  background:var(--surface);border:1px solid var(--line2);border-radius:8px;
+  padding:8px 10px;margin:0 0 6px;color:var(--fg)}
+button:hover:not(:disabled){border-color:var(--dim2);background:#151a21}
+button:disabled{opacity:.35;cursor:default}
+button b{display:block;font-size:12px;font-weight:500}
+button i{display:block;font-style:normal;font-size:10px;color:var(--dim2);
+  line-height:1.45;margin-top:1px}
+button.stop{background:rgba(255,122,69,.1);border-color:rgba(255,122,69,.4);text-align:center}
+button.stop b{color:var(--warn);font-weight:600}
+button.tiny{width:auto;padding:4px 9px;font-size:10.5px;color:var(--dim);margin:0}
+button.tiny:hover{color:var(--fg)}
+button.wide{text-align:center;padding:6px;font-size:10.5px;color:var(--dim)}
+
+/* 翻页页数,缩进挂在「自动翻页抓取」下面 */
+.row{display:flex;align-items:center;gap:6px;margin:0 0 6px;padding-left:10px}
+.row .lbl{font-size:10.5px;color:var(--dim2);white-space:nowrap}
+.row input[type=number]{width:44px;background:var(--surface);border:1px solid var(--line);
+  border-radius:6px;padding:4px 5px;color:var(--fg);font:11.5px var(--mono);text-align:center}
 .row input:focus{outline:none;border-color:rgba(76,141,255,.45)}
 
-/* 勾上「自动下一页」才出现的那一小组,靠左边一条竖线表示「属于上面那个开关」 */
-#nextbox{border-left:2px solid var(--line2);padding-left:10px;margin:0 0 9px}
-#pickinfo{font-size:10.5px;line-height:1.55}
-#pickinfo .ok{color:var(--ok)} #pickinfo .dimz{color:var(--dim2)}
-#pickinfo a{color:var(--accent-t);cursor:pointer;text-decoration:underline}
-
-/* 进度 —— 自动的东西必须显示它干了什么,否则等于蒙眼信它 */
-#astat,#rstat,#bstat{font-size:11px;line-height:1.5;margin:0 0 10px}
-#astat:empty,#rstat:empty,#bstat:empty{margin:0}
-#astat .ok,#rstat .ok{color:var(--ok)} #astat .bad{color:var(--warn)}
-#astat .dimz{color:var(--dim2)}
-#rstat .bp,#bstat .bp{color:var(--accent-t);margin-bottom:4px}
-.ml{font-size:10px;color:var(--dim2);font-family:var(--mono);margin-top:2px;
+/* ── 进度 / 提示 —— 自动的东西必须显示它干了什么,否则等于蒙眼信它 ── */
+.prog{font-size:10.5px;line-height:1.5;margin:0 0 9px}
+.prog:empty{margin:0}
+.prog .bp{color:var(--accent-t);font-family:var(--mono);margin-bottom:3px}
+.ml{font-size:10px;color:var(--dim2);font-family:var(--mono);margin-top:1px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ml.ok{color:var(--ok)} .ml.bad{color:var(--warn)}
+.msg{font-size:11px;line-height:1.5;color:var(--dim);margin:0 0 9px}
+.msg:empty{margin:0}
+.msg.ok{color:var(--ok)} .msg.bad{color:var(--warn)}
+#pickinfo{font-size:10px;line-height:1.45;color:var(--dim2);padding-left:10px;margin-bottom:8px}
+#pickinfo:empty{margin:0}
+#pickinfo .ok{color:var(--ok)}
+#pickinfo a{color:var(--accent-t);cursor:pointer;text-decoration:underline}
 
-/* 手动粘链接:收进折叠区。它跟自动跑是同一件事,只是入口不同 ——
-   平时摊开只会让人以为是两个功能。 */
-details{margin:2px 0 10px}
-summary{font-size:10.5px;color:var(--dim2);cursor:pointer;padding:3px 0;list-style:none}
+/* ── 折叠:平时用不到的不占位置 ── */
+details{margin:0 0 10px}
+summary{font-size:10px;color:var(--dim2);cursor:pointer;padding:4px 0;list-style:none}
 summary::-webkit-details-marker{display:none}
-summary::before{content:'▸ ';color:var(--dim2)}
+summary::before{content:'▸ '}
 details[open] summary::before{content:'▾ '}
 summary:hover{color:var(--dim)}
-details .in{border-left:2px solid var(--line2);padding-left:10px;margin-top:6px}
-textarea{width:100%;min-height:58px;resize:vertical;background:var(--surface);
-  border:1px solid var(--line);border-radius:8px;padding:8px 9px;color:var(--fg);
-  font:11px/1.5 var(--mono);margin-bottom:7px}
+details .in{border-left:2px solid var(--line2);padding-left:9px;margin-top:5px}
+textarea{width:100%;min-height:52px;resize:vertical;background:var(--surface);
+  border:1px solid var(--line);border-radius:7px;padding:7px 8px;color:var(--fg);
+  font:10.5px/1.5 var(--mono);margin:0 0 6px}
 textarea:focus{outline:none;border-color:rgba(76,141,255,.45)}
+
+.sep{height:1px;background:var(--line);margin:13px 0 12px}
+.list{display:flex;flex-direction:column;gap:3px}
+.it{background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:6px 9px}
+.it .t{font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.it .m{font-size:9.5px;color:var(--dim2);font-family:var(--mono);margin-top:1px}
+.empty{color:var(--dim2);font-size:10.5px;line-height:1.6;padding:10px 0}
 </style>
 
-<h1>我的岗位库</h1>
-<div class="sub">存在本机 · 不外传</div>
-
-<div class="now" id="now"><div class="kind">当前页面</div>
-  <div class="t" style="color:var(--dim)">读取中…</div></div>
-
-<button id="save">存这一页的原文</button>
-<button class="ghost" id="extract" title="攒一批一起交给 AI,比一页一次快也便宜">AI 提取(暂无)</button>
-<button class="ghost" id="open">打开岗位库 ↗</button>
-<div class="msg" id="msg"></div>
-
-<!-- ── 批量:一个块,不再分「批量存入」和「手动补链接」两处 ──
-     它们本来就是同一件事(把列表里的岗位逐个打开存进来),
-     自动翻页只是它的一个选项。分成两块只会让人以为是两个功能。 -->
-<div class="hd"><b>批量抓岗位</b><span>在列表页用</span></div>
-
-<label class="auto"><input type="checkbox" id="autonext">
-  <span>抓完自动翻下一页</span></label>
-
-<div id="nextbox" hidden>
-  <div class="row">
-    <span class="lbl">最多翻</span>
-    <input id="pgn" type="number" min="1" max="20" value="5">
-    <span class="lbl">页</span>
-  </div>
-  <button class="ghost sm" id="pick">指一下「下一页」按钮在哪</button>
-  <div id="pickinfo"></div>
+<div class="top">
+  <h1>我的岗位库</h1>
+  <a id="open">知识库 ↗</a>
 </div>
 
-<button id="rgo">开始</button>
-<div id="rstat"></div>
+<!-- 抓了多少还没提取 / 提取出多少岗位 / 其中多少拿到了职位描述 -->
+<div class="stats">
+  <div class="w"><b id="sPend">–</b><span>待提取</span></div>
+  <div class="g"><b id="sJobs">–</b><span>岗位</span></div>
+  <div><b id="sJd">–</b><span>有描述</span></div>
+</div>
 
-<details>
+<div class="now" id="now"><div class="k">当前页面</div>
+  <div class="t" style="color:var(--dim);font-weight:400">读取中…</div></div>
+
+<div class="hd"><b>抓取</b><span>只存原文 · 提取在知识库页做</span></div>
+
+<!-- ① 被动:浏览时顺手存 -->
+<label class="sw"><input type="checkbox" id="autochk">
+  <span><b>自动浏览存入</b><i>你正常浏览,打开岗位页就自动存下原文</i></span></label>
+<div class="prog" id="astat"></div>
+
+<!-- ②③④ 主动:三种抓法各自一个按钮,按钮名就是它干的事 -->
+<button id="save"><b>抓取这页内容</b><i>只存当前这一页的原文</i></button>
+<button id="runOne"><b>抓取该页所有岗位</b><i>逐个打开这一页的每个岗位,存入原文</i></button>
+<button id="runAll"><b>自动翻页抓取</b><i>每页都这么抓,抓完自动翻下一页</i></button>
+<div class="row" id="pgrow">
+  <span class="lbl">最多</span>
+  <input id="pgn" type="number" min="1" max="20" value="5">
+  <span class="lbl">页</span>
+  <button class="tiny" id="pick">指一下「下一页」</button>
+</div>
+<div id="pickinfo"></div>
+
+<button class="stop" id="stop" hidden><b>停止</b></button>
+<div class="prog" id="rstat"></div>
+<div class="msg" id="msg"></div>
+
+<details id="more">
   <summary>手动粘链接(平时用不到)</summary>
   <div class="in">
-    <button class="ghost sm" id="harvest"
+    <button class="wide" id="harvest"
       title="只读已经加载出来的页面,不发任何请求。列表是懒加载的,先往下滚几屏">抓本页岗位链接</button>
-    <textarea id="links" placeholder="点上面按钮自动填,或自己粘。一行一个:
+    <textarea id="links" placeholder="一行一个:
 https://www.zhipin.com/job_detail/xxxx.html"></textarea>
-    <button class="ghost sm" id="bgo">逐个打开并存入</button>
-    <div id="bstat"></div>
+    <button class="wide" id="bgo">逐个打开并存入</button>
+    <div class="prog" id="bstat"></div>
   </div>
 </details>
 
-<!-- ── 自动存(浏览时顺手存)—— 和上面的批量是两回事,所以留独立一块 ── -->
-<div class="hd"><b>浏览时自动存</b><span>不用点,顺手存</span></div>
-<label class="auto"><input type="checkbox" id="autochk">
-  <span>打开岗位页就存下原文。存错了没关系,AI 提取时会过滤</span></label>
-<div id="astat"></div>
-
+<div class="sep"></div>
 <div class="hd"><b>最近存的</b><span id="cnt"></span></div>
-<div class="list" id="list"><div class="empty">还没有。打开一个岗位页,点上面「存这一页的原文」。</div></div>
+<div class="list" id="list"><div class="empty">还没有。到 BOSS 打开一个岗位页,点上面「抓取这页内容」。</div></div>
 
 <script src="sidepanel.js"></script>
