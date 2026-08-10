@@ -172,18 +172,34 @@ chrome.tabs.onUpdated.addListener((id, info) => {
  * 自动的东西不显示战果,等于让人蒙着眼睛信它。 */
 async function autoStat() {
   let d = {};
-  try { d = await chrome.runtime.sendMessage({ type: 'saveStat' }) || {}; } catch (e) { return; }
+  try { d = await chrome.runtime.sendMessage({ type: 'saveStat' }) || {}; } catch (e) {
+    $('#astat').innerHTML = '<span class="bad">后台脚本没响应 —— 到 chrome://extensions 点刷新</span>';
+    return;
+  }
   const st = d.saveStat || {}, b = d.batch || {};
-  const box = $('#astat');
-  const bits = [];
-  if (st.ok) bits.push(`已存 ${st.ok}`);
-  if (st.skip) bits.push(`跳过 ${st.skip}`);
-  if (st.fail) bits.push(`失败 ${st.fail}`);
-  box.innerHTML = bits.length
-    ? `<span class="${st.fail ? 'bad' : 'ok'}">${bits.join(' · ')}</span>`
-      + (st.lastTitle ? `<div class="ml">最近:${esc(st.lastTitle)}</div>` : '')
-      + (st.lastErr ? `<div class="ml bad">${esc(st.lastErr)}</div>` : '')
-    : '<span class="dimz">还没自动存过 —— 勾上「自动存」再浏览岗位页</span>';
+
+  /* 「没自动存」有四种原因,现象一模一样:
+   *   ① 根本没收到跳转事件(监听没生效 / 扩展没重载)
+   *   ② 收到了但开关没勾
+   *   ③ 勾了但抓到的字数太少(SPA 还没渲染完)
+   *   ④ 抓到了但连不上本地服务
+   * 所以四个环节都摊开显示,一眼就知道断在哪一环。 */
+  const nav = st.nav || 0;
+  const rows = [];
+  rows.push(nav
+    ? `<div class="ml ok">① 收到跳转 ${nav} 次${st.lastVia ? '(最近:' + esc(st.lastVia) + ')' : ''}</div>`
+    : `<div class="ml bad">① 还没收到任何跳转 —— 扩展可能没重载,或没在 BOSS 页面上翻页</div>`);
+  rows.push($('#autochk').checked
+    ? '<div class="ml ok">② 自动存已开</div>'
+    : '<div class="ml bad">② 「自动存」没勾上 ← 就是这里</div>');
+  const acted = (st.ok || 0) + (st.skip || 0) + (st.fail || 0);
+  rows.push(acted
+    ? `<div class="ml ${st.ok ? 'ok' : 'bad'}">③ 已存 ${st.ok || 0} · 跳过 ${st.skip || 0} · 失败 ${st.fail || 0}</div>`
+    : '<div class="ml">③ 还没尝试过存</div>');
+  if (st.lastUrl) rows.push(`<div class="ml">最近页面:${esc(st.lastUrl.replace('https://www.zhipin.com',''))}</div>`);
+  if (st.lastTitle) rows.push(`<div class="ml ok">最近存了:${esc(st.lastTitle)}</div>`);
+  if (st.lastErr) rows.push(`<div class="ml bad">${esc(st.lastErr)}</div>`);
+  $('#astat').innerHTML = rows.join('');
 
   // 批量进度
   const bb = $('#bstat');
@@ -198,6 +214,72 @@ async function autoStat() {
     $('#bgo').textContent = b.running ? '停止' : '开始逐个打开并存入';
   } else { bb.style.display = 'none'; }
 }
+
+
+/* ── 从当前列表页抓岗位链接 ───────────────────────────────
+ * 比手工粘链接实用得多:打开「推荐职位 / 我的收藏 / 沟通过的」,
+ * 往下滚几屏,点一下就把这一屏的岗位链接全抓出来。
+ *
+ * **抓 href,不认 class。** class 名是最容易被改版打断的东西;
+ * 而链接里出现 job_detail 这个事实,是 BOSS 的 URL 结构决定的,稳定得多。
+ *
+ * 这一步**不产生任何请求** —— 只读你已经加载出来的 DOM。
+ * 所以链接数量取决于你滚了多少屏:列表是懒加载的,没滚到就没在 DOM 里。
+ */
+function harvestLinks() {
+  const out = new Map();      // 路径 → 完整链接(去重按路径,保留完整的)
+  for (const a of document.querySelectorAll('a[href]')) {
+    let u;
+    try { u = new URL(a.getAttribute('href'), location.href); } catch (e) { continue; }
+    if (!/zhipin\.com$/.test(u.hostname.replace(/^www\./, ''))) continue;
+    if (!/job_detail|\/job\//.test(u.pathname)) continue;
+    // ⚠️ 去重按**路径**,但保留**带查询串的完整链接**。
+    // BOSS 的 job_detail 后面挂着 securityId / lid,每次渲染都不同 ——
+    // 按完整 URL 去重等于永远不重复;但打开时又必须带上它们,
+    // 去掉可能打不开。所以:比对用路径,打开用完整的。
+    const key = u.origin + u.pathname;
+    if (!out.has(key)) out.set(key, u.href);
+  }
+  return { links: [...out.values()], anchors: document.querySelectorAll('a[href]').length };
+}
+
+$('#harvest').onclick = async () => {
+  const btn = $('#harvest');
+  btn.disabled = true; btn.textContent = '抓取中…';
+  try {
+    const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!t || !/zhipin\.com/.test(t.url || '')) throw new Error('先切到 BOSS 的列表页');
+    const [r] = await chrome.scripting.executeScript({
+      target: { tabId: t.id }, func: harvestLinks, world: 'MAIN',
+    });
+    const links = r?.result?.links || [];
+    if (!links.length) {
+      msg(`这一页没找到岗位链接(扫了 ${r?.result?.anchors ?? 0} 个链接)。`
+        + '换到「推荐职位 / 我的收藏 / 沟通过的」这类列表页,先往下滚几屏再点 ——'
+        + '列表是懒加载的,没滚到的不在页面里。', 'bad');
+      return;
+    }
+    // 把已经存过的筛掉 —— 不然白开几十个已有的
+    let fresh = links, known = [];
+    try {
+      const k = await (await fetch(API + '/api/boss/known', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ urls: links }),
+      })).json();
+      fresh = k.fresh || links; known = k.known || [];
+    } catch (e) { /* 服务没开就不筛,全放进去 */ }
+
+    $('#links').value = fresh.join('\n');
+    msg(`抓到 ${links.length} 个岗位链接`
+      + (known.length ? `,其中 ${known.length} 个已存过(已剔除)` : '')
+      + ` → 待存 ${fresh.length} 个。`
+      + (fresh.length ? '确认后点下面「开始」。' : '这一页全都存过了。'),
+      fresh.length ? 'ok' : '');
+  } catch (e) {
+    msg('抓不到:' + e.message, 'bad');
+  }
+  btn.disabled = false; btn.textContent = '抓本页岗位链接';
+};
 
 $('#bgo').onclick = async () => {
   const b = await chrome.storage.local.get('batch');

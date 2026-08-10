@@ -81,12 +81,15 @@ textarea:focus{outline:none;border-color:rgba(76,141,255,.45)}
   自动存(打开岗位页就自动存,非岗位页会跳过)</label>
 <div class="msg" id="msg"></div>
 
+<div class="hd"><b>自动存</b><span>断在哪一环一眼能看到</span></div>
 <div id="astat"></div>
 
-<div class="hd"><b>批量存入</b><span>粘一批岗位链接,逐个打开→存→关</span></div>
-<textarea id="links" placeholder="一行一个链接,例如
-https://www.zhipin.com/job_detail/xxxx.html
-https://www.zhipin.com/job_detail/yyyy.html"></textarea>
+<div class="hd"><b>批量存入</b><span>从列表页抓链接,逐个打开→存→关</span></div>
+<button class="ghost" id="harvest"
+  title="只读已经加载出来的页面,不发任何请求。列表是懒加载的,先往下滚几屏">抓本页岗位链接</button>
+<textarea id="links" placeholder="点上面「抓本页岗位链接」自动填,
+或者自己粘,一行一个:
+https://www.zhipin.com/job_detail/xxxx.html"></textarea>
 <button class="ghost" id="bgo">开始逐个打开并存入</button>
 <div id="bstat"></div>
 

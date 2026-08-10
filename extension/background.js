@@ -198,12 +198,24 @@ const TEXT_API = 'http://localhost:8001/api/boss/ingest_text';
 const SPA_SETTLE_MS = 1400;
 const MIN_CHARS = 200;      // 比这还少基本是导航骨架,不是「存错了」而是「存了个空的」
 
-let autoOn = false;
-chrome.storage.local.get('auto').then(d => { autoOn = !!d.auto; });
-chrome.storage.onChanged.addListener(c => { if (c.auto) autoOn = !!c.auto.newValue; });
+/* ⚠️ 开关**每次都从 storage 现读**,不缓存在模块变量里。
+ *
+ * 这是个已经踩过的坑:MV3 的 service worker 空闲约 30 秒就被杀,事件来了再重启。
+ * 缓存成模块变量的话,worker 一重启它就回到初始值 false,而重新读 storage 是异步的
+ * —— 事件先到就直接 return,于是「自动存完全不起作用」。
+ * 模块变量在 MV3 里**活不过一次空闲**,凡是要跨事件保持的状态都必须放 storage。 */
+async function isAutoOn() {
+  const d = await chrome.storage.local.get('auto');
+  return !!d.auto;
+}
 
-let saveStat = { ok: 0, skip: 0, fail: 0, last: null, lastTitle: null, lastErr: null };
-const lastSavedUrl = new Map();      // tabId → 上次存过的 URL,防同页重复触发
+// 同理:统计和去重记录也不能只存内存 —— worker 一重启就归零,
+// 界面上数字会莫名其妙倒退,让人以为没在工作。
+async function getStat() {
+  const d = await chrome.storage.local.get('saveStat');
+  return d.saveStat || { ok: 0, skip: 0, fail: 0, nav: 0, last: null,
+                         lastTitle: null, lastErr: null, lastUrl: null };
+}
 
 /** 在页面里跑:只抽文字。判断在后端,这里不做任何判断。 */
 function grabText() {
@@ -251,51 +263,72 @@ async function saveText(page, { auto = false, force = true } = {}) {
   return d;
 }
 
-async function autoSave(tabId, url) {
-  if (!autoOn) return;
-  if (!/^https:\/\/[^/]*zhipin\.com\//.test(url || '')) return;
-  // 批量跑的时候别跟它抢:批量自己开的标签页加载完也会触发 onUpdated,
-  // 不挡掉就会同一页存两次(去重能兜住,但统计数字会翻倍、看着像出了问题)。
-  if (filling || batch.running) return;
+async function autoSave(tabId, url, via) {
+  const stat = await getStat();
+  // **不管存不存,先把「我确实收到了这次跳转」记下来。**
+  // 否则「没自动存」这一个现象,可能是没收到事件、可能是开关没开、
+  // 可能是抓不到文字、可能是本地服务没开 —— 四种原因看起来一模一样,
+  // 没法定位。这个项目已经因为「看不见中间过程」绕过好几次弯路。
+  stat.nav = (stat.nav || 0) + 1;
+  stat.lastUrl = String(url || '').slice(0, 120);
+  stat.lastVia = via;
+
+  const finish = async (extra) => {
+    Object.assign(stat, extra || {});
+    await chrome.storage.local.set({ saveStat: stat });
+  };
+
+  if (!/^https:\/\/[^/]*zhipin\.com\//.test(url || ''))
+    return finish({ lastErr: '不是 zhipin 页面,跳过' });
+  if (!(await isAutoOn()))
+    return finish({ lastErr: '「自动存」没勾上' });
+  if (batch.running || filling)
+    return finish({ lastErr: '批量任务在跑,自动存让路' });
+
+  // 同一页别反复存。去重记录也放 storage —— worker 重启后内存里的 Map 就没了。
   const bare = String(url).split('#')[0];
-  if (lastSavedUrl.get(tabId) === bare) return;   // 同一页别反复存
+  const { seenUrl = {} } = await chrome.storage.local.get('seenUrl');
+  if (seenUrl[tabId] === bare) return finish({ lastErr: null });
 
   try {
     const page = await readTabSettled(tabId);
     if (!page || page.len < MIN_CHARS) {
-      saveStat.skip++;
-      saveStat.lastErr = `页面只有 ${page?.len ?? 0} 字,像是还没渲染完`;
-      await chrome.storage.local.set({ saveStat });
-      return;
+      stat.skip = (stat.skip || 0) + 1;
+      return finish({ lastErr: `只抓到 ${page?.len ?? 0} 字(要 ≥${MIN_CHARS})—— 像是还没渲染完` });
     }
     const d = await saveText(page, { auto: true, force: true });
-    lastSavedUrl.set(tabId, bare);
-    saveStat.ok++;
-    saveStat.last = new Date().toISOString();
-    saveStat.lastTitle = page.h1 || page.title;
-    saveStat.lastErr = null;
-    // 判定结果只**记录**不拦 —— 页面上能看出哪些像岗位、哪些是顺手存的
-    saveStat.lastVerdict = d.detect?.why || null;
+    seenUrl[tabId] = bare;
+    await chrome.storage.local.set({ seenUrl });
+    stat.ok = (stat.ok || 0) + 1;
+    return finish({
+      last: new Date().toISOString(),
+      lastTitle: page.h1 || page.title,
+      lastErr: null,
+      lastVerdict: d.detect?.why || null,
+    });
   } catch (e) {
-    saveStat.fail++;
-    saveStat.lastErr = /Failed to fetch/.test(String(e.message))
-      ? '连不上本地服务(./boss.sh web)' : String(e.message).slice(0, 90);
+    stat.fail = (stat.fail || 0) + 1;
+    return finish({ lastErr: /Failed to fetch/.test(String(e.message))
+      ? '连不上本地服务(要先跑 ./boss.sh web)' : String(e.message).slice(0, 100) });
   }
-  await chrome.storage.local.set({ saveStat });
 }
 
 // 整页加载
 chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
-  if (info.status === 'complete') autoSave(tabId, tab?.url);
+  if (info.status === 'complete') autoSave(tabId, tab?.url, '整页加载');
 });
 // SPA 换 URL —— **这条才是从列表点进详情时唯一会触发的**
 chrome.webNavigation?.onHistoryStateUpdated.addListener(async d => {
   if (d.frameId !== 0) return;
   await sleep(SPA_SETTLE_MS);
-  autoSave(d.tabId, d.url);
+  autoSave(d.tabId, d.url, 'SPA跳转');
 }, { url: [{ hostSuffix: 'zhipin.com' }] });
 // 标签关了就忘掉它的去重记录,免得越攒越多
-chrome.tabs.onRemoved.addListener(id => lastSavedUrl.delete(id));
+chrome.tabs.onRemoved.addListener(async id => {
+  const { seenUrl = {} } = await chrome.storage.local.get('seenUrl');
+  delete seenUrl[id];
+  await chrome.storage.local.set({ seenUrl });
+});
 
 
 /* ── 批量:粘一批链接,逐个打开→存→关 ──────────────────────

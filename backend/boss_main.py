@@ -344,6 +344,41 @@ async def pending(limit: int = Query(60, ge=1, le=300)) -> dict[str, Any]:
     return {"items": out, "total": len(files)}
 
 
+@app.post("/api/boss/known")
+async def known(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """这批链接里,哪些已经存过了。
+
+    从列表页抓来几十个链接,里面多半有一半是你之前看过的 ——
+    不筛掉就要白开几十个标签页。这一步纯本地查库,不碰网络。
+
+    按**路径**比对,不带查询串:BOSS 的 job_detail 链接后面挂着
+    securityId / lid 这类每次都不同的参数,带上比对等于永远不重复。
+    """
+    urls = [str(u) for u in (body.get("urls") or []) if u]
+    if not urls:
+        return {"known": [], "fresh": [], "total": 0}
+
+    def path_of(u: str) -> str:
+        return str(u).split("?")[0].split("#")[0].rstrip("/")
+
+    seen: set[str] = set()
+    with bs.connect() as c:
+        for r in c.execute("SELECT url FROM jobs WHERE url IS NOT NULL AND url != ''"):
+            seen.add(path_of(r["url"]))
+    # 队列里排着的也算已知 —— 免得重复排队
+    if PENDING_DIR.exists():
+        for f in PENDING_DIR.glob("*.json"):
+            try:
+                seen.add(path_of(json.loads(f.read_text(encoding="utf-8")).get("url") or ""))
+            except ValueError:
+                pass
+    seen.discard("")
+
+    known_l = [u for u in urls if path_of(u) in seen]
+    fresh = [u for u in urls if path_of(u) not in seen]
+    return {"known": known_l, "fresh": fresh, "total": len(urls)}
+
+
 @app.get("/api/boss/stats")
 async def stats() -> dict[str, Any]:
     s = bs.stats()
