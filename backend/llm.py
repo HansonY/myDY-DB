@@ -32,9 +32,13 @@ from config import ROOT, settings
 # 不需要推理型号,那些又慢又贵。
 _PROVIDERS: dict[str, tuple[str, str]] = {
     "qwen":     ("https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus"),
-    # MiniMax 的路径**不是** /chat/completions,而是 /text/chatcompletion_v2。
-    # 打错路径它的网关会先过认证、直接回 401,看起来像 key 无效 —— 很误导。
-    "minimax":  ("https://api.minimaxi.com/v1/text/chatcompletion_v2", "MiniMax-Text-01"),
+    # ⚠️ 域名是 **api.minimax.io**。我先后猜过 api.minimaxi.com 和
+    # api.minimax.chat,两个都错 —— 而错域名会回 `2049 invalid api key`,
+    # 看起来像凭证问题,把排查带偏了整整两轮(还错怪了用户的 key)。
+    # 官方文档上的域名才是对的,我的猜测不是。
+    # 用 OpenAI 兼容路径而不是原生 /text/chatcompletion_v2:前者 HTTP 状态码
+    # 语义正确(402 就是 402),后者会返回 200 + choices:null,更难排查。
+    "minimax":  ("https://api.minimax.io/v1", "MiniMax-M2.1-highspeed"),
     "deepseek": ("https://api.deepseek.com/v1", "deepseek-chat"),
     "moonshot": ("https://api.moonshot.cn/v1", "moonshot-v1-32k"),
     "zhipu":    ("https://open.bigmodel.cn/api/paas/v4", "glm-4-flash"),
@@ -189,7 +193,14 @@ def probe() -> dict[str, Any]:
         out["ok"] = False
         out["error"] = f"{type(e).__name__}: {str(e)[:220]}"
         msg = out["error"]
-        if "2049" in msg or "invalid api key" in msg.lower() or "401" in msg:
+        low = msg.lower()
+        if "insufficient" in low or "402" in msg or "1008" in msg:
+            out["hint"] = (
+                "**key 是有效的,是账户没余额**。MiniMax 有两种 key:"
+                "API Keys 页面那个只对**按量付费**余额生效;"
+                "如果你买的是 Token Plan / Credits 套餐,"
+                "要用 **Plan Details 里的 subscription Key**,不是这个。")
+        elif "2049" in msg or "invalid api key" in low or "401" in msg:
             out["hint"] = (
                 "认证没过。MiniMax 有两种 key:API Keys 页面那个只能用于"
                 "**按量付费**;如果你的账号是 Token Plan / Credits 套餐,"
