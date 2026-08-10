@@ -415,13 +415,20 @@ _EDITABLE = {
     "LLM_PROVIDER": "用哪家模型:qwen / minimax / deepseek / moonshot / zhipu / ollama",
     "LLM_API_KEY": "上面那家的 API Key(留空则回退去找该家专用键,如 DASHSCOPE_API_KEY)",
     "LLM_MODEL": "覆盖默认模型名(留空用默认;各家改版勤,不通就来这里改)",
-    "DASHSCOPE_API_KEY": "通义千问 API Key(LLM_PROVIDER=qwen 时的回退键)",
+    # 每家一把,互不干扰 —— 这样在页面上来回切供应商不用重新填 key。
+    # (页面保存时会写到这里面对应的那一把,而不是写全局 LLM_API_KEY。)
+    "DASHSCOPE_API_KEY": "通义千问 API Key",
+    "MINIMAX_API_KEY": "MiniMax API Key",
+    "DEEPSEEK_API_KEY": "DeepSeek API Key",
+    "MOONSHOT_API_KEY": "月之暗面 API Key",
+    "ZHIPU_API_KEY": "智谱 API Key",
     "DOUYIN_COOKIE": "抖音 cookie(采集必需)。⚠️ 等同账号控制权,只存本机",
     "DOUYIN_SEC_USER_ID": "我自己的 sec_user_id(采点赞/我的作品要)",
     "ASR_MODEL": "语音转写模型(默认 large-v3-turbo)",
     "EMBED_MODEL": "嵌入模型(默认 BAAI/bge-m3,中英互通)",
 }
-_SECRET_KEYS = {"DASHSCOPE_API_KEY", "DOUYIN_COOKIE", "LLM_API_KEY"}
+_SECRET_KEYS = {"DOUYIN_COOKIE", "LLM_API_KEY"} | {
+    k for k in _EDITABLE if k.endswith("_API_KEY")}
 
 
 def _mask(v: str) -> str:
@@ -429,6 +436,52 @@ def _mask(v: str) -> str:
     if not v:
         return ""
     return f"…{v[-4:]}" if len(v) > 8 else "已设置"
+
+
+@app.get("/api/llm/providers")
+async def llm_providers() -> dict[str, Any]:
+    """能选哪些供应商 —— 给设置页做下拉。
+
+    都是 OpenAI 兼容端点,换家只改配置。默认端点/模型可能过时(各家改版勤),
+    所以页面上留了覆盖入口,并配一个「测一下」按钮。
+    """
+    import llm as _llm
+    cur = _llm.config()
+    return {
+        "providers": [
+            {"id": k, "base_url": v[0], "model": v[1],
+             "label": {
+                 "qwen": "通义千问(阿里)", "minimax": "MiniMax",
+                 "deepseek": "DeepSeek", "moonshot": "月之暗面 Kimi",
+                 "zhipu": "智谱 GLM(有免费的 glm-4-flash)",
+                 "ollama": "本地 Ollama(不用 Key)",
+             }.get(k, k),
+             "key_env": _llm._KEY_FALLBACK.get(k, ""),
+             "needs_key": k != "ollama"}
+            for k, v in _llm._PROVIDERS.items()
+        ],
+        "current": {"provider": cur["provider"], "model": cur["model"],
+                    "base_url": cur["base_url"], "key_set": bool(cur["_key"])},
+    }
+
+
+@app.post("/api/llm/test")
+async def llm_test() -> dict[str, Any]:
+    """测当前 LLM 配置通不通。**报服务端原话** ——
+    「余额不足」和「key 无效」是完全不同的两件事,不能糊成一句「失败」。"""
+    import llm as _llm
+    return await asyncio.to_thread(_llm.probe)
+
+
+@app.post("/api/llm/models")
+async def llm_models() -> dict[str, Any]:
+    """问供应商它自己有哪些模型 —— 不猜模型名。
+
+    实测有用:MiniMax 的 /v1/models 返回 200 就直接证明了 key 认证正常,
+    把「key 无效」这个可能性一次排除掉。
+    """
+    import llm as _llm
+    return await asyncio.to_thread(_llm.list_models)
 
 
 @app.get("/api/settings")
@@ -463,7 +516,9 @@ async def get_settings() -> dict[str, Any]:
         # 各功能当前能不能用 —— 比单看「key 填没填」有用
         "features": {
             "collect": bool(settings.has_cookie),
-            "ask": _llm.available(),
+            # 三态,不是布尔 —— 「填了 key」和「能用」是两件事(MiniMax 实测:
+            # key 有效、9 个模型全 402)。界面据此显示,不再把「填了」说成「可用」。
+            "ask": _llm.status(),
             "search": True,        # 本地向量,不需要任何 key
             "asr": True,           # 本地 whisper,不需要任何 key
         },
@@ -473,7 +528,19 @@ async def get_settings() -> dict[str, Any]:
 @app.post("/api/settings")
 async def post_settings(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     """写回 .env。只认白名单键,保留文件里其它行和注释。"""
-    updates = {k: str(v) for k, v in (body or {}).items()
+    body = dict(body or {})
+
+    # 页面上的「API Key」是**跟着当前选的供应商**的,所以要写到那家自己的键上,
+    # 而不是写全局 LLM_API_KEY。否则切一次供应商就把 key 带过去了 ——
+    # 实测切到智谱还在发 MiniMax 的 key,对方回「令牌已过期」,极其误导人。
+    if body.get("LLM_API_KEY"):
+        import llm as _llm
+        prov = str(body.get("LLM_PROVIDER") or _llm.config()["provider"]).lower()
+        target = _llm._KEY_FALLBACK.get(prov)
+        if target and target in _EDITABLE:
+            body[target] = body.pop("LLM_API_KEY")
+
+    updates = {k: str(v) for k, v in body.items()
                if k in _EDITABLE and v is not None}
     if not updates:
         raise HTTPException(422, f"没有可写的键。可写:{sorted(_EDITABLE)}")

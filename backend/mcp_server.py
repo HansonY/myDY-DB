@@ -1026,9 +1026,19 @@ def _selftest() -> int:
     #    免得人以为「没配 Key 就什么都用不了」
     print(f"  {'✓' if config.settings.has_cookie else '·'} 采集      "
           + ("cookie 已配" if config.settings.has_cookie else "没有 cookie —— 只影响采集"))
-    print(f"  {'✓' if config.settings.dashscope_api_key.strip() else '·'} AI 问答   "
-          + ("千问 Key 已配" if config.settings.dashscope_api_key.strip()
-             else "没配千问 Key —— 只影响问答和 AI 画像,检索照常"))
+    # 别只看千问的键 —— 模型是可换的,而且**「填了 key」≠「能用」**:
+    # 实测 MiniMax 的 key 认证完全正常、9 个模型全报 402 余额不足。
+    # 所以这里报三态,不报布尔。
+    import llm as _llm
+    _st = _llm.status()
+    _mark = {"ok": "✓", "unverified": "·", "bad": "✗", "no_key": "·"}[_st["state"]]
+    _tail = {
+        "ok": f"{_st['provider']} 可用",
+        "unverified": f"{_st['provider']} 已配但没验证过 —— 网页「AI 模型」里点「测一下」",
+        "bad": f"{_st['provider']} 配了但用不了:{_st.get('error', '')[:60]}",
+        "no_key": f"没配 key(当前选 {_st['provider']})—— 只影响问答和 AI 画像,检索照常",
+    }[_st["state"]]
+    print(f"  {_mark} AI 问答   {_tail}")
     try:
         from knowledge import index as ki
         s = ki.status()

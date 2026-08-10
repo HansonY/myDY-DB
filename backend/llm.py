@@ -19,6 +19,7 @@ OpenAI 兼容的 chat/completions**,差别只有三个:base_url、model、api_ke
 from __future__ import annotations
 
 import json
+from datetime import datetime
 import os
 import re
 from typing import Any
@@ -79,13 +80,27 @@ def config() -> dict[str, str]:
     base, model = _PROVIDERS.get(prov, _PROVIDERS["qwen"])
     base = _env("LLM_BASE_URL") or base
     model = _env("LLM_MODEL") or model
-    key = _env("LLM_API_KEY")
-    if not key:
-        alt = _KEY_FALLBACK.get(prov)
-        if alt:
-            key = _env(alt) or (settings.dashscope_api_key.strip()
-                                if alt == "DASHSCOPE_API_KEY" else "")
-    return {"provider": prov, "base_url": base, "model": model, "_key": key}
+    # ⚠️ 顺序很重要:**每家自己的 key 优先**,LLM_API_KEY 只是遗留的全局兜底。
+    #
+    # 反过来写会出一个极其误导人的 bug:LLM_API_KEY 存着 A 家的 key,
+    # 你在页面上切到 B 家,请求还是带着 A 家的 key 发出去 —— B 家回
+    # 「令牌已过期或验证不正确」,你会以为是 B 家的 key 有问题。
+    # 实测就是这样:provider 切到 zhipu,发出去的还是 MiniMax 的 key,401。
+    # 这正是「错的凭据产生了看起来像另一个问题的报错」,我已经在
+    # MiniMax 那里被同一类现象带偏过两轮,不能再留这个坑。
+    alt = _KEY_FALLBACK.get(prov)
+    key = ""
+    if alt:
+        key = _env(alt) or (settings.dashscope_api_key.strip()
+                            if alt == "DASHSCOPE_API_KEY" else "")
+    key = key or _env("LLM_API_KEY")
+    src = ""
+    if key:
+        src = alt if (alt and _env(alt)) else (
+            "DASHSCOPE_API_KEY" if alt == "DASHSCOPE_API_KEY" and settings.dashscope_api_key.strip()
+            else "LLM_API_KEY")
+    return {"provider": prov, "base_url": base, "model": model,
+            "_key": key, "key_src": src}
 
 
 def available() -> bool:
@@ -172,7 +187,7 @@ def chat_json(system: str, user: str, timeout: float = 180.0,
         raise RuntimeError(f"{c['model']} 没返回合法 JSON:{content[:200]}")
 
 
-def probe() -> dict[str, Any]:
+def _probe_raw() -> dict[str, Any]:
     """自检:当前配置到底能不能用。
 
     各家端点和模型名改得很勤,而我表里的默认值**没有全部实测过** ——
@@ -268,3 +283,85 @@ def sniff() -> dict[str, Any]:
     return {"results": rows,
             "note": "看到「✓ 这家能用」就把 LLM_PROVIDER 改成那家;"
                     "看到「key 对,模型名不对」就用 LLM_MODEL 覆盖模型名"}
+
+
+def list_models() -> dict[str, Any]:
+    """问供应商有哪些模型。**不猜模型名。**
+
+    顺带是个极好的诊断:这个接口通了就说明 key 认证没问题,
+    能把「key 无效」一次排除。实测 MiniMax 就是这么定位到
+    「key 有效、只是计费桶不对」的。
+    """
+    c = config()
+    if not c["_key"] and c["provider"] != "ollama":
+        return {"error": "没配 key"}
+    base = re.sub(r"/(chat/completions|text/chatcompletion\w*)$", "",
+                  c["base_url"].rstrip("/"))
+    try:
+        r = httpx.get(base + "/models",
+                      headers={"Authorization": f"Bearer {c['_key']}"} if c["_key"] else {},
+                      timeout=30, trust_env=False)
+        if r.status_code >= 400:
+            return {"error": f"HTTP {r.status_code}: {r.text[:200]}", "url": base + "/models"}
+        data = r.json()
+        ids = [m.get("id") for m in (data.get("data") or []) if isinstance(m, dict)]
+        return {"provider": c["provider"], "models": ids, "count": len(ids),
+                "note": "key 认证正常(这个接口通了)" if ids else ""}
+    except Exception as e:      # noqa: BLE001
+        return {"error": f"{type(e).__name__}: {str(e)[:160]}"}
+
+
+# 上次测试结果。**「填了 key」不等于「能用」** —— 实测 MiniMax 就是
+# key 完全有效、9 个模型全报 402。界面上直接把「填了」显示成「可用」
+# 是假承诺,这个项目之前已经因为「看着像在工作」栽过一次。
+_PROBE_FILE = ROOT / "data" / "llm_probe.json"
+
+
+def last_probe() -> dict[str, Any]:
+    """上次测试的结果。没测过就返回 {} —— 界面据此显示「未验证」而不是「可用」。
+
+    带上当时的 provider/model:换了供应商之后,旧的结论不能算数。
+    """
+    try:
+        d = json.loads(_PROBE_FILE.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _remember(res: dict[str, Any]) -> None:
+    try:
+        _PROBE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        c = config()
+        _PROBE_FILE.write_text(json.dumps({
+            "ok": bool(res.get("ok")), "error": res.get("error"),
+            "provider": c["provider"], "model": c["model"],
+            "at": datetime.now().isoformat(timespec="seconds"),
+        }, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def status() -> dict[str, Any]:
+    """AI 到底能不能用 —— 三态,不含糊。
+
+    未配 key → no_key;配了但没测过 → unverified;测过 → ok / bad。
+    换了供应商或模型,旧结论自动失效(回到 unverified)。
+    """
+    c = config()
+    if not c["_key"] and c["provider"] != "ollama":
+        return {"state": "no_key", "label": "要填 Key", "provider": c["provider"]}
+    pr = last_probe()
+    if not pr or pr.get("provider") != c["provider"] or pr.get("model") != c["model"]:
+        return {"state": "unverified", "label": "已配置 · 未验证", "provider": c["provider"]}
+    if pr.get("ok"):
+        return {"state": "ok", "label": "可用", "provider": c["provider"], "at": pr.get("at")}
+    return {"state": "bad", "label": "不可用", "provider": c["provider"],
+            "error": (pr.get("error") or "")[:160], "at": pr.get("at")}
+
+
+def probe() -> dict[str, Any]:
+    """测一次并**记住结果**,供界面显示真实状态。"""
+    res = _probe_raw()
+    _remember(res)
+    return res

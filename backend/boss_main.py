@@ -137,8 +137,13 @@ async def do_extract(
         return {"extracted": 0, "note": "队列是空的"}
 
     if not bx.available():
+        # 别写死某一家的键名 —— 提取是供应商无关的,写死了会把人往错方向指。
+        import llm as _llm
+        st = _llm.status()
         return {"extracted": 0, "pending": len(files),
-                "error": "没配 DASHSCOPE_API_KEY —— 原文已留在队列里,配好 key 再点提取"}
+                "error": f"AI 还不能用({st['label']},当前 {st['provider']})—— "
+                         f"原文已留在队列里,一条都没丢。到 http://127.0.0.1:8000/data.html "
+                         f"的「AI 模型」里选一家、填 key、点「测一下」,再回来点提取。"}
 
     pages, keep = [], []
     for f in files:

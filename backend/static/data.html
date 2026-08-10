@@ -1,7 +1,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>数据 · Douyin-DB</title>
-<link rel="stylesheet" href="/shell.css?v=1786293531">
+<link rel="stylesheet" href="/shell.css?v=1786376897">
 <style>
 /* 这一页集中了所有「有代价」的操作,所以设计目标只有一个:
    点之前就知道会发生什么、要多久、有没有风险。
@@ -67,6 +67,20 @@
   color:var(--dim2)}
 .feat span.on{border-color:var(--ok-line);background:var(--ok-dim);color:var(--ok)}
 .feat span.off{border-color:var(--warn-line);background:var(--warn-dim);color:var(--warn-text)}
+/* 未验证 —— 不给绿(那是假承诺)也不给红(还没测,凭什么说坏)。中性灰。 */
+.feat span.warn{border-color:var(--line);background:var(--bg);color:var(--dim)}
+
+.llm{display:grid;grid-template-columns:120px 1fr;gap:10px;align-items:center}
+.llm label{font-size:12px;color:var(--dim)}
+.llm select,.llm input{background:var(--bg);border:1px solid var(--line);border-radius:7px;
+  padding:7px 10px;color:var(--fg);font-size:12px;width:100%}
+.llm select:focus,.llm input:focus{outline:none;border-color:var(--accent-line)}
+.llm .note{grid-column:2;font-size:10.5px;color:var(--dim2);margin-top:-4px;line-height:1.5}
+.llmres{margin-top:12px;font-size:11.5px;line-height:1.65;padding:10px 12px;
+  border-radius:8px;border:1px solid var(--line);background:var(--bg);display:none}
+.llmres.ok{border-color:var(--ok-line);background:var(--ok-dim);color:var(--ok)}
+.llmres.bad{border-color:var(--warn-line);background:var(--warn-dim);color:var(--warn-text)}
+.llmres code{font-size:10.5px;color:var(--dim)}
 </style>
 
 <div class="wrap narrow">
@@ -77,10 +91,18 @@
 
   <div id="alert"></div>
 
-  <!-- ⓪ 设置:先配好这些,后面的功能才跑得起来 -->
+  <!-- ⓪-A AI 模型:换家只改这里 -->
   <div class="grp">
-    <h2>设置</h2>
-    <p>密钥写进本机的 <code id="envpath">.env</code>,**不会上传任何地方**。
+    <h2>AI 模型</h2>
+    <p>问答、AI 画像、岗位提取都用它。<b>检索和语音转写不用</b>,那两个全在本机跑。
+      哪家有额度就选哪家 —— 都是 OpenAI 兼容接口,换家不用改代码。</p>
+    <div class="card"><div class="body" id="llmbox">读取中…</div></div>
+  </div>
+
+  <!-- ⓪-B 其余设置 -->
+  <div class="grp">
+    <h2>其它设置</h2>
+    <p>密钥写进本机的 <code id="envpath">.env</code>,<b>不会上传任何地方</b>。
       页面上永远只显示尾四位。</p>
     <div class="card"><div class="body" id="settings">读取中…</div></div>
   </div>
@@ -125,7 +147,7 @@
   </div>
 </div>
 
-<script src="/shell.js?v=1786293531"></script>
+<script src="/shell.js?v=1786376897"></script>
 <script>
 'use strict';
 mountNav('data');
@@ -142,9 +164,10 @@ async function loadSettings() {
         <span class="${F.search ? 'on' : 'off'}">检索 ${F.search ? '可用' : '不可用'}</span>
         <span class="${F.asr ? 'on' : 'off'}">语音转写 ${F.asr ? '可用' : '不可用'}</span>
         <span class="${F.collect ? 'on' : 'off'}">采集 ${F.collect ? '可用' : '要填 cookie'}</span>
-        <span class="${F.ask ? 'on' : 'off'}">AI 问答 ${F.ask ? '可用' : '要填千问 Key'}</span>
+        <span class="${{ok:'on', unverified:'warn', bad:'off', no_key:'off'}[F.ask?.state] || 'off'}"
+              title="${esc(F.ask?.error || '')}">AI 问答 ${esc(F.ask?.label || '要填 Key')}</span>
       </div>
-      ${d.items.map(it => `<div class="st">
+      ${d.items.filter(it => !it.key.startsWith('LLM_')).map(it => `<div class="st">
         <span class="k">${esc(it.key)}<i>${esc(it.desc)}</i></span>
         <input data-k="${esc(it.key)}" type="${it.secret ? 'password' : 'text'}"
           value="${esc(it.value)}" placeholder="${it.secret && it.set ? '已设置,留空则不改' : '未设置'}"
@@ -206,7 +229,7 @@ const LOCAL = [
 
 function actHtml(a) {
   return `<div class="act">
-    <div class="t"><b>${esc(a.label)}</b><span>${esc(a.desc)}</span></div>
+    <div class="t"><b>${esc(a.label)}</b><span>${bold(a.desc)}</span></div>
     <div class="cost ${a.id === 'refill' || a.id === 'like' ? 'warn' : ''}">${esc(a.cost)}</div>
     <button class="btn ${a.go ? 'go' : ''}" id="b-${a.id}">运行</button>
   </div>`;
@@ -321,4 +344,96 @@ LOCAL.forEach(a => $('#b-' + a.id).onclick = () => run(a, '#lmsg'));
 loadCoverage();
 loadRuns();
 setInterval(loadRuns, 5000);      // 采集是长任务,进度要自己刷新
+
+/* ── AI 模型:下拉选供应商 ── */
+let PROV = [];
+async function loadLLM() {
+  const box = $('#llmbox');
+  try {
+    const d = await api('/api/llm/providers');
+    PROV = d.providers; const c = d.current;
+    box.innerHTML = `
+      <div class="llm">
+        <label>供应商</label>
+        <select id="lp">${PROV.map(p => `<option value="${p.id}"${
+          p.id === c.provider ? ' selected' : ''}>${esc(p.label)}</option>`).join('')}</select>
+        <label>模型</label>
+        <input id="lm" value="${esc(c.model)}" placeholder="留空用默认">
+        <div class="note" id="lmnote"></div>
+        <label>API Key</label>
+        <input id="lk" type="password" placeholder="${c.key_set ? '已设置,留空则不改' : '未设置'}">
+        <div class="note" id="lknote"></div>
+      </div>
+      <div class="bar" style="margin:14px 0 0">
+        <button class="btn go" id="lsave">保存</button>
+        <button class="btn" id="ltest">测一下</button>
+        <button class="btn" id="llist">看有哪些模型</button>
+      </div>
+      <div class="llmres" id="lres"></div>`;
+    syncNote();
+    $('#lp').onchange = syncNote;
+    $('#lsave').onclick = saveLLM;
+    $('#ltest').onclick = testLLM;
+    $('#llist').onclick = listModels;
+  } catch (e) {
+    box.innerHTML = `<div class="dim">读取失败:${esc(e.message)}</div>`;
+  }
+}
+
+function syncNote() {
+  const p = PROV.find(x => x.id === $('#lp').value);
+  if (!p) return;
+  $('#lmnote').textContent = `默认 ${p.model} · 端点 ${p.base_url}`;
+  $('#lknote').textContent = p.needs_key
+    ? `留空则回退去找 ${p.key_env || '该家专用键'}`
+    : '本地跑,不需要 Key';
+  // 换供应商时把模型框跟着换成那家的默认 —— 不然会拿 A 家的模型名打 B 家
+  $('#lm').value = p.model;
+}
+
+async function saveLLM() {
+  const body = { LLM_PROVIDER: $('#lp').value, LLM_MODEL: $('#lm').value.trim() };
+  const k = $('#lk').value.trim();
+  if (k) body.LLM_API_KEY = k;       // 留空 = 不改,不能当成清空
+  try {
+    await api('/api/settings', { method: 'POST',
+      headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    res('已保存。点「测一下」验证。', 'ok');
+    loadSettings();
+  } catch (e) { res('保存失败:' + e.message, 'bad'); }
+}
+
+async function testLLM() {
+  const b = $('#ltest'); b.disabled = true; b.textContent = '测试中…';
+  try {
+    const d = await api('/api/llm/test', { method: 'POST' });
+    if (d.ok) res(`✓ 通了 · ${esc(d.provider)} / ${esc(d.model)}`, 'ok');
+    else res(`✗ ${bold(d.error || '失败')}<br><br>${bold(d.hint || '')}`, 'bad');
+    loadSettings();      // 徽章跟着翻 —— 测过之后才该显示「可用/不可用」
+  } catch (e) { res('出错:' + e.message, 'bad'); }
+  b.disabled = false; b.textContent = '测一下';
+}
+
+async function listModels() {
+  const b = $('#llist'); b.disabled = true; b.textContent = '查询中…';
+  try {
+    const d = await api('/api/llm/models', { method: 'POST' });
+    if (d.error) res('✗ ' + esc(d.error), 'bad');
+    else res(`这家有 ${d.count} 个模型${d.note ? ' —— ' + esc(d.note) : ''}<br>`
+      + `<code>${(d.models || []).map(esc).join(' · ')}</code><br><br>`
+      + '点一个填进上面的「模型」框即可。', 'ok');
+  } catch (e) { res('出错:' + e.message, 'bad'); }
+  b.disabled = false; b.textContent = '看有哪些模型';
+}
+
+// 提示语里用 **…** 标了关键结论(比如「key 是有效的」)—— 渲染成粗体。
+// 注意顺序:先 esc 再转粗体,不能反过来,否则等于开了 XSS 口子。
+function bold(t) { return esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>'); }
+
+function res(html, cls) {
+  const r = $('#lres'); r.style.display = 'block';
+  r.className = 'llmres ' + (cls || ''); r.innerHTML = html;
+}
+
+loadLLM();
 </script>
