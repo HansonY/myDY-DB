@@ -18,15 +18,18 @@ PY=.venv/bin/python
 export BOSS_DB_PATH="${BOSS_DB_PATH:-data/boss.db}"
 
 case "${1:-web}" in
-  login) exec "$PY" backend/boss_cli.py login ;;
+  login)   exec "$PY" backend/boss_cli.py login ;;
+  record)  exec "$PY" backend/boss_record.py ;;
+  inspect) exec "$PY" backend/boss_inspect.py ;;
   fetch) shift; exec "$PY" backend/boss_cli.py fetch "$@" ;;
   whoami) exec "$PY" backend/boss_cli.py whoami ;;
   web)
     # 网页还没做 —— 采集器都还没有,先有数据再谈界面。
     echo "BOSS 的网页还没做。现在可用:"
-    echo "  ./boss.sh login    扫码登录"
+    echo "  ./boss.sh record   ← 从这里开始:你正常用浏览器,程序在后台记录"
+    echo "  ./boss.sh inspect  看录到了什么接口和字段"
+    echo "  ./boss.sh login    只登录不记录"
     echo "  ./boss.sh whoami   看登录态还在不在"
-    echo "  ./boss.sh fetch    抓数据(等接口形态)"
     exit 2
     ;;
   *) echo "用法: ./boss.sh [web|login|fetch]"; exit 1 ;;
