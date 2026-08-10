@@ -5,7 +5,25 @@
  */
 (() => {
   const WANT = /zhipin\.com\/.*(api|wapi|json)/i;
-  const SKIP = /(log|track|report|stat|monitor|heartbeat|\.gif|\.png|\.js|\.css)/i;
+  // 排除规则要够狠。第一版太宽,结果 5 条捕获全是噪音:
+  //   apm-fe.zhipin.com/wapi/zpApm/httpMetrics/getConfig   性能监控
+  //   /wapi/zppassport/get/wt                              登录态心跳
+  // 这些一打开页面就发,而真正的岗位数据要点进列表才有。
+  const SKIP = new RegExp([
+    'apm', 'httpMetrics', 'zppassport', 'security', 'captcha', 'verify',
+    'log', 'track', 'report', 'monitor', 'heartbeat', 'metric', 'collect',
+    'getConfig', 'common/data', 'banner', 'advert',
+    '\\.gif', '\\.png', '\\.jpg', '\\.js', '\\.css', '\\.svg',
+  ].join('|'), 'i');
+
+  // 只有「看起来含岗位数据」的才送。判据不猜字段名 —— 用一组常见 key 的**任意命中**,
+  // 外加「响应里有对象数组」这个结构特征。宁可少收也不要拿噪音把库填满。
+  const looksUseful = (b) => {
+    const s = JSON.stringify(b || {});
+    if (s.length < 120) return false;                    // 太小的多是配置/心跳
+    if (/job|Job|position|salary|brand|company|delivery|geek/.test(s)) return true;
+    return false;
+  };
 
   const send = (url, body) => {
     // 丢掉查询串 —— 那里常带 token,没必要留
@@ -22,7 +40,7 @@
       const u = typeof a[0] === 'string' ? a[0] : (a[0] && a[0].url) || '';
       if (WANT.test(u) && !SKIP.test(u) &&
           (r.headers.get('content-type') || '').includes('json')) {
-        r.clone().json().then(b => send(u, b)).catch(() => {});
+        r.clone().json().then(b => { if (looksUseful(b)) send(u, b); }).catch(() => {});
       }
     } catch (e) {}
     return r;
@@ -39,7 +57,8 @@
         const u = this.__u || '';
         if (WANT.test(u) && !SKIP.test(u) &&
             (this.getResponseHeader('content-type') || '').includes('json')) {
-          send(u, JSON.parse(this.responseText));
+          const b = JSON.parse(this.responseText);
+          if (looksUseful(b)) send(u, b);
         }
       } catch (e) {}
     });

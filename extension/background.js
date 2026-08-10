@@ -6,7 +6,7 @@ const MAX_BATCH = 40;
 
 let buf = [];
 let timer = null;
-let stat = { sent: 0, failed: 0, last: null, lastErr: null };
+let stat = { sent: 0, failed: 0, last: null, lastErr: null, byUrl: {} };
 
 async function flush() {
   timer = null;
@@ -39,6 +39,9 @@ function schedule() {
 chrome.runtime.onMessage.addListener((msg, _s, reply) => {
   if (msg?.type === 'capture') {
     buf.push({ url: msg.url, at: new Date().toISOString(), body: msg.body });
+    // 按接口计数 —— 光看总数分不出「抓到真数据」还是「抓了一堆噪音」
+    const k = String(msg.url).replace('https://www.zhipin.com', '');
+    stat.byUrl[k] = (stat.byUrl[k] || 0) + 1;
     schedule();
     reply?.({ ok: true });
   }

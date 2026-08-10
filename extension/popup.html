@@ -13,12 +13,18 @@
   button{width:100%;margin-top:10px;background:#12151a;color:#e9ecf1;
     border:1px solid #242a33;border-radius:7px;padding:7px;font-size:12px;cursor:pointer}
   button:hover{border-color:#4c8dff}
+  .u{display:flex;justify-content:space-between;gap:8px;font-size:10.5px;
+    color:#8b93a1;padding:3px 0;font-family:ui-monospace,monospace}
+  .u span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .u b{color:#4c8dff;flex:none}
+  .u.dim{color:#4e5866;font-family:inherit;line-height:1.5}
 </style>
 <h1>我的岗位库</h1>
 <div class="sub">你浏览过的岗位 → 本机知识库</div>
 <div class="row"><span>已送入库</span><b id="sent">–</b></div>
 <div class="row"><span>排队中</span><b id="pending">–</b></div>
 <div class="row"><span>本地服务</span><b id="svc">–</b></div>
-<button id="flush">立即发送</button>
+<div id="urls" style="margin-top:10px"></div>
+<button id="flush" title="后台是攒 4 秒发一批;排队中为 0 时点它没作用">立即发送</button>
 <div class="note" id="note"></div>
 <script src="popup.js"></script>
