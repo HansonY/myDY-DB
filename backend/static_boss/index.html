@@ -1,0 +1,57 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>我的岗位库</title>
+<link rel="stylesheet" href="/shell.css">
+<style>
+ body{padding:0}
+ .wrap{max-width:900px;margin:0 auto;padding:28px 24px 70px}
+ h1{margin:0 0 3px;font-size:20px;font-weight:600}
+ .sub{color:var(--dim2);font-size:12px;margin-bottom:20px}
+ table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:8px}
+ th{text-align:left;font-size:10px;font-weight:500;color:var(--dim2);letter-spacing:.6px;
+   padding:9px 12px;background:#0f1217;border-bottom:1px solid var(--line);white-space:nowrap}
+ td{padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+ tr:last-child td{border-bottom:0}
+ td.n{text-align:right;font-family:var(--mono);color:var(--accent-text)}
+ td.u{font-family:var(--mono);font-size:11px;color:var(--dim)}
+ td.t{font-family:var(--mono);font-size:11px;color:var(--dim2);white-space:nowrap}
+ .box{border:1px solid var(--line);border-radius:12px;background:var(--surface);overflow:hidden}
+</style>
+<div class="wrap">
+  <h1>我的岗位库</h1>
+  <div class="sub">你浏览过的 BOSS 岗位 · 全部存在本机 · <span id="db"></span></div>
+  <div class="facts" id="facts"></div>
+  <div class="sec"><h2>最近存了什么</h2><em id="hint"></em></div>
+  <div class="box"><table id="tb"><tr><td class="dim">读取中…</td></tr></table></div>
+</div>
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+async function load(){
+  const [st,rc]=await Promise.all([
+    fetch('/api/boss/stats').then(r=>r.json()),
+    fetch('/api/boss/recent?limit=40').then(r=>r.json()),
+  ]);
+  $('#db').textContent=st.db;
+  $('#facts').innerHTML=`
+    <div class="fact"><b>${st.jobs}</b><span>已入库岗位</span></div>
+    <div class="fact"><b>${st.jd_have}</b><span>有职位描述</span></div>
+    <div class="fact on"><b>${st.capture_files||0}</b><span>捕获批次</span></div>
+    <div class="fact"><b>${st.fragments}</b><span>知识片段</span></div>`;
+  const items=rc.items||[];
+  $('#hint').textContent=items.length
+    ? `共 ${rc.total_files} 批 · 下面是最近 ${items.length} 条`
+    : '还没有捕获';
+  $('#tb').innerHTML=items.length
+    ? '<tr><th>时间</th><th style="text-align:right">条数</th><th>样例</th><th>接口</th></tr>'
+      + items.map(i=>`<tr>
+          <td class="t">${esc((i.at||'').replace('T',' ').slice(5,19))}</td>
+          <td class="n">${i.records||1}</td>
+          <td>${esc(i.sample)||'<span class="dim">(没挖到标题)</span>'}</td>
+          <td class="u">${esc(i.url).slice(0,40)}</td></tr>`).join('')
+    : `<tr><td style="padding:30px;text-align:center;color:var(--dim)">
+         还没存到东西。装好插件后,点开 BOSS 的「我的投递 / 感兴趣」等<b>列表页</b>并往下滚 ——
+         停在首页不会有岗位接口。</td></tr>`;
+}
+load(); setInterval(load, 5000);
+</script>

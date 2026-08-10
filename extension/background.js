@@ -50,7 +50,7 @@ function learn(url) {
 
 let buf = [];
 let timer = null;
-let stat = { sent: 0, failed: 0, last: null, lastErr: null, byUrl: {} };
+let stat = { sent: 0, failed: 0, last: null, lastErr: null, byUrl: {}, recent: [] };
 
 async function flush() {
   timer = null;
@@ -86,6 +86,15 @@ chrome.runtime.onMessage.addListener((msg, _s, reply) => {
     // 按接口计数 —— 光看总数分不出「抓到真数据」还是「抓了一堆噪音」
     const k = String(msg.url).replace('https://www.zhipin.com', '');
     stat.byUrl[k] = (stat.byUrl[k] || 0) + 1;
+    // 存一条「人能看懂的」摘要,让弹窗能回答「刚才存了什么」——
+    // 只给总数的话,用户没法判断存的是真数据还是噪音(前面就这么被骗过)
+    stat.recent.unshift({
+      at: Date.now(),
+      url: k,
+      n: countItems(msg.body),
+      sample: firstTitle(msg.body),
+    });
+    stat.recent = stat.recent.slice(0, 12);
     harvest(msg.body);          // 列表里的 id 收进来
     learn(msg.url);             // 你手动点详情时,顺手学会模板
     if (tmpl && msg.url.includes('/')) {
@@ -107,6 +116,33 @@ chrome.runtime.onMessage.addListener((msg, _s, reply) => {
   if (msg?.type === 'stopFill') { filling = false; reply?.({ ok: true }); }
 });
 
+
+/** 数一数这个响应里有多少条记录 —— 找最长的对象数组。 */
+function countItems(node, depth = 0) {
+  if (depth > 6 || !node || typeof node !== 'object') return 0;
+  let best = 0;
+  if (Array.isArray(node)) {
+    if (node.length && typeof node[0] === 'object') best = node.length;
+    for (const x of node.slice(0, 3)) best = Math.max(best, countItems(x, depth + 1));
+    return best;
+  }
+  for (const v of Object.values(node)) best = Math.max(best, countItems(v, depth + 1));
+  return best;
+}
+
+/** 挖一个岗位标题当样例。不认死字段名 —— 常见几个都试。 */
+function firstTitle(node, depth = 0) {
+  if (depth > 6 || !node || typeof node !== 'object') return '';
+  if (Array.isArray(node)) {
+    for (const x of node.slice(0, 3)) { const t = firstTitle(x, depth + 1); if (t) return t; }
+    return '';
+  }
+  for (const k of ['jobName', 'jobTitle', 'positionName', 'title', 'brandName', 'companyName']) {
+    if (typeof node[k] === 'string' && node[k].trim()) return node[k].slice(0, 22);
+  }
+  for (const v of Object.values(node)) { const t = firstTitle(v, depth + 1); if (t) return t; }
+  return '';
+}
 
 /** 按人的节奏补详情。**一出错就停** —— 连续失败多半是被限流了,继续打只会更糟。 */
 async function startFill(tabId) {

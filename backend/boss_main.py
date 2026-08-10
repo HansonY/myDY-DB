@@ -84,6 +84,61 @@ async def ingest(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     return {"saved": len(items), "file": f.name, "by_url": urls}
 
 
+@app.get("/api/boss/recent")
+async def recent(limit: int = Query(30, ge=1, le=200)) -> dict[str, Any]:
+    """最近存了什么 —— 带时间、条数、样例。
+
+    「什么时候存的、存了什么」必须一眼能看到。只给一个总数的话,
+    分不出存的是真数据还是噪音 —— 前面就这么被骗过一次
+    (5 条捕获全是性能监控和登录心跳,但界面显示「已送入库 5」)。
+    """
+    if not CAPTURE_DIR.exists():
+        return {"items": [], "note": "还没有任何捕获"}
+
+    def count_and_sample(node, depth=0):
+        """找最长的对象数组当条数,顺手挖一个标题当样例。不认死字段名。"""
+        best, sample = 0, ""
+        if depth > 6 or not isinstance(node, (dict, list)):
+            return best, sample
+        if isinstance(node, list):
+            if node and isinstance(node[0], dict):
+                best = len(node)
+            for x in node[:3]:
+                b, sm = count_and_sample(x, depth + 1)
+                best = max(best, b)
+                sample = sample or sm
+            return best, sample
+        for k in ("jobName", "jobTitle", "positionName", "title", "brandName"):
+            if isinstance(node.get(k), str) and node[k].strip():
+                sample = node[k][:26]
+                break
+        for v in node.values():
+            b, sm = count_and_sample(v, depth + 1)
+            best = max(best, b)
+            sample = sample or sm
+        return best, sample
+
+    out = []
+    for f in sorted(CAPTURE_DIR.glob("*.json"), reverse=True):
+        try:
+            recs = json.loads(f.read_text(encoding="utf-8"))
+        except ValueError:
+            continue
+        for r in (recs if isinstance(recs, list) else [recs]):
+            n, sample = count_and_sample(r.get("body"))
+            out.append({
+                "at": r.get("at"),
+                "url": str(r.get("url", "")).replace("https://www.zhipin.com", ""),
+                "records": n, "sample": sample,
+                "file": f.name,
+            })
+            if len(out) >= limit:
+                break
+        if len(out) >= limit:
+            break
+    return {"items": out, "total_files": len(list(CAPTURE_DIR.glob("*.json")))}
+
+
 @app.get("/api/boss/stats")
 async def stats() -> dict[str, Any]:
     s = bs.stats()
