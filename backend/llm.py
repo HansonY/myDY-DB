@@ -155,3 +155,55 @@ def probe() -> dict[str, Any]:
         out["hint"] = ("模型名或端点可能不对 —— 在 .env 里用 LLM_MODEL / "
                        "LLM_BASE_URL 覆盖成该家文档上的值")
     return out
+
+
+def sniff() -> dict[str, Any]:
+    """key 在哪家能用?**挨个试一遍**,不用改 .env 一家家换。
+
+    为什么需要这个:各家 key 的前缀越来越像(`sk-…` 现在满地都是),
+    而 401 只会说「invalid api key」,不会告诉你「你把 A 家的 key 填给 B 家了」。
+    与其让人凭猜改配置,不如一次问清楚。
+
+    只报状态码和服务端原话,**不打印 key**。
+    """
+    key = config()["_key"]
+    if not key:
+        return {"error": "没配 key —— 先填 LLM_API_KEY"}
+
+    # 顺便试 MiniMax 的两个域:国内和国际是分开的,key 不通用
+    cands = [
+        ("minimax(国际)", "https://api.minimaxi.com/v1", "MiniMax-Text-01"),
+        ("minimax(国内)", "https://api.minimax.chat/v1", "MiniMax-Text-01"),
+        ("qwen", *_PROVIDERS["qwen"]),
+        ("deepseek", *_PROVIDERS["deepseek"]),
+        ("moonshot", *_PROVIDERS["moonshot"]),
+        ("zhipu", *_PROVIDERS["zhipu"]),
+    ]
+    rows = []
+    for name, base, model in cands:
+        row: dict[str, Any] = {"试": name, "model": model}
+        try:
+            r = httpx.post(
+                base.rstrip("/") + "/chat/completions",
+                headers={"Authorization": f"Bearer {key}",
+                         "Content-Type": "application/json"},
+                json={"model": model, "temperature": 0,
+                      "messages": [{"role": "user", "content": "hi"}]},
+                timeout=25, trust_env=False,
+            )
+            row["http"] = r.status_code
+            if r.status_code < 400:
+                row["结果"] = "✓ 这家能用"
+            else:
+                # 400 常常是「key 对但模型名不对」—— 那也是有用的信号
+                body = r.text[:150]
+                row["结果"] = ("key 对,模型名不对" if r.status_code == 400
+                               else "✗ 认证失败" if r.status_code in (401, 403)
+                               else "✗")
+                row["原话"] = body
+        except Exception as e:      # noqa: BLE001
+            row["结果"] = f"✗ 连不上 {type(e).__name__}"
+        rows.append(row)
+    return {"results": rows,
+            "note": "看到「✓ 这家能用」就把 LLM_PROVIDER 改成那家;"
+                    "看到「key 对,模型名不对」就用 LLM_MODEL 覆盖模型名"}

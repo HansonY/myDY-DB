@@ -25,6 +25,9 @@ case "${1:-web}" in
     echo
     echo "# ↑ 复制以上全部,粘到 zhipin.com 页面的 F12 → Console" >&2
     exit 0 ;;
+  llmsniff)
+    # key 到底是哪家的?挨个试一遍,不用改 .env 一家家换
+    exec "$PY" -c "import sys;sys.path.insert(0,'backend');import llm,json;print(json.dumps(llm.sniff(),ensure_ascii=False,indent=1))" ;;
   llmtest)
     # 配完模型先跑这个 —— 各家端点和模型名改得勤,别等提取时才发现不通
     exec "$PY" -c "import sys;sys.path.insert(0,'backend');import llm,json;print(json.dumps(llm.probe(),ensure_ascii=False,indent=1))" ;;
