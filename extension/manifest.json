@@ -1,14 +1,15 @@
 {
   "manifest_version": 3,
   "name": "我的岗位库",
-  "version": "0.3.0",
-  "description": "在 BOSS 浏览时,一键把当前页面的岗位信息存进本机知识库。AI 提取,不用管接口。数据只到 localhost。",
+  "version": "0.4.0",
+  "description": "在 BOSS 浏览时自动把岗位页原文存进本机知识库(AI 事后提取,不用管接口)。也可以粘一批链接让它逐个打开、存完就走。数据只到 localhost。",
   "permissions": [
     "storage",
     "tabs",
     "sidePanel",
     "scripting",
-    "activeTab"
+    "activeTab",
+    "webNavigation"
   ],
   "host_permissions": [
     "https://*.zhipin.com/*",

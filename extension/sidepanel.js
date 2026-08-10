@@ -95,9 +95,10 @@ async function save(auto) {
   try {
     const r = await fetch(API + '/api/boss/ingest_text', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      // 手动点 = force:我的判断可能错,人点了就该存。
-      // 自动存不 force,由后端判 —— 否则随便浏览个网页都往库里灌。
-      body: JSON.stringify({ ...page, auto: !!auto, force: !auto }),
+      // **一律 force**。用户明确要求「存错了没关系,自动存入」——
+      // 存的是页面原文,后面由 AI 过滤,所以宁可多存不要漏存。
+      // 判定结果照样记下来(页面上能看出哪些像岗位),但不用它拦人。
+      body: JSON.stringify({ ...page, auto: !!auto, force: true }),
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || ('HTTP ' + r.status));
@@ -158,14 +159,56 @@ $('#autochk').onchange = e => chrome.storage.local.set({ auto: e.target.checked 
 chrome.storage.local.get('auto').then(d => $('#autochk').checked = !!d.auto);
 // 换标签页 / 页面跳转都重新识别 —— 侧边栏是常驻的,内容得跟着走
 chrome.tabs.onActivated.addListener(() => readPage());
-chrome.tabs.onUpdated.addListener(async (id, info) => {
-  if (info.status !== 'complete') return;
-  await readPage();
-  const { auto } = await chrome.storage.local.get('auto');
-  // 每个 BOSS 页面都送去判一次,**存不存由后端说** ——
-  // 前端不再用 kind 自己拦(那等于把判断写两遍)。列表页也存:
-  // 它一屏十几个岗位,一次 AI 调用就能全提出来,比逐个点开划算得多。
-  if (auto && page && page.len >= 80) save(true);
+// 自动存**不在这里做**,在 background.js。原因:
+//   · 面板关着时也要工作(人浏览时不会一直开着面板);
+//   · BOSS 是单页应用,从列表点进详情走 history API,
+//     tabs.onUpdated 的 'complete' 不触发 —— 这是之前一直没自动存的主因。
+// 这里只负责跟着刷新显示。
+chrome.tabs.onUpdated.addListener((id, info) => {
+  if (info.status === 'complete') readPage();
 });
-readPage(); refresh();
-setInterval(refresh, 6000);
+/* ── 自动存状态 ─────────────────────────────────────────
+ * 必须看得见。这个项目栽过一次「界面显示已入库 5、实际全是噪音」——
+ * 自动的东西不显示战果,等于让人蒙着眼睛信它。 */
+async function autoStat() {
+  let d = {};
+  try { d = await chrome.runtime.sendMessage({ type: 'saveStat' }) || {}; } catch (e) { return; }
+  const st = d.saveStat || {}, b = d.batch || {};
+  const box = $('#astat');
+  const bits = [];
+  if (st.ok) bits.push(`已存 ${st.ok}`);
+  if (st.skip) bits.push(`跳过 ${st.skip}`);
+  if (st.fail) bits.push(`失败 ${st.fail}`);
+  box.innerHTML = bits.length
+    ? `<span class="${st.fail ? 'bad' : 'ok'}">${bits.join(' · ')}</span>`
+      + (st.lastTitle ? `<div class="ml">最近:${esc(st.lastTitle)}</div>` : '')
+      + (st.lastErr ? `<div class="ml bad">${esc(st.lastErr)}</div>` : '')
+    : '<span class="dimz">还没自动存过 —— 勾上「自动存」再浏览岗位页</span>';
+
+  // 批量进度
+  const bb = $('#bstat');
+  if (b.total) {
+    bb.style.display = 'block';
+    bb.innerHTML = `<div class="bp">${b.running ? '进行中' : '已结束'} `
+      + `${b.done}/${b.total} · 成功 ${b.ok} 失败 ${b.fail}</div>`
+      + (b.cur ? `<div class="ml">正在:${esc(b.cur.slice(0, 46))}</div>` : '')
+      + (b.log || []).slice(0, 6).map(l =>
+          `<div class="ml ${l.ok ? 'ok' : 'bad'}">${l.ok ? '✓' : '✗'} ${
+            esc(l.title || l.url || '')?.slice(0, 34)} ${esc(l.note || '')}</div>`).join('');
+    $('#bgo').textContent = b.running ? '停止' : '开始逐个打开并存入';
+  } else { bb.style.display = 'none'; }
+}
+
+$('#bgo').onclick = async () => {
+  const b = await chrome.storage.local.get('batch');
+  if (b.batch?.running) { chrome.runtime.sendMessage({ type: 'stopBatch' }); return; }
+  const urls = $('#links').value.split(/[\s,]+/).filter(Boolean);
+  if (!urls.length) { msg('先把岗位链接粘进上面的框(一行一个)', 'bad'); return; }
+  msg('');
+  const r = await chrome.runtime.sendMessage({ type: 'startBatch', urls });
+  if (r?.error) msg(r.error, 'bad');
+  autoStat();
+};
+
+readPage(); refresh(); autoStat();
+setInterval(() => { refresh(); autoStat(); }, 4000);

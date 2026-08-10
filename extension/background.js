@@ -175,3 +175,209 @@ async function startFill(tabId) {
   filling = false;
   return { ok, fail, stopped: fail >= 3 };
 }
+
+
+/* ══════════════════════════════════════════════════════════════
+ * 自动存 + 批量按链接存
+ *
+ * **为什么搬到 background 来。** 原来这段在 sidepanel.js 里,有三个问题:
+ *   1. 侧边栏关掉就完全不工作 —— 而人浏览时不会一直开着面板;
+ *   2. 只听 tabs.onUpdated 的 'complete'。**BOSS 是单页应用**,
+ *      从列表点进详情走的是 history API,不产生整页加载,
+ *      'complete' 根本不触发 —— 这是「打开岗位详情却没自动存」的主因;
+ *   3. 自动存时没带 force,被后端的判断挡掉了。
+ *
+ * 现在:两种跳转都听(整页加载 + SPA 换 URL),面板开不开都跑,
+ * 而且**一律存**(用户明确说「存错了没关系」)—— 后端只记判定结果不拦。
+ * 存的是页面原文,后面由 AI 过滤,所以宁可多存。
+ * ══════════════════════════════════════════════════════════════ */
+
+const TEXT_API = 'http://localhost:8001/api/boss/ingest_text';
+// SPA 换 URL 之后内容是异步渲染的,立刻抓会抓到上一页或者空白。
+// 等一下再抓,并且抓到的字数太少就再等一次。
+const SPA_SETTLE_MS = 1400;
+const MIN_CHARS = 200;      // 比这还少基本是导航骨架,不是「存错了」而是「存了个空的」
+
+let autoOn = false;
+chrome.storage.local.get('auto').then(d => { autoOn = !!d.auto; });
+chrome.storage.onChanged.addListener(c => { if (c.auto) autoOn = !!c.auto.newValue; });
+
+let saveStat = { ok: 0, skip: 0, fail: 0, last: null, lastTitle: null, lastErr: null };
+const lastSavedUrl = new Map();      // tabId → 上次存过的 URL,防同页重复触发
+
+/** 在页面里跑:只抽文字。判断在后端,这里不做任何判断。 */
+function grabText() {
+  const drop = 'script,style,noscript,svg,nav,footer,header,iframe';
+  const root = document.querySelector('#main,#wrap,.page-job-wrapper,.job-detail,main')
+            || document.body;
+  const clone = root.cloneNode(true);
+  clone.querySelectorAll(drop).forEach(e => e.remove());
+  const text = (clone.innerText || '').replace(/\n{3,}/g, '\n\n').trim();
+  return {
+    url: location.href,
+    title: (document.title || '').trim().slice(0, 120),
+    h1: (document.querySelector('h1')?.innerText || '').trim().slice(0, 80),
+    text: text.slice(0, 24000), len: text.length,
+  };
+}
+
+async function readTab(tabId) {
+  const [r] = await chrome.scripting.executeScript({
+    target: { tabId }, func: grabText, world: 'MAIN',
+  });
+  return r?.result || null;
+}
+
+/** 抓一次;字数太少就再等一下重抓 —— SPA 渲染慢的时候第一次会抓空。 */
+async function readTabSettled(tabId) {
+  let page = await readTab(tabId);
+  if (!page || page.len < MIN_CHARS) {
+    await sleep(1200);
+    page = await readTab(tabId);
+  }
+  return page;
+}
+
+const sleep = ms => new Promise(s => setTimeout(s, ms));
+
+/** 存一页。force=true → 后端不拦,一律入队(用户要的就是这个)。 */
+async function saveText(page, { auto = false, force = true } = {}) {
+  const r = await fetch(TEXT_API, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...page, auto, force }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.detail || ('HTTP ' + r.status));
+  return d;
+}
+
+async function autoSave(tabId, url) {
+  if (!autoOn) return;
+  if (!/^https:\/\/[^/]*zhipin\.com\//.test(url || '')) return;
+  // 批量跑的时候别跟它抢:批量自己开的标签页加载完也会触发 onUpdated,
+  // 不挡掉就会同一页存两次(去重能兜住,但统计数字会翻倍、看着像出了问题)。
+  if (filling || batch.running) return;
+  const bare = String(url).split('#')[0];
+  if (lastSavedUrl.get(tabId) === bare) return;   // 同一页别反复存
+
+  try {
+    const page = await readTabSettled(tabId);
+    if (!page || page.len < MIN_CHARS) {
+      saveStat.skip++;
+      saveStat.lastErr = `页面只有 ${page?.len ?? 0} 字,像是还没渲染完`;
+      await chrome.storage.local.set({ saveStat });
+      return;
+    }
+    const d = await saveText(page, { auto: true, force: true });
+    lastSavedUrl.set(tabId, bare);
+    saveStat.ok++;
+    saveStat.last = new Date().toISOString();
+    saveStat.lastTitle = page.h1 || page.title;
+    saveStat.lastErr = null;
+    // 判定结果只**记录**不拦 —— 页面上能看出哪些像岗位、哪些是顺手存的
+    saveStat.lastVerdict = d.detect?.why || null;
+  } catch (e) {
+    saveStat.fail++;
+    saveStat.lastErr = /Failed to fetch/.test(String(e.message))
+      ? '连不上本地服务(./boss.sh web)' : String(e.message).slice(0, 90);
+  }
+  await chrome.storage.local.set({ saveStat });
+}
+
+// 整页加载
+chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
+  if (info.status === 'complete') autoSave(tabId, tab?.url);
+});
+// SPA 换 URL —— **这条才是从列表点进详情时唯一会触发的**
+chrome.webNavigation?.onHistoryStateUpdated.addListener(async d => {
+  if (d.frameId !== 0) return;
+  await sleep(SPA_SETTLE_MS);
+  autoSave(d.tabId, d.url);
+}, { url: [{ hostSuffix: 'zhipin.com' }] });
+// 标签关了就忘掉它的去重记录,免得越攒越多
+chrome.tabs.onRemoved.addListener(id => lastSavedUrl.delete(id));
+
+
+/* ── 批量:粘一批链接,逐个打开→存→关 ──────────────────────
+ * 为什么要它:一个个点开太慢。
+ *
+ * ⚠️ 这会产生**你没有亲手点过的请求**。所以:必须你点按钮才开始、
+ * 用一个复用的标签页(不是几十个一起开)、按人的节奏 4–9 秒随机、
+ * 连错三次就停、随时可中断。固定间隔本身就是机器特征,所以取随机。
+ */
+let batch = { running: false, total: 0, done: 0, ok: 0, fail: 0, cur: '', log: [] };
+
+async function startBatch(urls) {
+  if (batch.running) return { error: '已经在跑了' };
+  const list = [...new Set((urls || [])
+    .map(u => String(u).trim())
+    .filter(u => /^https?:\/\/[^/]*zhipin\.com\//.test(u)))];
+  if (!list.length) return { error: '没有可用的 zhipin.com 链接' };
+
+  batch = { running: true, total: list.length, done: 0, ok: 0, fail: 0, cur: '', log: [] };
+  await chrome.storage.local.set({ batch });
+
+  // 复用一个标签页 —— 一次开几十个既卡又扎眼
+  const tab = await chrome.tabs.create({ url: list[0], active: false });
+  try {
+    for (let i = 0; i < list.length; i++) {
+      if (!batch.running) break;
+      const url = list[i];
+      batch.cur = url;
+      await chrome.storage.local.set({ batch });
+      try {
+        if (i > 0) await chrome.tabs.update(tab.id, { url });
+        await waitLoaded(tab.id);
+        await sleep(900);                       // 让异步内容渲染出来
+        const page = await readTabSettled(tab.id);
+        if (!page || page.len < MIN_CHARS) throw new Error(`只有 ${page?.len ?? 0} 字`);
+        const d = await saveText(page, { auto: true, force: true });
+        batch.ok++;
+        batch.log.unshift({ url, ok: true,
+          title: (page.h1 || page.title || '').slice(0, 40),
+          note: d.replaced ? '覆盖' : '新增' });
+      } catch (e) {
+        batch.fail++;
+        batch.log.unshift({ url, ok: false, note: String(e.message).slice(0, 60) });
+        // 连错三次就收手 —— 多半是被限流了,继续打只会更糟
+        if (batch.fail >= 3 && batch.ok === 0) { batch.log.unshift({ note: '连续失败,已停止' }); break; }
+      }
+      batch.done++;
+      batch.log = batch.log.slice(0, 40);
+      await chrome.storage.local.set({ batch });
+      if (i < list.length - 1 && batch.running) await sleep(4000 + Math.random() * 5000);
+    }
+  } finally {
+    batch.running = false; batch.cur = '';
+    await chrome.storage.local.set({ batch });
+    chrome.tabs.remove(tab.id).catch(() => {});
+  }
+  return { ok: batch.ok, fail: batch.fail, total: batch.total };
+}
+
+function waitLoaded(tabId, timeout = 25000) {
+  return new Promise((res, rej) => {
+    const t = setTimeout(() => { chrome.tabs.onUpdated.removeListener(fn); rej(new Error('加载超时')); }, timeout);
+    function fn(id, info) {
+      if (id === tabId && info.status === 'complete') {
+        clearTimeout(t); chrome.tabs.onUpdated.removeListener(fn); res();
+      }
+    }
+    chrome.tabs.onUpdated.addListener(fn);
+  });
+}
+
+chrome.runtime.onMessage.addListener((msg, _s, reply) => {
+  if (msg?.type === 'saveStat') {
+    chrome.storage.local.get(['saveStat', 'batch']).then(d => reply(d)); return true;
+  }
+  if (msg?.type === 'startBatch') { startBatch(msg.urls).then(r => reply(r)); return true; }
+  if (msg?.type === 'stopBatch') { batch.running = false; reply({ ok: true }); }
+  // 侧边栏手动点「存入」也走这里,省得两处各写一份 fetch
+  if (msg?.type === 'saveOne') {
+    saveText(msg.page, { auto: false, force: true })
+      .then(d => reply({ ok: true, ...d }))
+      .catch(e => reply({ error: String(e.message) }));
+    return true;
+  }
+});

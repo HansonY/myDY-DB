@@ -71,7 +71,9 @@
 
     <h2>待提取</h2>
     <p class="lead">插件存进来的**页面原文**先排在这儿,攒一批一次交给 AI ——
-      逐页调用又慢又贵。提取失败的会留着下次再试,原文一条都不会丢。</p>
+      逐页调用又慢又贵。提取失败的会留着下次再试,原文一条都不会丢。<br>
+      自动存是**一律先存**(宁可多存不要漏),所以会混进「不像岗位页」的 ——
+      AI 提取时它们会返回空,不会污染岗位表。</p>
     <div class="box"><table id="pend"><tr><td class="dim">读取中…</td></tr></table></div>
   </div></div>
 </div>
@@ -143,7 +145,8 @@ async function load() {
     ? '<tr><th>标题</th><th>判定</th><th>字数</th><th>存入</th></tr>'
       + items.map(i => `<tr>
           <td>${esc(i.title) || '<span class="dim">(无标题)</span>'}</td>
-          <td><span class="pill">${{detail: '岗位详情', list: '岗位列表'}[i.kind] || esc(i.kind || '?')}</span></td>
+          <td><span class="pill${i.kind === 'other' ? '' : ' have'}">${
+              {detail: '岗位详情', list: '岗位列表', other: '不像岗位页'}[i.kind] || esc(i.kind || '?')}</span></td>
           <td class="n">${i.chars || 0}</td>
           <td class="t">${esc((i.at || '').replace('T', ' ').slice(5, 16))}</td>
         </tr>`).join('')
