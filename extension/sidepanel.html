@@ -10,6 +10,10 @@ body{margin:0;background:var(--bg);color:var(--fg);
 h1{margin:0 0 2px;font-size:14px;font-weight:600}
 .sub{color:var(--dim2);font-size:10.5px;margin-bottom:14px}
 
+/* ⚠️ 这里以前用负 margin 收紧间距(#astat / #pickinfo 各 -4px / -3px),
+   结果在窄侧边栏里文字换行一多就**压到上一个元素上**。
+   要收紧就调上一个元素的 margin-bottom,别用负 margin 往上顶。 */
+
 .now{border:1px solid var(--line);border-radius:10px;background:var(--surface);
   padding:12px;margin-bottom:10px}
 .now .kind{font-size:10px;color:var(--dim2);letter-spacing:.5px;margin-bottom:6px}
@@ -33,15 +37,17 @@ button:hover:not(:disabled){background:rgba(76,141,255,.26)}
 button:disabled{opacity:.4;cursor:default}
 button.ghost{background:transparent;border-color:var(--line2);color:var(--dim);font-weight:400}
 button.ghost:hover{color:var(--fg);border-color:var(--dim2)}
+button.sm{padding:6px;font-size:11.5px}
 
-.auto{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--dim);
-  padding:7px 0 11px}
-.auto input{accent-color:var(--accent)}
+.auto{display:flex;align-items:flex-start;gap:7px;font-size:11.5px;color:var(--dim);
+  padding:4px 0 8px;line-height:1.45}
+.auto input{accent-color:var(--accent);margin-top:2px;flex:0 0 auto}
 
-.msg{font-size:11px;color:var(--dim2);min-height:16px;line-height:1.5;margin-bottom:10px}
+.msg{font-size:11px;color:var(--dim2);line-height:1.5;margin-bottom:10px}
 .msg.ok{color:var(--ok)} .msg.bad{color:var(--warn)}
+.msg:empty{margin:0}
 
-.hd{display:flex;align-items:baseline;gap:7px;margin:14px 0 7px}
+.hd{display:flex;align-items:baseline;gap:7px;flex-wrap:wrap;margin:18px 0 6px}
 .hd b{font-size:11.5px;font-weight:600}
 .hd span{font-size:10px;color:var(--dim2)}
 .list{display:flex;flex-direction:column;gap:1px}
@@ -50,34 +56,42 @@ button.ghost:hover{color:var(--fg);border-color:var(--dim2)}
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .it .m{font-size:10px;color:var(--dim2);font-family:var(--mono);margin-top:2px}
 .empty{color:var(--dim2);font-size:11px;line-height:1.6;padding:14px 0}
-.row{display:flex;align-items:center;gap:6px;margin-bottom:8px}
+
+.row{display:flex;align-items:center;gap:6px;margin:0 0 8px}
 .row .lbl{font-size:11.5px;color:var(--dim);white-space:nowrap}
-.row input[type=number]{width:52px;background:var(--surface);border:1px solid var(--line);
+.row input[type=number]{width:50px;background:var(--surface);border:1px solid var(--line);
   border-radius:6px;padding:5px 6px;color:var(--fg);font:12px var(--mono);text-align:center}
 .row input:focus{outline:none;border-color:rgba(76,141,255,.45)}
-button.inl{width:auto;margin:0 0 0 auto;padding:6px 12px}
-#pickinfo{font-size:10.5px;line-height:1.55;margin:-3px 0 8px}
+
+/* 勾上「自动下一页」才出现的那一小组,靠左边一条竖线表示「属于上面那个开关」 */
+#nextbox{border-left:2px solid var(--line2);padding-left:10px;margin:0 0 9px}
+#pickinfo{font-size:10.5px;line-height:1.55}
 #pickinfo .ok{color:var(--ok)} #pickinfo .dimz{color:var(--dim2)}
 #pickinfo a{color:var(--accent-t);cursor:pointer;text-decoration:underline}
-#rstat{font-size:11px;margin-bottom:10px}
-#rstat .bp{color:var(--accent-t);margin-bottom:4px}
-#nextbox{border-left:2px solid var(--line2);padding-left:10px;margin:0 0 8px}
 
-/* 自动存战果 —— 自动的东西必须显示它干了什么,否则等于蒙眼信它 */
-#astat{font-size:11px;line-height:1.5;margin:-4px 0 10px}
-#astat .ok{color:var(--ok)} #astat .bad{color:var(--warn)}
+/* 进度 —— 自动的东西必须显示它干了什么,否则等于蒙眼信它 */
+#astat,#rstat,#bstat{font-size:11px;line-height:1.5;margin:0 0 10px}
+#astat:empty,#rstat:empty,#bstat:empty{margin:0}
+#astat .ok,#rstat .ok{color:var(--ok)} #astat .bad{color:var(--warn)}
 #astat .dimz{color:var(--dim2)}
+#rstat .bp,#bstat .bp{color:var(--accent-t);margin-bottom:4px}
 .ml{font-size:10px;color:var(--dim2);font-family:var(--mono);margin-top:2px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ml.ok{color:var(--ok)} .ml.bad{color:var(--warn)}
 
-/* 批量:粘一批链接 */
-textarea{width:100%;min-height:64px;resize:vertical;background:var(--surface);
+/* 手动粘链接:收进折叠区。它跟自动跑是同一件事,只是入口不同 ——
+   平时摊开只会让人以为是两个功能。 */
+details{margin:2px 0 10px}
+summary{font-size:10.5px;color:var(--dim2);cursor:pointer;padding:3px 0;list-style:none}
+summary::-webkit-details-marker{display:none}
+summary::before{content:'▸ ';color:var(--dim2)}
+details[open] summary::before{content:'▾ '}
+summary:hover{color:var(--dim)}
+details .in{border-left:2px solid var(--line2);padding-left:10px;margin-top:6px}
+textarea{width:100%;min-height:58px;resize:vertical;background:var(--surface);
   border:1px solid var(--line);border-radius:8px;padding:8px 9px;color:var(--fg);
   font:11px/1.5 var(--mono);margin-bottom:7px}
 textarea:focus{outline:none;border-color:rgba(76,141,255,.45)}
-#bstat{display:none;font-size:11px;margin-bottom:10px}
-#bstat .bp{color:var(--accent-t);margin-bottom:3px}
 </style>
 
 <h1>我的岗位库</h1>
@@ -86,45 +100,51 @@ textarea:focus{outline:none;border-color:rgba(76,141,255,.45)}
 <div class="now" id="now"><div class="kind">当前页面</div>
   <div class="t" style="color:var(--dim)">读取中…</div></div>
 
-<button id="save">存入岗位库</button>
+<button id="save">存入当前这一页</button>
 <button class="ghost" id="extract" title="攒一批一起交给 AI —— 比一页一次快也便宜">没有待提取的</button>
 <button class="ghost" id="open">打开岗位库 ↗</button>
-<label class="auto"><input type="checkbox" id="autochk">
-  自动存(打开岗位页就自动存,非岗位页会跳过)</label>
 <div class="msg" id="msg"></div>
 
-<div class="hd"><b>自动存</b><span>断在哪一环一眼能看到</span></div>
-<div id="astat"></div>
-
-<div class="hd"><b>批量存入</b><span>本页岗位逐个存完,再翻下一页</span></div>
+<!-- ── 批量:一个块,不再分「批量存入」和「手动补链接」两处 ──
+     它们本来就是同一件事(把列表里的岗位逐个打开存进来),
+     自动翻页只是它的一个选项。分成两块只会让人以为是两个功能。 -->
+<div class="hd"><b>批量抓岗位</b><span>本页岗位逐个存完,再翻下一页</span></div>
 
 <label class="auto"><input type="checkbox" id="autonext">
-  自动下一页(勾上才逐页跑,不勾只做当前这一页)</label>
+  <span>自动下一页 —— 不勾就只抓当前这一页</span></label>
 
-<!-- 勾上才出现:翻几次 + 指按钮。不勾时这些是多余的,藏起来 -->
 <div id="nextbox" hidden>
   <div class="row">
     <span class="lbl">最多翻</span>
     <input id="pgn" type="number" min="1" max="20" value="5">
     <span class="lbl">次</span>
   </div>
-  <button class="ghost" id="pick">指一下「下一页」在哪</button>
+  <button class="ghost sm" id="pick">指一下「下一页」在哪</button>
   <div id="pickinfo"></div>
 </div>
 
 <button id="rgo">开始</button>
 <div id="rstat"></div>
 
-<div class="hd"><b>手动补链接</b><span>自己粘一批,逐个打开存入</span></div>
-<button class="ghost" id="harvest"
-  title="只读已经加载出来的页面,不发任何请求。列表是懒加载的,先往下滚几屏">抓本页岗位链接</button>
-<textarea id="links" placeholder="点上面「抓本页岗位链接」自动填,
-或者自己粘,一行一个:
+<details>
+  <summary>手动粘一批链接(平时不用)</summary>
+  <div class="in">
+    <button class="ghost sm" id="harvest"
+      title="只读已经加载出来的页面,不发任何请求。列表是懒加载的,先往下滚几屏">抓本页岗位链接</button>
+    <textarea id="links" placeholder="点上面按钮自动填,或自己粘,一行一个:
 https://www.zhipin.com/job_detail/xxxx.html"></textarea>
-<button class="ghost" id="bgo">开始逐个打开并存入</button>
-<div id="bstat"></div>
+    <button class="ghost sm" id="bgo">逐个打开并存入</button>
+    <div id="bstat"></div>
+  </div>
+</details>
+
+<!-- ── 自动存(浏览时顺手存)—— 和上面的批量是两回事,所以留独立一块 ── -->
+<div class="hd"><b>浏览时自动存</b><span>断在哪一环一眼能看到</span></div>
+<label class="auto"><input type="checkbox" id="autochk">
+  <span>打开岗位页就自动存(非岗位页也存,AI 事后过滤)</span></label>
+<div id="astat"></div>
 
 <div class="hd"><b>已存</b><span id="cnt"></span></div>
-<div class="list" id="list"><div class="empty">还没有。打开一个岗位页,点上面「存入」。</div></div>
+<div class="list" id="list"><div class="empty">还没有。打开一个岗位页,点上面「存入当前这一页」。</div></div>
 
 <script src="sidepanel.js"></script>

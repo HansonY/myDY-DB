@@ -85,7 +85,7 @@ async function readPage() {
     ${v ? `<div class="why ${v.is_job ? 'yes' : 'no'}">${esc(v.why)}</div>${sig}` : ''}`;
   // other 也允许手动存 —— 判断可能不准,不该因为我猜错就拦着你
   $('#save').disabled = page.len < 80;
-  $('#save').textContent = v && !v.is_job ? '仍然存入(我判它不是岗位页)' : '存入岗位库';
+  $('#save').textContent = v && !v.is_job ? '仍然存入(我判它不是岗位页)' : '存入当前这一页';
 }
 
 async function save(auto) {
@@ -109,7 +109,7 @@ async function save(auto) {
       ? '连不上本地服务 —— 在项目目录跑 ./boss.sh web'
       : '出错:' + e.message, 'bad');
   }
-  btn.textContent = '存入岗位库';
+  btn.textContent = '存入当前这一页';
   btn.disabled = false;
 }
 
@@ -201,18 +201,19 @@ async function autoStat() {
   if (st.lastErr) rows.push(`<div class="ml bad">${esc(st.lastErr)}</div>`);
   $('#astat').innerHTML = rows.join('');
 
-  // 批量进度
+  // 手动粘链接那条路的进度(在折叠区里)。跑起来了就把折叠区自动展开 ——
+  // 否则进度藏在收起来的地方,看着像什么都没发生。
   const bb = $('#bstat');
   if (b.total) {
-    bb.style.display = 'block';
     bb.innerHTML = `<div class="bp">${b.running ? '进行中' : '已结束'} `
       + `${b.done}/${b.total} · 成功 ${b.ok} 失败 ${b.fail}</div>`
       + (b.cur ? `<div class="ml">正在:${esc(b.cur.slice(0, 46))}</div>` : '')
       + (b.log || []).slice(0, 6).map(l =>
           `<div class="ml ${l.ok ? 'ok' : 'bad'}">${l.ok ? '✓' : '✗'} ${
             esc(l.title || l.url || '')?.slice(0, 34)} ${esc(l.note || '')}</div>`).join('');
-    $('#bgo').textContent = b.running ? '停止' : '开始逐个打开并存入';
-  } else { bb.style.display = 'none'; }
+    $('#bgo').textContent = b.running ? '停止' : '逐个打开并存入';
+    if (b.running) { const d = document.querySelector('details'); if (d) d.open = true; }
+  } else { bb.innerHTML = ''; }
 }
 
 
