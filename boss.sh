@@ -19,6 +19,7 @@ export BOSS_DB_PATH="${BOSS_DB_PATH:-data/boss.db}"
 
 case "${1:-web}" in
   login)   exec "$PY" backend/boss_cli.py login ;;
+  probe)   exec "$PY" backend/boss_probe.py ;;
   record)  exec "$PY" backend/boss_record.py ;;
   inspect) exec "$PY" backend/boss_inspect.py ;;
   fetch) shift; exec "$PY" backend/boss_cli.py fetch "$@" ;;
@@ -26,7 +27,8 @@ case "${1:-web}" in
   web)
     # 网页还没做 —— 采集器都还没有,先有数据再谈界面。
     echo "BOSS 的网页还没做。现在可用:"
-    echo "  ./boss.sh record   ← 从这里开始:你正常用浏览器,程序在后台记录"
+    echo "  ./boss.sh probe    ← 先跑这个:测 cookie 直连行不行(30 秒)"
+    echo "  ./boss.sh record   浏览器常驻:你正常用,程序在后台记录"
     echo "  ./boss.sh inspect  看录到了什么接口和字段"
     echo "  ./boss.sh login    只登录不记录"
     echo "  ./boss.sh whoami   看登录态还在不在"
