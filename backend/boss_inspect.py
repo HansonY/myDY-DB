@@ -38,22 +38,26 @@ def main() -> int:
     files = sorted(CAPTURE_DIR.glob("*.json"))
     print(f"录制文件 {len(files)} 个\n")
 
-    by_url: dict[str, list[Path]] = {}
+    # 两种来源都认:
+    #   · 录制器落的单文件           {"url":…, "body":…}
+    #   · 浏览器控制台片段下载的合集  [{"url":…, "body":…}, …]
+    recs: list[dict] = []
     for f in files:
         try:
             d = json.loads(f.read_text(encoding="utf-8"))
         except ValueError:
             continue
-        by_url.setdefault(d.get("url", "?"), []).append(f)
+        recs.extend(d if isinstance(d, list) else [d])
+    print(f"记录 {len(recs)} 条\n")
 
-    for url, fs in sorted(by_url.items(), key=lambda x: -len(x[1])):
+    by_url: dict[str, list[dict]] = {}
+    for d in recs:
+        by_url.setdefault(d.get("url", "?"), []).append(d)
+
+    for url, group in sorted(by_url.items(), key=lambda x: -len(x[1])):
         print("─" * 64)
-        print(f"{url.replace('https://www.zhipin.com', '')}   ({len(fs)} 次)")
-        try:
-            d = json.loads(fs[0].read_text(encoding="utf-8"))
-        except ValueError:
-            continue
-        body = d.get("body")
+        print(f"{url.replace('https://www.zhipin.com', '')}   ({len(group)} 次)")
+        body = group[0].get("body")
         if isinstance(body, dict):
             print(f"  顶层键: {', '.join(list(body.keys())[:10])}")
         lists = _walk_lists(body)

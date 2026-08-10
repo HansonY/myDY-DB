@@ -19,6 +19,12 @@ export BOSS_DB_PATH="${BOSS_DB_PATH:-data/boss.db}"
 
 case "${1:-web}" in
   login)   exec "$PY" backend/boss_cli.py login ;;
+  snippet)
+    # 把控制台片段打出来,方便直接复制
+    cat scripts/boss_snippet.js
+    echo
+    echo "# ↑ 复制以上全部,粘到 zhipin.com 页面的 F12 → Console" >&2
+    exit 0 ;;
   probe)   exec "$PY" backend/boss_probe.py ;;
   record)  exec "$PY" backend/boss_record.py ;;
   inspect) exec "$PY" backend/boss_inspect.py ;;
@@ -27,10 +33,10 @@ case "${1:-web}" in
   web)
     # 网页还没做 —— 采集器都还没有,先有数据再谈界面。
     echo "BOSS 的网页还没做。现在可用:"
-    echo "  ./boss.sh probe    ← 先跑这个:测 cookie 直连行不行(30 秒)"
-    echo "  ./boss.sh record   浏览器常驻:你正常用,程序在后台记录"
+    echo "  ./boss.sh snippet  ← 推荐:控制台片段,用你已登录的浏览器,不碰 cookie"
     echo "  ./boss.sh inspect  看录到了什么接口和字段"
-    echo "  ./boss.sh login    只登录不记录"
+    echo "  ./boss.sh probe    测 cookie 直连行不行(要先填 BOSS_COOKIE)"
+    echo "  ./boss.sh record   备选:程序开浏览器常驻录制(要重新登录一次)"
     echo "  ./boss.sh whoami   看登录态还在不在"
     exit 2
     ;;
