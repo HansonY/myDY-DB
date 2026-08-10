@@ -338,6 +338,26 @@ chrome.tabs.onRemoved.addListener(async id => {
  * 用一个复用的标签页(不是几十个一起开)、按人的节奏 4–9 秒随机、
  * 连错三次就停、随时可中断。固定间隔本身就是机器特征,所以取随机。
  */
+/* 长任务保活。
+ *
+ * **MV3 的 service worker 空闲约 30 秒就被终止**,而 setTimeout 不会阻止终止
+ * (只有 chrome API 调用会重置那个空闲计时器)。批量存入几十个链接要跑好几分钟,
+ * 不保活就会在中途被杀 —— 任务无声中断,进度条停在那儿,看不出发生了什么。
+ * 所以长任务期间每 20 秒 ping 一次 API。
+ *
+ * 保活是变通,不是保证。所以进度**每一步都写 storage**:万一还是被杀了,
+ * 界面能显示停在哪一条,而不是让人对着不动的进度条猜。
+ * (自动存那边已经栽过一次同类问题 —— 模块变量活不过一次空闲。)
+ */
+let keepTimer = null;
+function keepAlive(on) {
+  if (on && !keepTimer) {
+    keepTimer = setInterval(() => chrome.runtime.getPlatformInfo().catch(() => {}), 20000);
+  } else if (!on && keepTimer) {
+    clearInterval(keepTimer); keepTimer = null;
+  }
+}
+
 let batch = { running: false, total: 0, done: 0, ok: 0, fail: 0, cur: '', log: [] };
 
 async function startBatch(urls) {
@@ -349,6 +369,7 @@ async function startBatch(urls) {
 
   batch = { running: true, total: list.length, done: 0, ok: 0, fail: 0, cur: '', log: [] };
   await chrome.storage.local.set({ batch });
+  keepAlive(true);
 
   // 复用一个标签页 —— 一次开几十个既卡又扎眼
   const tab = await chrome.tabs.create({ url: list[0], active: false });
@@ -382,6 +403,7 @@ async function startBatch(urls) {
     }
   } finally {
     batch.running = false; batch.cur = '';
+    keepAlive(false);
     await chrome.storage.local.set({ batch });
     chrome.tabs.remove(tab.id).catch(() => {});
   }
