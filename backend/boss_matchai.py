@@ -227,7 +227,10 @@ def analyze(job: dict[str, Any], me: dict[str, Any],
         raise llm.NoKey("匹配分析要 LLM。到网页「AI 模型」里配一个。")
 
     ctx = build_context(job, me, facts)
-    raw = llm.chat_json(PROMPT, ctx, timeout=180)
+    # 快档:实测 qwen-flash 3.9s vs qwen-plus 10.7s,判断的丰富度相当。
+    # 「匹配太慢」的根因一半在这(另一半是首次要先提取)。
+    raw = llm.chat_json(PROMPT, ctx, timeout=180,
+                        model=llm.fast_model(), kind="match")
     if not isinstance(raw, dict):
         raise RuntimeError(f"模型返回的不是对象:{str(raw)[:120]}")
 
@@ -269,7 +272,7 @@ def analyze(job: dict[str, Any], me: dict[str, Any],
         # 它高了说明模型在编 —— 除了这个数,没有别的地方能看出来。
         "quote_miss": miss_n,
         "quote_total": total_claims,
-        "model": llm.config()["model"],
+        "model": llm.fast_model(),
         "prompt_ver": PROMPT_VER,
         # 和路由查缓存用的**同一个函数**,见 hashes() 的注释
         "jd_hash": jd_h,

@@ -100,12 +100,20 @@ def build(job: dict[str, Any], chat_snippet: str | None = None) -> list[dict[str
     # ── overview ──
     # 公司和城市也放进去:检索「上海的 AI 岗」时它们是有效信号。
     # 薪资用原文而不是拆出来的数字 —— 「20-35K·14薪」整体才可读。
+    wm = {"remote": "全职远程", "hybrid": "混合办公", "onsite": "现场办公"}.get(
+        job.get("work_mode") or "")
     head = _join([
         job.get("title"),
         job.get("company"),
         _join([job.get("city"), job.get("district")]),
         job.get("salary_text"),
         _join([job.get("experience"), job.get("degree")]),
+        # 归纳特征(extract2):搜「远程的 AI 应用岗」时,「全职远程」「AI 应用」
+        # 这些归纳词是最强的信号 —— tags 罗列的词太散,单靠它们搜不准。
+        wm,
+        job.get("domain"),
+        " ".join(_tags(job.get("stack"))) or None,
+        job.get("sell"),
         " ".join(_tags(job.get("tags"))) or None,
     ])
     if len(head) >= MIN_CHARS:

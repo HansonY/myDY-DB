@@ -90,7 +90,8 @@ def parse(resume_raw: str) -> dict[str, Any]:
     # 更糟的是这个数直接进硬门槛:4.9 会让「5 年以上」的岗位判 fail,
     # 于是一个够格的岗位被静默否掉,理由还完全合理。
     head = f"今天是 {date.today().isoformat()}。下面是简历原文:\n\n"
-    raw = llm.chat_json(PROMPT, head + text[:24000], timeout=180)
+    raw = llm.chat_json(PROMPT, head + text[:24000], timeout=180,
+                        model=llm.fast_model(), kind="resume")
     if not isinstance(raw, dict):
         raise RuntimeError(f"模型返回的不是对象:{str(raw)[:120]}")
 
@@ -143,7 +144,7 @@ def parse(resume_raw: str) -> dict[str, Any]:
         "constraints": _list(raw.get("constraints")),
         "axes": list(bm.AXES),          # 页面渲染勾选项用
         "unclear": _list(raw.get("unclear")),
-        "parsed_by": f"{llm.config()['model']}/{PROMPT_VER}",
+        "parsed_by": f"{llm.fast_model()}/{PROMPT_VER}",
         # 抽不出来的项列出来,让人知道该自己填哪几个 ——
         # 静默留 null 的话,硬门槛那边会因为「没有偏好」而放过所有岗位
         "missing": [k for k, v in live.items() if v in (None, [], "")],

@@ -110,6 +110,7 @@ _JOB_COLUMNS = (
     "job_id", "title", "company", "company_id", "city", "district",
     "salary_text", "salary_min", "salary_max", "salary_months",
     "experience", "degree", "jd", "jd_state", "job_state", "tags",
+    "work_mode", "domain", "stack", "sell",
     "hr_name", "hr_title", "hr_active", "published_at", "url",
 )
 
@@ -156,6 +157,8 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
             # 岗位自己的状态。以前「职位已关闭」被塞进了 interactions.note,
             # 混在「我做了什么」里 —— 那会让「我投了多少」凭空多算。
             "job_state": "TEXT NOT NULL DEFAULT 'unknown'",
+            # extract2 的归纳特征(筛选 + 向量搜索用)
+            "work_mode": "TEXT", "domain": "TEXT", "stack": "TEXT", "sell": "TEXT",
         },
         # me 表实测 0 行,但**表本身已经存在** —— 所以改 CREATE TABLE 不够,
         # 还得 ALTER 补列(CREATE TABLE IF NOT EXISTS 会整段跳过)。
@@ -233,8 +236,9 @@ def upsert_jobs(items: Iterable[dict[str, Any]]) -> tuple[int, int]:
             d = {c: it.get(c) for c in _JOB_COLUMNS}
             d["jd_state"] = d.get("jd_state") or JD_UNKNOWN
             d["job_state"] = d.get("job_state") or JOB_STATE_UNKNOWN
-            if isinstance(d.get("tags"), (list, tuple)):
-                d["tags"] = json.dumps(list(d["tags"]), ensure_ascii=False)
+            for jk in ("tags", "stack"):
+                if isinstance(d.get(jk), (list, tuple)):
+                    d[jk] = json.dumps(list(d[jk]), ensure_ascii=False)
             d["raw_z"] = _pack(it.get("raw"))
             d["first_seen"] = now
             d["updated_at"] = now

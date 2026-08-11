@@ -22,6 +22,7 @@ import json
 from datetime import datetime
 import os
 import re
+import time
 from typing import Any
 
 import httpx
@@ -59,6 +60,58 @@ _KEY_FALLBACK = {
 
 class NoKey(RuntimeError):
     """没配 key。调用方应把原始数据留着待处理,不要丢。"""
+
+
+# ── 快档模型:提取/匹配这类结构化任务用它 ─────────────────────
+#
+# 2026-08-12 用真实负载实测(同一个 key、同一端点、各跑提取型+匹配型):
+#   qwen-plus     5.7s + 10.7s        ← 之前的默认,「匹配太慢」的根因
+#   qwen-flash    2.3s +  3.9s        ← 快 2.6 倍,输出长度和 plus 相当
+#   qwen-turbo    2.0s +  2.6s        (更快,但档位老、输出明显变薄:301 vs 405 tok)
+#   qwen3.5-flash 56s  + 42s          (慢思考型,输出 6k token —— 永远别用)
+#
+# 所以快档默认 qwen-flash。要换就设 LLM_MODEL_FAST;
+# 其它供应商没实测过快档,回落到该家的常规模型,不猜。
+_FAST_DEFAULT = {"qwen": "qwen-flash"}
+
+
+def fast_model() -> str:
+    v = _env("LLM_MODEL_FAST")
+    if v:
+        return v
+    c = config()
+    return _FAST_DEFAULT.get(c["provider"], c["model"])
+
+
+# ── 每类调用的耗时记录(EMA)—— 提取队列的「预计等多久」靠它 ──
+_LAT_FILE = ROOT / "data" / "llm_latency.json"
+
+
+def _lat_load() -> dict[str, Any]:
+    try:
+        return json.loads(_LAT_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def record_latency(kind: str, seconds: float) -> None:
+    """指数滑动平均,新值占 3 成 —— 网络抖一次不至于把估算带飞。"""
+    d = _lat_load()
+    cur = d.get(kind) or {}
+    avg = cur.get("avg_s")
+    d[kind] = {"avg_s": round(seconds if avg is None else avg * 0.7 + seconds * 0.3, 2),
+               "n": int(cur.get("n") or 0) + 1, "last_s": round(seconds, 2)}
+    try:
+        _LAT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _LAT_FILE.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def latency(kind: str, default_s: float) -> float:
+    """某类调用的平均耗时。没记录过就用调用方给的保守默认。"""
+    v = (_lat_load().get(kind) or {}).get("avg_s")
+    return float(v) if v else default_s
 
 
 def _env(name: str) -> str:
@@ -138,8 +191,12 @@ def _check_body(prov: str, data: Any) -> None:
 
 
 def chat_json(system: str, user: str, timeout: float = 180.0,
-              temperature: float = 0.1) -> Any:
+              temperature: float = 0.1, model: str | None = None,
+              kind: str | None = None) -> Any:
     """要一个 JSON 回复。返回已解析的对象。
+
+    `model` 可按调用点覆盖(提取/匹配走快档,见 fast_model());
+    `kind` 给了就记耗时(EMA),队列页的「预计等多久」用它。
 
     `response_format=json_object` 不是所有家都支持,所以**不依赖它** ——
     带上是锦上添花,解析时照样兜围栏和前后废话。
@@ -152,11 +209,12 @@ def chat_json(system: str, user: str, timeout: float = 180.0,
     if c["_key"]:
         headers["Authorization"] = f"Bearer {c['_key']}"
 
+    t0 = time.time()
     r = httpx.post(
         _url(c["base_url"]),
         headers=headers,
         json={
-            "model": c["model"],
+            "model": model or c["model"],
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": user}],
             "temperature": temperature,
@@ -169,6 +227,8 @@ def chat_json(system: str, user: str, timeout: float = 180.0,
     if r.status_code >= 400:
         # 把服务端的原话带出来 —— 「模型名不对」「余额不足」这类只有它说得清
         raise RuntimeError(f"{c['provider']} HTTP {r.status_code}: {r.text[:220]}")
+    if kind:
+        record_latency(kind, time.time() - t0)
     payload = r.json()
     _check_body(c["provider"], payload)          # 200 也可能是错的,见上
     try:

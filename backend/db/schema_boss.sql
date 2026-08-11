@@ -40,6 +40,12 @@ CREATE TABLE IF NOT EXISTS jobs (
     -- 所以实测混着硬技术词、领域词、软能力整句三类(「独立开发且上线经验」)。
     -- 下游算技能覆盖率时必须按类过滤,详见 boss_match.skill_kind()。
     tags          TEXT,                  -- 技能词,JSON 数组
+    -- 清洗后的归纳特征(extract2 起)。和 tags 的区别:tags 是「出现过的词」,
+    -- 这四个是「读完 JD 的归纳」—— 按条件筛和向量搜索都靠归纳,不靠罗列。
+    work_mode     TEXT,                  -- remote | hybrid | onsite | NULL(没写明)
+    domain        TEXT,                  -- 业务领域,3-8 字
+    stack         TEXT,                  -- 技术主线 2-5 词,JSON 数组
+    sell          TEXT,                  -- 最突出的一个卖点,≤20 字
     hr_name       TEXT,
     hr_title      TEXT,
     hr_active     TEXT,                  -- 「刚刚活跃」这类原文

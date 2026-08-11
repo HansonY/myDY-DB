@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import sys
 from datetime import datetime
@@ -152,23 +153,58 @@ async def ingest_text(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
                      else f"已入队 · 待提取 {n}")}
 
 
+def _pending_files(keys: list[str] | None, cap: int = 60) -> list[Path]:
+    """选中的待提取文件。`keys` 是文件名(去重键);空/None = 全部(有上限)。"""
+    if not PENDING_DIR.exists():
+        return []
+    if keys:
+        want = {str(k) for k in keys}
+        return [f for f in sorted(PENDING_DIR.glob("*.json")) if f.stem in want][:cap]
+    return sorted(PENDING_DIR.glob("*.json"))[:cap]
+
+
+@app.get("/api/boss/extract/estimate")
+async def extract_estimate(keys: str = Query("")) -> dict[str, Any]:
+    """「提取这些要等多久」。批数按实际字符预算算,单批耗时用最近的移动平均 ——
+    拍一个固定数的话,模型/网络一换就不准,而不准的 ETA 比没有更烦人。"""
+    import boss_extract as bx
+    files = _pending_files([k for k in keys.split(",") if k] or None)
+    pages = []
+    for f in files:
+        try:
+            pages.append(json.loads(f.read_text(encoding="utf-8")))
+        except ValueError:
+            continue
+    batches = bx.pack(pages) if pages else []
+    per = llm_latency("extract", 6.0)
+    return {"pages": len(pages), "calls": len(batches),
+            "est_s": round(len(batches) * per, 1), "per_call_s": round(per, 1)}
+
+
+def llm_latency(kind: str, default_s: float) -> float:
+    import llm as _llm
+    return _llm.latency(kind, default_s)
+
+
 @app.post("/api/boss/extract")
 async def do_extract(
-    max_pages: int = Query(20, ge=1, le=60),
+    max_pages: int = Query(60, ge=1, le=120),
+    body: dict[str, Any] | None = Body(None),
 ) -> dict[str, Any]:
     """把队列里的页面批量交给 AI 提取,写进 jobs 表。
 
+    body.keys 给了就只提取勾选的那些;没给就全部(有上限)。
     按字符预算打包,**一次调用处理多页**。提取成功的从队列移除;
     失败的留着 —— 下次还能再试,不会因为一次网络抖动就丢数据。
+    提取完自动触发向量同步(独立进程,不占这个进程的内存)。
     """
     from knowledge import boss_fragments as bfr
     import boss_extract as bx
 
-    if not PENDING_DIR.exists():
-        return {"extracted": 0, "note": "队列是空的"}
-    files = sorted(PENDING_DIR.glob("*.json"))[:max_pages]
+    keys = (body or {}).get("keys") or None
+    files = _pending_files(keys, cap=max_pages)
     if not files:
-        return {"extracted": 0, "note": "队列是空的"}
+        return {"extracted": 0, "note": "队列是空的" if not keys else "勾选的都不在队列里了"}
 
     if not bx.available():
         # 别写死某一家的键名 —— 提取是供应商无关的,写死了会把人往错方向指。
@@ -216,9 +252,13 @@ async def do_extract(
             keep[idx].unlink(missing_ok=True)
 
     st = bs.stats()
+    # 提取完顺手把向量补上 —— 「清洗 → 入库 → 向量」一条线走完,
+    # 不用人记着再点一次。独立进程跑:bge-m3 有 2.2GB,不进 web 进程。
+    idx = _index_kick() if saved or skipped else {"started": False}
     return {"extracted": saved, "updated": skipped, "ai_calls": calls,
             "pending": len(list(PENDING_DIR.glob("*.json"))),
-            "jobs_total": st["jobs"], "failed": failed}
+            "jobs_total": st["jobs"], "failed": failed,
+            "index_started": idx.get("started", False)}
 
 
 def _ingest_jobs(page: dict[str, Any],
@@ -259,6 +299,8 @@ def _ingest_jobs(page: dict[str, Any],
                          else bs.JD_UNKNOWN),
             "job_state": job_state or bs.JOB_STATE_UNKNOWN,
             "tags": j.get("tags") or [],
+            "work_mode": j.get("work_mode"), "domain": j.get("domain"),
+            "stack": j.get("stack") or [], "sell": j.get("sell"),
             "hr_name": j.get("hr_name"), "hr_title": j.get("hr_title"),
             "raw": {"from_page": page.get("url"), "extracted": j},
         }])
@@ -420,7 +462,8 @@ async def pending(limit: int = Query(60, ge=1, le=300)) -> dict[str, Any]:
             d = json.loads(f.read_text(encoding="utf-8"))
         except ValueError:
             continue
-        out.append({"title": d.get("title"), "kind": d.get("kind"),
+        out.append({"key": f.stem,      # 勾选提取用它指定是哪几页
+                    "title": d.get("title"), "kind": d.get("kind"),
                     "chars": len(d.get("text") or ""), "at": d.get("at"),
                     "url": d.get("url"), "score": d.get("detect_score")})
     return {"items": out, "total": len(files)}
@@ -734,6 +777,131 @@ async def page_analyze(body: dict[str, Any] = Body(...),
                     ("job_id", "title", "company", "salary_text", "jd_state", "job_state")},
             "facts_brief": _facts_brief(facts), "ai": ai_res,
             "extracted": extracted, "cached": bool(cached)}
+
+
+# ── 向量索引 + 语义搜索 ─────────────────────────────────────
+#
+# 建索引走**独立进程**(scripts/boss_index.py):bge-m3 权重 2.2GB,
+# 进 web 进程就常驻了。搜索的查询向量没办法,只能本进程算 ——
+# 第一次搜索会加载模型(约 10 秒),之后常驻,页面上要说清楚。
+
+_INDEX_PROC: dict[str, Any] = {"proc": None, "at": None}
+
+
+def _index_kick() -> dict[str, Any]:
+    """起一次向量同步(已在跑就不重复起)。fire-and-forget。"""
+    import subprocess
+    p = _INDEX_PROC.get("proc")
+    if p is not None and p.poll() is None:
+        return {"started": False, "running": True}
+    log = open(ROOT / "logs" / "boss_index.log", "ab")   # noqa: SIM115
+    _INDEX_PROC["proc"] = subprocess.Popen(
+        [sys.executable, str(ROOT / "scripts" / "boss_index.py")],
+        env={**os.environ, "BOSS_DB_PATH": str(bs.db_file())},
+        stdout=log, stderr=log)
+    _INDEX_PROC["at"] = datetime.now().isoformat(timespec="seconds")
+    return {"started": True}
+
+
+@app.post("/api/boss/index")
+async def index_start() -> dict[str, Any]:
+    return _index_kick()
+
+
+@app.get("/api/boss/index/status")
+async def index_status() -> dict[str, Any]:
+    """向量和片段对不对得上。**不加载模型**,只读表。"""
+    import kb
+    from knowledge.boss_space import BOSS_SPACE
+    try:
+        s = kb.bind(BOSS_SPACE).status()
+    except Exception as e:                    # noqa: BLE001
+        return {"error": f"{type(e).__name__}: {str(e)[:120]}"}
+    p = _INDEX_PROC.get("proc")
+    s["syncing"] = p is not None and p.poll() is None
+    s["last_kick"] = _INDEX_PROC.get("at")
+    return s
+
+
+@app.get("/api/boss/search")
+async def search(q: str = Query(..., min_length=1),
+                 scope: str = Query("all", pattern="^(all|applied|saved|chatted|viewed|open)$"),
+                 limit: int = Query(10, ge=1, le=30)) -> dict[str, Any]:
+    """语义搜索岗位。走 kb 内核 + BOSS 适配器,和抖音同一套机制、不同的库。"""
+    import kb
+    from kb import IndexMismatch
+    from knowledge.boss_space import BOSS_SPACE
+    try:
+        r = await asyncio.to_thread(kb.bind(BOSS_SPACE).search, q, limit, True, scope)
+    except IndexMismatch as e:
+        return {"error": f"索引还没建或已过期:{e}", "need_index": True}
+    except Exception as e:                    # noqa: BLE001
+        return {"error": f"{type(e).__name__}: {str(e)[:160]}"}
+    # 给结果补当前 prompt 版本的匹配分 —— 搜出来直接看到「这个和我合不合」
+    ids = [h.get("job_id") for h in (r.get("good") or []) + (r.get("maybe") or [])]
+    if ids:
+        with bs.connect() as c:
+            fits = {row["job_id"]: dict(row) for row in c.execute(
+                f"SELECT job_id, fit, verdict FROM job_match "
+                f"WHERE prompt_ver=? AND job_id IN ({','.join('?' * len(ids))})",
+                [boss_matchai.PROMPT_VER, *ids])}
+        for h in (r.get("good") or []) + (r.get("maybe") or []):
+            m = fits.get(h.get("job_id"))
+            h["fit"] = m["fit"] if m else None
+            h["fit_verdict"] = m["verdict"] if m else None
+    return r
+
+
+# ── 给存量岗位补归纳特征(extract2 之前入库的那批)──────────────
+
+@app.post("/api/boss/enrich")
+async def enrich(limit: int = Query(400, ge=1, le=1000)) -> dict[str, Any]:
+    """老岗位补 work_mode/domain/stack/sell 四个特征,补完刷新片段并重建向量。
+
+    只处理「有 JD 且还没有特征」的 —— 跑第二遍不会重复花钱。
+    """
+    from knowledge import boss_fragments as bfr
+    import boss_extract as bx
+
+    if not bx.available():
+        return {"error": "AI 还不能用 —— 到「AI 模型」里配一个"}
+    with bs.connect() as c:
+        rows = [dict(r) for r in c.execute(
+            "SELECT job_id, title, jd FROM jobs "
+            "WHERE jd_state='have' AND work_mode IS NULL AND domain IS NULL "
+            "ORDER BY updated_at DESC LIMIT ?", (limit,))]
+    if not rows:
+        return {"enriched": 0, "note": "没有要补的 —— 有 JD 的岗位都有特征了"}
+
+    # 复用 pack 的字符预算:把 jd 当 text 打包
+    pages = [{"text": (r.get("jd") or "")[:4000], "_row": r} for r in rows]
+    done = failed = calls = 0
+    for batch in bx.pack(pages):
+        part = [p["_row"] for p in batch]
+        try:
+            got = await asyncio.to_thread(bx.enrich_batch, part)
+            calls += 1
+        except Exception as e:                # noqa: BLE001
+            failed += len(part)
+            continue
+        with bs.connect() as c:
+            for row in got:
+                c.execute(
+                    "UPDATE jobs SET work_mode=?, domain=?, stack=?, sell=?, "
+                    "updated_at=? WHERE job_id=?",
+                    (row.get("work_mode"), row.get("domain"),
+                     json.dumps(row.get("stack") or [], ensure_ascii=False),
+                     row.get("sell"), bs._now(), row["id"]))
+            c.commit()
+        # 特征进了 overview 片段 → 刷新片段,向量同步时会重嵌
+        for row in got:
+            job = bs.get_job(row["id"]) or {}
+            bs.save_fragments(row["id"], bfr.build(job))
+            done += 1
+    idx = _index_kick() if done else {"started": False}
+    return {"enriched": done, "failed": failed, "ai_calls": calls,
+            "remaining": max(0, len(rows) - done - failed),
+            "index_started": idx.get("started", False)}
 
 
 @app.get("/api/boss/matches")
