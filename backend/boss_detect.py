@@ -27,6 +27,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any
 
@@ -116,22 +117,36 @@ def classify(text: str, url: str = "", title: str = "") -> dict[str, Any]:
             "hit": hit, "miss": miss, "why": why, "salary_hits": n_salary}
 
 
-def dedupe_key(title: str, url: str) -> str:
+# 每次访问都会变、但和「是不是同一个岗位」无关的东西。
+# 参与去重键会让同一个岗位每刷新一次就多排一份。
+_VOLATILE = re.compile(
+    r"刚刚活跃|今日活跃|本周活跃|近期活跃|半年前活跃|\d+\s*(分钟|小时|天|月)前|在线|刚刚")
+
+
+def dedupe_key(title: str, url: str, text: str = "") -> str:
     """待提取队列的去重键 —— 同一个岗位反复打开只留最新一份。
 
-    用**标题整串**当键,不解析它。BOSS 详情页的标题天然就带公司名和岗位名
-    (这正是用户要的「公司 + 岗位名字」),但我**没有验证过它的确切格式**,
-    所以绝不去正则拆它 —— 拆错了会把不同岗位并成一个。整串比对不用假设格式:
-    同一个岗位标题一样,不同岗位标题不一样。
+    **标题不够用。** BOSS 的岗位页是左右分栏:左边一列卡片、右边是选中那个的
+    职位描述。点左边换右边时 `document.title` 很可能**不变** ——
+    只用标题当键的话,这一页十几个岗位会一个盖一个,最后只剩最后点的那个。
+    这是丢数据,不是「覆盖」。
 
-    标题拿不到时退回 URL(去掉查询串 —— 那里常带 securityId 之类的随机参数,
-    带上就等于同一个岗位每次都算新的)。
+    所以键 = 标题 + 正文开头的指纹。正文开头就是「岗位名 / 薪资 / 公司」那一块,
+    换个岗位必然变,同一个岗位再打开又是一样的 —— 正好符合「同一个岗位覆盖、
+    不同岗位各留一份」。
 
-    AI 提取之后还有一层按 公司+岗位名 的真去重(见 boss_main._job_key),
-    这里只是省掉重复的 AI 调用,不是最终判定。
+    标题整串直接用,**不解析格式**:我没验证过 BOSS 标题的确切构成,
+    拆错了会把不同岗位并成一个。整串比对不需要任何格式假设。
     """
     t = re.sub(r"\s+", " ", (title or "").strip())
-    # 去掉站点后缀,不然同一岗位在不同入口标题会差一截
     t = re.sub(r"[-–|]\s*(BOSS直聘|boss直聘|BOSS\s*直聘).*$", "", t).strip()
+
+    # 正文指纹:去掉「刚刚活跃」这类每次都在变的字眼,否则同一个岗位每刷新一次
+    # 就会被当成新的排一份队
+    body = _VOLATILE.sub("", (text or "")[:400])
+    body = re.sub(r"\s+", "", body)[:200]
+    h = hashlib.sha1(body.encode("utf-8")).hexdigest()[:8] if body else ""
+
     base = t if len(t) >= 4 else (url or "").split("?")[0]
-    return re.sub(r"[^\w一-鿿]+", "_", base)[-90:] or "page"
+    base = re.sub(r"[^\w一-鿿]+", "_", base)[-70:] or "page"
+    return f"{base}_{h}" if h else base

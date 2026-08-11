@@ -131,9 +131,10 @@ async def ingest_text(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
         return {"queued": 0, "skipped": True, "detect": verdict, "note": verdict["why"]}
 
     PENDING_DIR.mkdir(parents=True, exist_ok=True)
-    # 去重键 = 公司+岗位名(取自标题整串,不解析格式),标题拿不到才退回 URL。
-    # 同一个岗位反复打开 → 同一个文件 → **覆盖**,不堆积。
-    key = bd.dedupe_key(title, url)
+    # 去重键 = 标题整串 + 正文开头指纹。
+    # 必须带正文:BOSS 左右分栏的岗位页点左边换右边时 document.title 不变,
+    # 只按标题去重会让一页十几个岗位一个盖一个 —— 那是丢数据不是覆盖。
+    key = bd.dedupe_key(title, url, text)
     f = PENDING_DIR / f"{key}.json"
     replaced = f.exists()
     f.write_text(json.dumps({

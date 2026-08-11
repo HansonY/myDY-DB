@@ -22,9 +22,11 @@ function grab() {
   // 去掉导航/页脚/脚本这类噪音,留主内容。抓不准也没关系 ——
   // 后面是 AI 提取,它能从啰嗦的文本里挑出岗位信息。
   const drop = 'script,style,noscript,svg,nav,footer,header,iframe';
-  const root = document.querySelector('#main,#wrap,.page-job-wrapper,.job-detail,main')
-            || document.body;
-  const clone = root.cloneNode(true);
+  // ⚠️ 直接用 body。原来挑「主内容容器」,但选择器列表是**按 DOM 顺序**返回
+  // 第一个命中的、不按我写的优先级 —— 左右分栏的岗位页上很可能只命中右边的
+  // .job-detail,左边整列岗位就丢了。宁可多带点导航噪音(AI 会忽略)。
+  // 这段和 background.js 的 grabText() 必须一致,改一处记得改另一处。
+  const clone = document.body.cloneNode(true);
   clone.querySelectorAll(drop).forEach(e => e.remove());
   const text = (clone.innerText || '').replace(/\n{3,}/g, '\n\n').trim();
 
@@ -148,10 +150,10 @@ async function save(auto) {
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || ('HTTP ' + r.status));
-    msg(d.note || (d.queued ? '已入队' : '没入队'), d.queued ? 'ok' : '');
+    msg('manual', d.note || (d.queued ? '已入队' : '没入队'), d.queued ? 'ok' : '');
     refresh();
   } catch (e) {
-    msg(/Failed to fetch/.test(e.message)
+    msg('manual', /Failed to fetch/.test(e.message)
       ? '连不上本地服务 —— 在项目目录跑 ./boss.sh web'
       : '出错:' + e.message, 'bad');
   }
@@ -159,7 +161,20 @@ async function save(auto) {
   syncButtons();
 }
 
-function msg(t, cls) { const m = $('#msg'); m.textContent = t || ''; m.className = 'msg ' + (cls || ''); }
+/* 提示写到**发起这次操作的那张卡**里,不共用一个公共区。
+ * 共用就看不出提示是谁给的 —— 用户说的「凌乱」正是这个。
+ *   run    ① 抓取该页所有岗位
+ *   auto   ② 浏览存入
+ *   manual ③ 手动存入
+ *   batch  折叠区里的手动粘链接
+ */
+const SLOT = { run: '#m1', auto: '#m2', manual: '#m3', batch: '#bstat' };
+function msg(slot, t, cls) {
+  const m = $(SLOT[slot]);
+  if (!m) return;
+  m.textContent = t || '';
+  m.className = (slot === 'batch' ? 'prog ' : 'fb ') + (cls || '');
+}
 
 async function refresh() {
   try {
@@ -241,6 +256,15 @@ async function autoStat() {
   if (st.lastTitle) rows.push(`<div class="ml ok">存的是:${esc(st.lastTitle)}</div>`);
   if (st.lastErr) rows.push(`<div class="ml bad">${esc(st.lastErr)}</div>`);
   $('#astat').innerHTML = idle ? '' : rows.join('');
+  // ② 卡上只给一行结论 —— 平时要看的是「到底存下来没有」,不是排查过程。
+  // 四环节细节留在折叠的「诊断」里。
+  if (!$('#autochk').checked) msg('auto', '没开 —— 打开后浏览岗位页会自动存', '');
+  else if (idle) msg('auto', '已开,还没存过。去 BOSS 打开一个岗位页试试。', '');
+  else if (st.ok) msg('auto', `已存 ${st.ok} 页`
+    + (st.skip ? ` · 跳过 ${st.skip}` : '') + (st.fail ? ` · 失败 ${st.fail}` : '')
+    + (st.lastTitle ? ` · 最近「${String(st.lastTitle).slice(0, 18)}」` : ''),
+    st.fail ? '' : 'ok');
+  else msg('auto', st.lastErr || '监听到页面变化,但一页都没存下来', 'bad');
 
   // 手动粘链接那条路的进度(在折叠区里)。跑起来了就把折叠区自动展开 ——
   // 否则进度藏在收起来的地方,看着像什么都没发生。
@@ -289,11 +313,11 @@ function harvestLinks() {
  * 不让我猜元素:你在页面上点一次那个按钮,我把它的定位方式记下来。 */
 $('#pick').onclick = async () => {
   const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!t || !/zhipin\.com/.test(t.url || '')) { msg('先切到 BOSS 的列表页', 'bad'); return; }
+  if (!t || !/zhipin\.com/.test(t.url || '')) { msg('run', '先切到 BOSS 的列表页', 'bad'); return; }
   await chrome.storage.local.remove('pickState');
   const r = await chrome.runtime.sendMessage({ type: 'armPicker', tabId: t.id });
-  if (r?.error) { msg(r.error, 'bad'); return; }
-  msg('好了 —— 切到 BOSS 页面,点一下「下一页」按钮。按 Esc 取消。', 'ok');
+  if (r?.error) { msg('run', r.error, 'bad'); return; }
+  msg('run', '好了 —— 切到 BOSS 页面,点一下「下一页」按钮。按 Esc 取消。', 'ok');
 };
 
 async function pickInfo() {
@@ -309,7 +333,7 @@ async function pickInfo() {
     + ` <a id="forget">重新锁定</a>`;
   $('#forget').onclick = async () => {
     await chrome.runtime.sendMessage({ type: 'forgetNext' });
-    msg('已清掉,重新锁定一次。', ''); pickInfo();
+    msg('run', '已清掉,重新锁定一次。', ''); pickInfo();
   };
 }
 
@@ -317,20 +341,20 @@ async function pickInfo() {
 
 async function startRun(autoNext) {
   const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!t || !/zhipin\.com/.test(t.url || '')) { msg('先切到 BOSS 的岗位列表页', 'bad'); return; }
+  if (!t || !/zhipin\.com/.test(t.url || '')) { msg('run', '先切到 BOSS 的岗位列表页', 'bad'); return; }
   if (autoNext) {
     const { nextSel } = await chrome.storage.local.get('nextSel');
     if (!nextSel?.sels?.length) {
-      msg('没指过「下一页」,这次按「下一页」三个字猜。猜错会停下来告诉你。', '');
+      msg('run', '没指过「下一页」,这次按「下一页」三个字猜。猜错会停下来告诉你。', '');
     }
   }
-  msg('开跑了。别关这个列表标签页 —— 岗位会在另一个后台标签页里轮流打开。', 'ok');
+  msg('run', '开跑了。别关这个列表标签页 —— 岗位会在另一个后台标签页里轮流打开。', 'ok');
   const r = await chrome.runtime.sendMessage({
     type: 'startRun', tabId: t.id, autoNext,
     rounds: autoNext ? (parseInt($('#pgn').value, 10) || 5) : 1,
   });
-  if (r?.error) msg(r.error, 'bad');
-  else msg(`跑完 ${r.rounds} 页 · 存了 ${r.saved} 页原文 · 岗位 ${r.jobs} 个`
+  if (r?.error) msg('run', r.error, 'bad');
+  else msg('run', `跑完 ${r.rounds} 页 · 存了 ${r.saved} 页原文 · 岗位 ${r.jobs} 个`
     + (r.failed ? ` · 失败 ${r.failed}` : '')
     + ' → 到知识库页点「提取」让 AI 出结构', 'ok');
 }
@@ -339,11 +363,11 @@ async function runStat() {
   let d = {};
   try { d = await chrome.runtime.sendMessage({ type: 'runStat' }) || {}; } catch (e) { return; }
   const r = d.run || {};
-  const box = $('#rstat');
+  const box = $('#m1');
   // ⚠️ running 的同步必须在早退**之前**:run 状态一被清空就 return 的话,
   // running 永远停在 true,按钮全灰着、停止键也不消失,人就没法再开始了。
   if (running !== !!r.running) { running = !!r.running; syncButtons(); }
-  if (!r.rounds && !r.log?.length) { box.innerHTML = ''; return; }
+  if (!r.rounds && !r.log?.length) return;   // 没跑过就别动这张卡的反馈行
   // 两层进度都要显示:第几页 + 这一页的第几个岗位。
   // 只显示一个总数的话,卡住时分不出是卡在翻页还是卡在某个岗位上。
   // 跑的时候给实时进度 + 最近几条;**跑完只留一行结果**。
@@ -351,6 +375,7 @@ async function runStat() {
   const headline = `<div class="bp">${r.running ? '进行中' : '已结束'} · `
     + `第 ${r.round || 0}/${r.rounds || 1} 页 · 岗位 ${r.jobsDone || 0}/${r.jobsTotal || 0}`
     + ` · 已存 ${r.saved || 0}${r.failed ? ` · 失败 ${r.failed}` : ''}</div>`;
+  box.className = 'fb';
   box.innerHTML = r.running
     ? headline + (r.log || []).slice(0, 5).map(l =>
         `<div class="ml ${l.bad ? 'bad' : 'ok'}">${esc(l.t)}</div>`).join('')
@@ -368,7 +393,7 @@ $('#harvest').onclick = async () => {
     });
     const links = r?.result?.links || [];
     if (!links.length) {
-      msg(`这一页没找到岗位链接(扫了 ${r?.result?.anchors ?? 0} 个链接)。`
+      msg('batch', `这一页没找到岗位链接(扫了 ${r?.result?.anchors ?? 0} 个链接)。`
         + '换到「推荐职位 / 我的收藏 / 沟通过的」这类列表页,先往下滚几屏再点 ——'
         + '列表是懒加载的,没滚到的不在页面里。', 'bad');
       return;
@@ -384,13 +409,13 @@ $('#harvest').onclick = async () => {
     } catch (e) { /* 服务没开就不筛,全放进去 */ }
 
     $('#links').value = fresh.join('\n');
-    msg(`抓到 ${links.length} 个岗位链接`
+    msg('batch', `抓到 ${links.length} 个岗位链接`
       + (known.length ? `,其中 ${known.length} 个已存过(已剔除)` : '')
       + ` → 待存 ${fresh.length} 个。`
       + (fresh.length ? '确认后点下面「逐个打开并存入」。' : '这一页全都存过了。'),
       fresh.length ? 'ok' : '');
   } catch (e) {
-    msg('抓不到:' + e.message, 'bad');
+    msg('batch', '抓不到:' + e.message, 'bad');
   }
   btn.disabled = false; btn.textContent = '抓本页岗位链接';
 };
@@ -399,10 +424,10 @@ $('#bgo').onclick = async () => {
   const b = await chrome.storage.local.get('batch');
   if (b.batch?.running) { chrome.runtime.sendMessage({ type: 'stopBatch' }); return; }
   const urls = $('#links').value.split(/[\s,]+/).filter(Boolean);
-  if (!urls.length) { msg('上面的框是空的 —— 先粘链接或点「抓本页岗位链接」。', 'bad'); return; }
-  msg('');
+  if (!urls.length) { msg('batch', '上面的框是空的 —— 先粘链接或点「抓本页岗位链接」。', 'bad'); return; }
+  msg('batch', '');
   const r = await chrome.runtime.sendMessage({ type: 'startBatch', urls });
-  if (r?.error) msg(r.error, 'bad');
+  if (r?.error) msg('batch', r.error, 'bad');
   autoStat();
 };
 

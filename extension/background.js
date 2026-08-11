@@ -220,9 +220,13 @@ async function getStat() {
 /** 在页面里跑:只抽文字。判断在后端,这里不做任何判断。 */
 function grabText() {
   const drop = 'script,style,noscript,svg,nav,footer,header,iframe';
-  const root = document.querySelector('#main,#wrap,.page-job-wrapper,.job-detail,main')
-            || document.body;
-  const clone = root.cloneNode(true);
+  // ⚠️ 直接用 body,不再挑「主内容容器」。
+  // 原来是 querySelector('#main,#wrap,.page-job-wrapper,.job-detail,main'),
+  // 但**选择器列表按 DOM 顺序返回第一个命中的,不按我写的优先级** ——
+  // 在左右分栏的岗位页上很可能只命中右边那个 .job-detail,
+  // 于是左边整列岗位全丢了。宁可多带点导航噪音(AI 提取时会忽略),
+  // 也不能漏掉半个页面。
+  const clone = document.body.cloneNode(true);
   clone.querySelectorAll(drop).forEach(e => e.remove());
   const text = (clone.innerText || '').replace(/\n{3,}/g, '\n\n').trim();
   return {
@@ -263,7 +267,7 @@ async function saveText(page, { auto = false, force = true } = {}) {
   return d;
 }
 
-async function autoSave(tabId, url, via) {
+async function autoSave(tabId, url, via, sig) {
   const stat = await getStat();
   // **不管存不存,先把「我确实收到了这次跳转」记下来。**
   // 否则「没自动存」这一个现象,可能是没收到事件、可能是开关没开、
@@ -285,8 +289,10 @@ async function autoSave(tabId, url, via) {
   if (batch.running || filling || run.running)
     return finish({ lastErr: '批量/翻页任务在跑,自动存让路' });
 
-  // 同一页别反复存。去重记录也放 storage —— worker 重启后内存里的 Map 就没了。
-  const bare = String(url).split('#')[0];
+  // 同一页别反复存。**键是 URL + 内容指纹**,不能只用 URL ——
+  // 左右分栏的岗位页点左边换右边时 URL 根本不变,只按 URL 去重
+  // 会把第一条之后的全挡掉(而那正是我们最想要的那些职位描述)。
+  const bare = String(url).split('#')[0] + '|' + (sig || '');
   const { seenUrl = {} } = await chrome.storage.local.get('seenUrl');
   if (seenUrl[tabId] === bare) return finish({ lastErr: null });
 
@@ -324,6 +330,14 @@ chrome.webNavigation?.onHistoryStateUpdated.addListener(async d => {
   autoSave(d.tabId, d.url, 'SPA跳转');
 }, { url: [{ hostSuffix: 'zhipin.com' }] });
 // 标签关了就忘掉它的去重记录,免得越攒越多
+// 内容变了但 URL 没变 —— 左右分栏的岗位页走的就是这条。
+// 消息来自页面里的 bridge.js(它在 zhipin 源上,能看到 DOM 也能用 chrome.runtime)。
+chrome.runtime.onMessage.addListener((msg, sender) => {
+  if (msg?.type !== 'pageChanged') return;
+  const tabId = sender?.tab?.id;
+  if (tabId != null) autoSave(tabId, msg.url || sender.tab.url, '内容变化', msg.fp);
+});
+
 chrome.tabs.onRemoved.addListener(async id => {
   const { seenUrl = {} } = await chrome.storage.local.get('seenUrl');
   delete seenUrl[id];
