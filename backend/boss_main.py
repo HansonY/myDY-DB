@@ -202,7 +202,11 @@ async def do_extract(
             for j in item["jobs"]:
                 jid = _job_key(j, page.get("url"))
                 exists = bs.get_job(jid)
-                # jd 只升不降:列表页提出来的没有 jd,不能把详情页存的冲掉
+                # 「我做了什么」和「岗位什么状态」拆开 —— 以前两者都被塞进
+                # interactions.note,混在一列里(实测老数据的 note 一条是
+                # 「已投递」一条是「职位已关闭」),导致「我投了多少」算不出来。
+                acts, job_state = bs.map_my_status(j.get("my_status"))
+
                 bs.upsert_jobs([{
                     "job_id": jid, "url": page.get("url"),
                     "title": j.get("title"), "company": j.get("company"),
@@ -212,12 +216,26 @@ async def do_extract(
                     "salary_months": j.get("salary_months"),
                     "experience": j.get("experience"), "degree": j.get("degree"),
                     "jd": j.get("jd"),
-                    "jd_state": "have" if (j.get("jd") or "").strip() else "unknown",
+                    # 三态,不是两态。原来是 `have if jd else unknown`,
+                    # 于是 none 成了死代码 —— 而「详情页确认没写 JD」和
+                    # 「还没打开过详情页」混成一个 unknown 之后,
+                    # 「该去补还是该认命」谁也说不清,那正是三态的设计初衷。
+                    "jd_state": (bs.JD_HAVE if (j.get("jd") or "").strip()
+                                 else bs.JD_NONE if page.get("kind") == "detail"
+                                 else bs.JD_UNKNOWN),
+                    "job_state": job_state or bs.JOB_STATE_UNKNOWN,
                     "tags": j.get("tags") or [],
                     "hr_name": j.get("hr_name"), "hr_title": j.get("hr_title"),
                     "raw": {"from_page": page.get("url"), "extracted": j},
                 }])
-                if j.get("my_status"):
+
+                if acts:
+                    for kind, status in acts:
+                        bs.save_interaction(jid, kind, status,
+                                            note=str(j["my_status"])[:60])
+                elif j.get("my_status"):
+                    # 认不出来就退回原来的行为,**并且留原文** ——
+                    # 这套之所以还能救回来,就是因为原文一直在 note 里。
                     bs.save_interaction(jid, "viewed", note=str(j["my_status"])[:60])
                 # 片段:JD 全文是核心,标题/公司/薪资兜底
                 job = bs.get_job(jid) or {}

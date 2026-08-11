@@ -32,7 +32,14 @@ CREATE TABLE IF NOT EXISTS jobs (
     -- 列表页一般没有,要进详情页才拿得到,所以单独一个状态位。
     jd            TEXT,
     jd_state      TEXT NOT NULL DEFAULT 'unknown',   -- have | none | unknown
-    tags          TEXT,                  -- 技能标签,平台给的,JSON 数组
+    -- 岗位自己的状态,和 interactions(我做了什么)是两件事。
+    -- 「职位已关闭」以前被塞进 interactions.note,混在「我投了/我沟通了」里面 ——
+    -- 那会让「我投了多少」凭空多算一条。
+    job_state     TEXT NOT NULL DEFAULT 'unknown',   -- open | closed | unknown
+    -- ⚠️ 不是平台给的。boss_extract 的 PROMPT 让 LLM 从页面文字里抽技能词,
+    -- 所以实测混着硬技术词、领域词、软能力整句三类(「独立开发且上线经验」)。
+    -- 下游算技能覆盖率时必须按类过滤,详见 boss_match.skill_kind()。
+    tags          TEXT,                  -- 技能词,JSON 数组
     hr_name       TEXT,
     hr_title      TEXT,
     hr_active     TEXT,                  -- 「刚刚活跃」这类原文

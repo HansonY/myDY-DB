@@ -38,10 +38,78 @@ JD_HAVE, JD_NONE, JD_UNKNOWN = "have", "none", "unknown"
 # 这个区分决定了分析时该不该把它算进分母。
 STATUS = ("sent", "read", "replied", "interview", "offer", "rejected", "unknown")
 
+# 进展的单调顺序。**只有这一份** —— 原来内联在 save_interaction 里,
+# 现在 map_my_status 也要用它(一次抓取可能同时看到「已投递」和「不合适」,
+# 得知道哪个更靠后)。两处各写一份早晚会漂移,而漂移的表现是「进展莫名倒退」。
+_STATUS_ORDER = {s: i for i, s in enumerate(
+    ("unknown", "sent", "read", "replied", "interview", "offer", "rejected"))}
+
+# 岗位自己的状态,和「我做了什么」是两件事。
+JOB_OPEN, JOB_CLOSED, JOB_STATE_UNKNOWN = "open", "closed", "unknown"
+
+# 页面上那句话 → (我做了什么, 到哪一步)。按**包含**匹配,不按相等 ——
+# 平台文案会变(「已投递」/「投递过」/「已投简历」),相等匹配一改版就全废。
+#
+# ⚠️ 这张表是从 LLM 提取的 my_status 文本映射过来的,而那段文本是页面上给人看的。
+# 所以认不出来是常态,不是异常 —— 认不出来必须留原文(见 map_my_status)。
+MY_STATUS_MAP: tuple[tuple[str, str, str], ...] = (
+    # (关键词, kind, status) —— 顺序即优先级,长的写在前面
+    ("已投递",   "applied", "sent"),
+    ("投递",     "applied", "sent"),
+    ("已查看",   "applied", "read"),
+    ("已读",     "applied", "read"),
+    ("继续沟通", "chatted", "replied"),
+    ("已沟通",   "chatted", "replied"),
+    ("沟通中",   "chatted", "replied"),
+    ("约面",     "applied", "interview"),
+    ("面试",     "applied", "interview"),
+    ("已收藏",   "saved",   "unknown"),
+    ("收藏",     "saved",   "unknown"),
+    ("不合适",   "applied", "rejected"),
+    ("已结束",   "applied", "rejected"),
+)
+
+# 这些说的是**岗位**的状态,不是我的。写进 interactions 会让「我投了多少」凭空多一条。
+JOB_STATE_WORDS = ("职位已关闭", "已关闭", "已下线", "停止招聘", "职位不存在", "招聘已结束")
+
+
+def map_my_status(text: str | None) -> tuple[list[tuple[str, str]], str | None]:
+    """把页面上那句话拆成「我做了什么」和「岗位现在什么状态」。
+
+    返回 `([(kind, status), …], job_state | None)`。
+
+    **为什么返回 list 而不是单个**:BOSS 上「已投递 + 已沟通」很常见,而
+    interactions 的主键是 `(job_id, kind)` —— 两行都该存,合成一行会丢掉一半。
+
+    **为什么两者独立判、不短路**:一个页面完全可能同时写着「已投递」和
+    「职位已关闭」。命中岗位状态就 return 的话,那条投递记录就丢了。
+
+    **认不出来返回 `([], None)`,不猜。** 调用方应退回原来的行为
+    (记一条 viewed + note 留原文)。现在这套之所以还能救回来,就是因为
+    原文一直留在 note 里 —— 那 2 条老数据的 note 分别是「已投递」和
+    「职位已关闭」,两种语义混在一列,但没丢。
+    """
+    t = (text or "").strip()
+    if not t:
+        return [], None
+
+    job_state = JOB_CLOSED if any(w in t for w in JOB_STATE_WORDS) else None
+
+    # 同一个 kind 命中多次时取**最靠后**的进展(「已投递 不合适」→ rejected)。
+    # 这和 save_interaction 的只升不降是同一条规则,所以共用 _STATUS_ORDER。
+    best: dict[str, str] = {}
+    for word, kind, status in MY_STATUS_MAP:
+        if word not in t:
+            continue
+        cur = best.get(kind)
+        if cur is None or _STATUS_ORDER.get(status, 0) > _STATUS_ORDER.get(cur, 0):
+            best[kind] = status
+    return sorted(best.items()), job_state
+
 _JOB_COLUMNS = (
     "job_id", "title", "company", "company_id", "city", "district",
     "salary_text", "salary_min", "salary_max", "salary_months",
-    "experience", "degree", "jd", "jd_state", "tags",
+    "experience", "degree", "jd", "jd_state", "job_state", "tags",
     "hr_name", "hr_title", "hr_active", "published_at", "url",
 )
 
@@ -76,9 +144,40 @@ def connect() -> sqlite3.Connection:
     return conn
 
 
+def _add_missing_columns(conn: sqlite3.Connection) -> None:
+    """给已存在的表补新增列。**`CREATE TABLE IF NOT EXISTS` 不会加列** ——
+    这一点已经在 vec_meta 上咬过一次(schema 里那份少一列,永远补不上)。
+
+    照抄抖音侧 `store._add_missing_columns` 的做法,包括「跑两次」:
+    第一次给已存在的表补列,executescript 之后再跑一次给这一轮新建的表补。
+    """
+    wanted = {
+        "jobs": {
+            # 岗位自己的状态。以前「职位已关闭」被塞进了 interactions.note,
+            # 混在「我做了什么」里 —— 那会让「我投了多少」凭空多算。
+            "job_state": "TEXT NOT NULL DEFAULT 'unknown'",
+        },
+    }
+    for table, cols in wanted.items():
+        try:
+            have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        except sqlite3.Error:
+            continue
+        if not have:                      # 表还不存在,交给 executescript
+            continue
+        for col, decl in cols.items():
+            if col not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+
+
 def init_db() -> None:
     with connect() as conn:
+        # 顺序要紧:先补列再 executescript。schema 里可能有引用新列的索引,
+        # 反过来会在「索引引用了还不存在的列」上炸。
+        _add_missing_columns(conn)
         conn.executescript(SCHEMA_FILE.read_text(encoding="utf-8"))
+        _add_missing_columns(conn)        # 再跑一次:这一轮才新建的表轮到它
+        conn.commit()
 
 
 # ── raw 压缩(对上层透明)──────────────────────────────────
@@ -125,6 +224,7 @@ def upsert_jobs(items: Iterable[dict[str, Any]]) -> tuple[int, int]:
         for it in items:
             d = {c: it.get(c) for c in _JOB_COLUMNS}
             d["jd_state"] = d.get("jd_state") or JD_UNKNOWN
+            d["job_state"] = d.get("job_state") or JOB_STATE_UNKNOWN
             if isinstance(d.get("tags"), (list, tuple)):
                 d["tags"] = json.dumps(list(d["tags"]), ensure_ascii=False)
             d["raw_z"] = _pack(it.get("raw"))
@@ -140,9 +240,23 @@ def upsert_jobs(items: Iterable[dict[str, Any]]) -> tuple[int, int]:
             if c == "jd":
                 sets.append("jd=COALESCE(excluded.jd, jobs.jd)")
             elif c == "jd_state":
-                # unknown 不能覆盖已经确定的值
-                sets.append("jd_state=CASE WHEN excluded.jd_state='unknown' "
-                            "THEN jobs.jd_state ELSE excluded.jd_state END")
+                # ⚠️ 两条规则,缺一条就丢数据:
+                #  1) 已经是 have 的,只有另一个 have 能动它。
+                #     原来只挡了 unknown,而 none **也是确定值** —— 同一个岗位先从
+                #     详情页抓到 JD、后来又从一个被判成 detail 的页面没抽到,
+                #     就会把 have 打成 none。JD 是这个库的核心,打错了看不出来。
+                #  2) unknown 不覆盖任何已确定的值(「还没看过」不是结论)。
+                sets.append(
+                    "jd_state=CASE "
+                    "  WHEN jobs.jd_state='have' AND excluded.jd_state<>'have' "
+                    "    THEN jobs.jd_state "
+                    "  WHEN excluded.jd_state='unknown' THEN jobs.jd_state "
+                    "  ELSE excluded.jd_state END")
+            elif c == "job_state":
+                # 同理:unknown 不覆盖已知。但 closed→open 要允许 ——
+                # 岗位是真会重新开的,这个方向不该锁。
+                sets.append("job_state=CASE WHEN excluded.job_state='unknown' "
+                            "THEN jobs.job_state ELSE excluded.job_state END")
             elif c == "raw_z":
                 sets.append("raw_z=COALESCE(excluded.raw_z, jobs.raw_z)")
             else:
@@ -171,8 +285,7 @@ def save_interaction(job_id: str, kind: str, status: str = "unknown",
     status 只升不降:已经是 interview 的不会被后来一次只看到「已投」的抓取
     降回 sent —— 列表页能看到的进展有限,而进展是单调的。
     """
-    order = {s: i for i, s in enumerate(
-        ("unknown", "sent", "read", "replied", "interview", "offer", "rejected"))}
+    order = _STATUS_ORDER          # 和 map_my_status 共用同一份,见模块顶部
     with connect() as conn:
         cur = conn.execute(
             "SELECT status FROM interactions WHERE job_id=? AND kind=?",
