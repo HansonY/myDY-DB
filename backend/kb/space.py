@@ -70,9 +70,13 @@ class Space:
     scopes: tuple[str, ...] = ("all",)
     """只给路由和 UI 用。**内核不校验 scope。**
 
-    现在 `/api/search?scope=乱写` 会落到 `mine_pred` 然后返回 200;
-    内核一加校验,这个接口就从 200 变 4xx —— 那是回归。
-    新接口自己校验(mcp_server 已经是这么做的,有先例)。
+    校验一直在**调用方**:`main.py` 的 Query 带
+    `pattern="^(mine|following|all)$"`(坏值 → 422),`mcp_server.py:170`
+    自己 if 一下返回 error dict。内核层则完全不校验 —— 坏 scope 会落到
+    `store.scope_pred` 的 else 分支照常返回结果(实测新旧两路在坏 scope 下
+    也逐字段相等)。
+    把校验搬进内核会改变这个既有分工,而且两侧的错误形状不一样
+    (422 vs error dict),统一不了。所以:各层各管自己那一段。
     """
 
     default_scope: str = "all"

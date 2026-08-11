@@ -53,8 +53,9 @@ def search(space: Space, query: str, limit: int = 10,
     判断权该交回给人 —— 前提是分数看得见。
 
     `scope` 的取值和语义由适配器定(见 Space.scope_sql)。**内核不校验它** ——
-    现在 `/api/search?scope=乱写` 会落到抖音的 mine_pred 然后返回 200,
-    加校验就是把 200 变 4xx,那是回归。校验放路由层。
+    校验一直在调用方(main.py 的 Query pattern → 422,mcp_server 自己 if →
+    error dict)。内核层坏 scope 会落到适配器谓词的兜底分支照常返回结果,
+    实测新旧两路在坏 scope 下也逐字段相等。校验留在路由层,各层各管一段。
     """
     if scope is None:
         scope = space.default_scope
