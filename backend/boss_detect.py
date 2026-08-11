@@ -141,11 +141,15 @@ def dedupe_key(title: str, url: str, text: str = "") -> str:
     t = re.sub(r"\s+", " ", (title or "").strip())
     t = re.sub(r"[-–|]\s*(BOSS直聘|boss直聘|BOSS\s*直聘).*$", "", t).strip()
 
-    # 正文指纹:去掉「刚刚活跃」这类每次都在变的字眼,否则同一个岗位每刷新一次
-    # 就会被当成新的排一份队
-    body = _VOLATILE.sub("", (text or "")[:400])
-    body = re.sub(r"\s+", "", body)[:200]
-    h = hashlib.sha1(body.encode("utf-8")).hexdigest()[:8] if body else ""
+    # 正文指纹。⚠️ **必须用整段正文,不能只取开头。**
+    # 只取前 400 字的话,在左右分栏页上取到的全是**左边那列**(左列不随
+    # 右边详情变化)—— 这一页十几个岗位会算出同一个键,一个盖一个,丢数据。
+    # 插件那边的触发指纹也栽在同一个坑上(只看开头 → 换岗位不触发)。
+    # 先剔掉「刚刚活跃」这类每次都变但与身份无关的字眼,否则同一个岗位
+    # 每刷新一次就多排一份队。
+    body = _VOLATILE.sub("", text or "")
+    body = re.sub(r"\s+", "", body)
+    h = hashlib.sha1(body.encode("utf-8")).hexdigest()[:10] if body else ""
 
     base = t if len(t) >= 4 else (url or "").split("?")[0]
     base = re.sub(r"[^\w一-鿿]+", "_", base)[-70:] or "page"

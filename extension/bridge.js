@@ -48,19 +48,38 @@ chrome.runtime.onMessage.addListener((msg, _s, reply) => {
   let last = '';
   let timer = null;
 
+  // 每次都在变、但和「看的是哪个岗位」无关的东西。不剔掉的话页面上一个
+  // 「刚刚活跃」的计时就会让指纹一直变,等于每秒都在存。
+  const VOLATILE = /刚刚|\d+\s*(秒|分钟|小时|天)前|正在输入|未读/g;
+
+  /** 整页文字的哈希。
+   *
+   * ⚠️ **必须算整页,不能只取开头。** 第一版我用「title + h1 + 第一处薪资」,
+   * 在左右分栏页上三个信号**全取自左边那列** —— 点左边换右边时它们一个都不变,
+   * 于是永远不触发。合成页实测:换岗位 0 次触发。这就是「打开就存没生效」的根因。
+   *
+   * djb2,够快(几百 KB 也是毫秒级),而且只要页面任何一处文字变了它就变。
+   */
   function fingerprint() {
-    // 主标题:h1 优先;拿不到就退回正文前 80 字
-    const h1 = document.querySelector('h1')?.innerText?.trim().slice(0, 60) || '';
-    // 第一处薪资 —— 换了岗位它几乎必然变
-    const m = (document.body?.innerText || '').match(
-      /\d{1,3}\s*[-–~]\s*\d{1,3}\s*[Kk千]|\d{3,6}\s*[-–~]\s*\d{3,6}\s*元/);
-    const head = h1 || (document.body?.innerText || '').trim().slice(0, 80);
-    return `${document.title}|${head}|${m ? m[0] : ''}`;
+    const t = (document.body?.innerText || '').replace(VOLATILE, '');
+    let h = 5381;
+    for (let i = 0; i < t.length; i++) h = ((h << 5) + h + t.charCodeAt(i)) | 0;
+    return `${document.title}#${t.length}#${(h >>> 0).toString(36)}`;
   }
+
+  // 两次通知之间的最小间隔。
+  // 指纹是整页哈希,页面上任何自变内容(计时器、未读角标、轮播)都会让它变 ——
+  // 剔除常见的那几种之后仍不可能穷尽。人切换岗位最快也要一秒以上,
+  // 所以设 3 秒既不会漏掉真实切换,又能把自变内容造成的重复压下去。
+  const MIN_GAP_MS = 3000;
+  let lastAt = 0;
 
   function ping() {
     const fp = fingerprint();
     if (fp === last) return;      // 没真的换,别打扰后台
+    const now = performance.now();
+    if (now - lastAt < MIN_GAP_MS) { schedule(); return; }   // 太密,推迟再看
+    lastAt = now;
     last = fp;
     try {
       chrome.runtime.sendMessage({ type: 'pageChanged', fp, url: location.href });

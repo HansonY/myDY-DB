@@ -274,6 +274,10 @@ async function autoSave(tabId, url, via, sig) {
   // 可能是抓不到文字、可能是本地服务没开 —— 四种原因看起来一模一样,
   // 没法定位。这个项目已经因为「看不见中间过程」绕过好几次弯路。
   stat.nav = (stat.nav || 0) + 1;
+  // **按来源分开计数。** 「自动存没生效」有三种断点:整页加载没响、
+  // SPA 换 URL 没响、左右分栏的内容变化没响 —— 合成一个数字就分不出是哪种。
+  stat.bySrc = stat.bySrc || {};
+  stat.bySrc[via] = (stat.bySrc[via] || 0) + 1;
   stat.lastUrl = String(url || '').slice(0, 120);
   stat.lastVia = via;
 

@@ -187,16 +187,11 @@ async function refresh() {
     $('#sPend').textContent = jb.pending || 0;
     $('#sJobs').textContent = jb.total || 0;
     $('#sJd').textContent = st.jd_have || 0;
-    $('#cnt').textContent = jb.total > 8 ? `共 ${jb.total}` : '';
-    $('#list').innerHTML = (jb.items || []).length
-      ? jb.items.map(j => `<div class="it">
-          <div class="t">${esc(j.title) || '(无标题)'}</div>
-          <div class="m">${esc(j.company || '')}${j.salary_text ? ' · ' + esc(j.salary_text) : ''}</div>
-        </div>`).join('')
-      : '<div class="empty">还没有。到 BOSS 打开一个岗位页,点上面「抓取这页内容」。</div>';
+    $('#svc').textContent = '';
   } catch (e) {
     for (const id of ['#sPend', '#sJobs', '#sJd']) $(id).textContent = '–';
-    $('#list').innerHTML = '<div class="empty">本地服务没开 —— 在项目目录跑 ./boss.sh web</div>';
+    // 服务没开是最常见的「怎么都不动」原因,单独说一句
+    $('#svc').textContent = '本地服务没开 —— 在项目目录跑 ./boss.sh web';
   }
 }
 
@@ -207,6 +202,7 @@ $('#save').onclick = () => save(false);
 $('#runOne').onclick = () => startRun($('#autonext').checked);
 $('#stop').onclick = () => chrome.runtime.sendMessage({ type: 'stopRun' });
 $('#open').onclick = () => chrome.tabs.create({ url: API + '/' });
+$('#recent').onclick = () => chrome.tabs.create({ url: API + '/' });
 $('#autochk').onchange = e => chrome.storage.local.set({ auto: e.target.checked });
 
 chrome.storage.local.get('auto').then(d => $('#autochk').checked = !!d.auto);
@@ -258,13 +254,25 @@ async function autoStat() {
   $('#astat').innerHTML = idle ? '' : rows.join('');
   // ② 卡上只给一行结论 —— 平时要看的是「到底存下来没有」,不是排查过程。
   // 四环节细节留在折叠的「诊断」里。
-  if (!$('#autochk').checked) msg('auto', '没开 —— 打开后浏览岗位页会自动存', '');
-  else if (idle) msg('auto', '已开,还没存过。去 BOSS 打开一个岗位页试试。', '');
-  else if (st.ok) msg('auto', `已存 ${st.ok} 页`
-    + (st.skip ? ` · 跳过 ${st.skip}` : '') + (st.fail ? ` · 失败 ${st.fail}` : '')
-    + (st.lastTitle ? ` · 最近「${String(st.lastTitle).slice(0, 18)}」` : ''),
-    st.fail ? '' : 'ok');
-  else msg('auto', st.lastErr || '监听到页面变化,但一页都没存下来', 'bad');
+  // ② 卡:先给结论,不生效时**把三种触发来源分开摆出来**。
+  // 「没生效」有三种断点:整页加载没响 / SPA 换 URL 没响 / 左右分栏的内容变化没响。
+  // 合成一个数字分不出是哪种 —— 这个项目已经因为「看不见中间过程」返工过几轮。
+  const src = st.bySrc || {};
+  const srcLine = ['整页加载', 'SPA跳转', '内容变化']
+    .map(k => `${k} ${src[k] || 0}`).join(' · ');
+  if (!$('#autochk').checked) {
+    msg('auto', '没开 —— 打开后浏览岗位页会自动存', '');
+  } else if (st.ok) {
+    msg('auto', `已存 ${st.ok} 页`
+      + (st.skip ? ` · 跳过 ${st.skip}` : '') + (st.fail ? ` · 失败 ${st.fail}` : '')
+      + (st.lastTitle ? ` · 最近「${String(st.lastTitle).slice(0, 16)}」` : ''),
+      st.fail ? '' : 'ok');
+  } else if (!(st.nav || 0)) {
+    msg('auto', '已开,但一次页面变化都没监听到 —— 扩展多半没重载(chrome://extensions 点刷新)', 'bad');
+  } else {
+    // 监听到了却没存下来:把来源和最近一次的原因都摆出来
+    msg('auto', `监听到 ${srcLine},但没存下来。${st.lastErr || ''}`.trim(), 'bad');
+  }
 
   // 手动粘链接那条路的进度(在折叠区里)。跑起来了就把折叠区自动展开 ——
   // 否则进度藏在收起来的地方,看着像什么都没发生。

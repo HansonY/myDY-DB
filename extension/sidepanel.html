@@ -118,11 +118,7 @@ textarea:focus{outline:none;border-color:rgba(76,141,255,.45)}
 .grp .row{padding-left:4px;margin-bottom:4px}
 
 .sep{height:1px;background:var(--line);margin:13px 0 12px}
-.list{display:flex;flex-direction:column;gap:3px}
-.it{background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:6px 9px}
-.it .t{font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.it .m{font-size:9.5px;color:var(--dim2);font-family:var(--mono);margin-top:1px}
-.empty{color:var(--dim2);font-size:10.5px;line-height:1.6;padding:10px 0}
+#svc:not(:empty){margin-top:6px}
 </style>
 
 <div class="top">
@@ -193,7 +189,8 @@ https://www.zhipin.com/job_detail/xxxx.html"></textarea>
 </details>
 
 <div class="sep"></div>
-<div class="hd"><b>最近存的</b><span id="cnt"></span></div>
-<div class="list" id="list"><div class="empty">还没有。到 BOSS 打开一个岗位页,点上面「抓取这页内容」。</div></div>
+<!-- 最近存的不在这里铺开 —— 一个入口,打开对应页面看 -->
+<button class="wide" id="recent">最近存入 · 全部岗位 ↗</button>
+<div class="fb bad" id="svc"></div>
 
 <script src="sidepanel.js"></script>
