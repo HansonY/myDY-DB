@@ -256,6 +256,21 @@ async function readTabSettled(tabId) {
 
 const sleep = ms => new Promise(s => setTimeout(s, ms));
 
+/* 正文指纹。和 bridge.js 里 fingerprint() 用的是**同一套算法和同一组剔除项** ——
+ * 两边口径不一致的话,一边认为「变了」另一边认为「没变」,就会出现
+ * 该存的不存 / 不该存的重复存。改一处记得改另一处。 */
+const VOLATILE_RE = /刚刚|\d+\s*(秒|分钟|小时|天)前|正在输入|未读/g;
+function hashText(t) {
+  // 剔掉自变字眼之后**还要压掉所有空白**。
+  // 不压的话,「刚刚」被剔走会留下一个空格,长度就变了 → 哈希跟着变 →
+  // 同一个页面被当成新的又存一遍。后端 dedupe_key 早就这么做了,
+  // 三处(bridge.js / background.js / boss_detect.py)口径必须一致。
+  const s = String(t || '').replace(VOLATILE_RE, '').replace(/\s+/g, '');
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return `${s.length}#${(h >>> 0).toString(36)}`;
+}
+
 /** 存一页。force=true → 后端不拦,一律入队(用户要的就是这个)。 */
 async function saveText(page, { auto = false, force = true } = {}) {
   const r = await fetch(TEXT_API, {
@@ -293,19 +308,25 @@ async function autoSave(tabId, url, via, sig) {
   if (batch.running || filling || run.running)
     return finish({ lastErr: '批量/翻页任务在跑,自动存让路' });
 
-  // 同一页别反复存。**键是 URL + 内容指纹**,不能只用 URL ——
-  // 左右分栏的岗位页点左边换右边时 URL 根本不变,只按 URL 去重
-  // 会把第一条之后的全挡掉(而那正是我们最想要的那些职位描述)。
-  const bare = String(url).split('#')[0] + '|' + (sig || '');
-  const { seenUrl = {} } = await chrome.storage.local.get('seenUrl');
-  if (seenUrl[tabId] === bare) return finish({ lastErr: null });
-
   try {
     const page = await readTabSettled(tabId);
     if (!page || page.len < MIN_CHARS) {
       stat.skip = (stat.skip || 0) + 1;
       return finish({ lastErr: `只抓到 ${page?.len ?? 0} 字(要 ≥${MIN_CHARS})—— 像是还没渲染完` });
     }
+
+    // 同一页别反复存。**去重键按「实际抓到的正文」算,不用调用方传来的指纹。**
+    //
+    // 两个原因:
+    //  · 只用 URL 不行 —— 左右分栏点左边换右边时 URL 根本不变,
+    //    那样会把第一条之后的全挡掉,而那些正是我们要的职位描述;
+    //  · 各条触发路径传来的指纹口径不一样(整页加载那条压根没有),
+    //    于是同一次加载会被「整页加载」和「内容变化」各存一遍。
+    //    统一按抓到的正文算,三条路自然一致。
+    const bare = String(url).split('#')[0] + '|' + hashText(page.text);
+    const { seenUrl = {} } = await chrome.storage.local.get('seenUrl');
+    if (seenUrl[tabId] === bare) return finish({ lastErr: null });
+
     const d = await saveText(page, { auto: true, force: true });
     seenUrl[tabId] = bare;
     await chrome.storage.local.set({ seenUrl });

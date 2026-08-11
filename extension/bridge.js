@@ -70,7 +70,10 @@ chrome.runtime.onMessage.addListener((msg, _s, reply) => {
    * djb2,够快(几百 KB 也是毫秒级),而且只要页面任何一处文字变了它就变。
    */
   function fingerprint() {
-    const t = (document.body?.innerText || '').replace(VOLATILE, '');
+    // 剔掉自变字眼之后**还要压掉所有空白** —— 不压的话剔除会留下空格,
+    // 长度变了哈希就变,同一个页面会被当成新的反复通知。
+    // 和 background.js 的 hashText()、后端的 dedupe_key 必须同一套口径。
+    const t = (document.body?.innerText || '').replace(VOLATILE, '').replace(/\s+/g, '');
     let h = 5381;
     for (let i = 0; i < t.length; i++) h = ((h << 5) + h + t.charCodeAt(i)) | 0;
     return `${document.title}#${t.length}#${(h >>> 0).toString(36)}`;
