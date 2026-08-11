@@ -290,9 +290,14 @@ def _primary_job(ids: list[str]) -> str | None:
 
 
 def _map_page_to_job(page: dict[str, Any], ids: list[str]) -> None:
-    """记「这个页面 ↔ 这个岗位」,让插件下次免费查。只对详情页记 ——
-    列表页对应十几个岗位,记哪个都是错的。"""
-    if page.get("kind") != "detail" or not ids:
+    """记「这个页面 ↔ 这个岗位」,让插件下次免费查。
+
+    不看 kind,看**有没有唯一的 JD**:BOSS 常用左右分栏,整页文字混着
+    左列一串卡片,常被判成 list —— 但右边正在看的那个岗位有职位描述,
+    左列卡片没有,所以「带 JD 的那个」就是当前岗位。纯列表页(谁都没 JD)
+    _primary_job 返回 None,自然不记 —— 一页十几个岗位记哪个都是错的。
+    页面键是整页文字指纹:分栏页点左边换右边,键就变,各自映射各自的岗位。"""
+    if not ids:
         return
     jid = _primary_job(ids)
     if not jid:
@@ -490,32 +495,6 @@ async def stats() -> dict[str, Any]:
 # 两者不一致时那是信息:要么规则口径有问题,要么模型在编。藏起来才是真的错。
 
 
-def _all_jobs() -> list[dict[str, Any]]:
-    with bs.connect() as c:
-        return [dict(r) for r in c.execute(
-            "SELECT job_id, title, company, city, district, salary_text, "
-            "       salary_min, salary_max, salary_months, experience, degree, "
-            "       jd, jd_state, job_state, tags, url FROM jobs")]
-
-
-# 词表按「库的内容」缓存,不按时间。库没变就不重算 —— 227 条 JD 十几万字,
-# 每次匹配都重扫一遍纯浪费。指纹用 (条数, 最大 updated_at):
-# 只要有岗位被 upsert,updated_at 就会变,所以漏不掉。
-_VOCAB: dict[str, Any] = {"fp": None, "vocab": set(), "jobs": []}
-
-
-def _vocab_and_jobs(extra: set[str] | None = None) -> tuple[set[str], list[dict[str, Any]]]:
-    with bs.connect() as c:
-        r = c.execute("SELECT COUNT(*) n, MAX(updated_at) m FROM jobs").fetchone()
-    fp = f"{r['n']}/{r['m']}"
-    if _VOCAB["fp"] != fp:
-        jobs = _all_jobs()
-        _VOCAB.update(fp=fp, jobs=jobs, vocab=bm.build_vocab(jobs))
-    # 我的技能每次都并进去(简历改了词表就该跟着变),但不进缓存的那份
-    return (_VOCAB["vocab"] | {bm.norm_skill(s) for s in (extra or ())},
-            _VOCAB["jobs"])
-
-
 @app.get("/api/boss/me")
 async def get_me() -> dict[str, Any]:
     """我的画像。没录入过 `me` 是 `null` —— **不给空壳**。
@@ -593,8 +572,7 @@ async def save_me(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
 
 
 def _facts(job: dict[str, Any], me: dict[str, Any]) -> dict[str, Any]:
-    vocab, _ = _vocab_and_jobs(set(me.get("skills") or []))
-    return boss_matchai.facts_for(job, me, vocab)
+    return boss_matchai.facts_for(job, me)
 
 
 @app.get("/api/boss/match/{job_id}")
@@ -657,11 +635,13 @@ async def match_run(job_id: str, force: bool = Query(False)) -> dict[str, Any]:
 
 
 def _facts_brief(facts: dict[str, Any]) -> dict[str, Any]:
-    """给侧边栏的精简版规则结论 —— 面板只有 300px 宽,摆不下全量。"""
-    cov = facts.get("coverage") or {}
+    """给侧边栏的精简版机械核对结论 —— 面板只有 300px 宽,摆不下全量。
+    机械的只有四个硬门槛;技能匹配是模型的活,不在这里。"""
     return {"hard_fail": facts.get("hard_fail") or [],
             "hard_unknown": facts.get("hard_unknown") or [],
-            "rate": cov.get("rate"), "rate_confidence": cov.get("rate_confidence"),
+            "gates": [{"name": i["name"], "verdict": i["verdict"],
+                       "note": i.get("note") or ""}
+                      for i in (facts.get("gate_items") or [])],
             "remote": facts.get("remote")}
 
 
@@ -763,7 +743,7 @@ async def match_list(limit: int = Query(100, ge=1, le=300)) -> dict[str, Any]:
     ⚠️ `fit` 是**模型给的(inferred)**,不是算出来的。规则层的排序键是另一回事
     (还没校准,见计划 §四)。这里不混在一起排。
     """
-    rows = bs.list_matches(limit)
+    rows = bs.list_matches(boss_matchai.PROMPT_VER, limit)
     with bs.connect() as c:
         total = c.execute("SELECT COUNT(*) n FROM jobs").fetchone()["n"]
     return {"items": rows, "analyzed": len(rows), "total_jobs": total,

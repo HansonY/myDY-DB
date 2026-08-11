@@ -114,33 +114,52 @@ async function readPage() {
   scorePage();
 }
 
-/* ── 当前岗位的匹配分 ─────────────────────────────────────
- * 两步,一免费一花钱:
- *   ① page_state  这页库里认不认识、有没有缓存的分 —— 零 AI,每次页面变都问;
- *   ② page_analyze 没提取先提取、没打分再打分 —— 最多两次 AI 调用,
- *      结果落库,同一个岗位以后都免费。
- * 同一时刻只跑一个 ②;失败过的页面不自动重试(点「重试」才再花钱)。 */
+/* ── 当前岗位的匹配 ───────────────────────────────────────
+ * 分两层,泾渭分明:
+ *   机械核对(免费,自动显示)  四个硬门槛:城市/经验/学历/薪资。page_state,零 AI。
+ *   AI 分析匹配(花钱,点按钮)  技能匹配 + 对不对路 + fit 分,全归模型。
+ *      **不自动调** —— 模型调用由人显式触发;已经分析过的直接显示缓存(不花钱)。
+ * 左右分栏被判成「列表页」的也一样:右边正在看的岗位有职位描述,能锁定。 */
 let scoreToken = 0, analyzing = false;
-const scoreFailed = new Set();
+
+const GN = { city: '城市', experience: '经验', degree: '学历', salary: '薪资' };
+
+function gateBlock(fb) {
+  if (!fb || !(fb.gates || []).length) return '';
+  const VT = { pass: ['ok', '符合'], fail: ['bad', '不符'],
+               unknown: ['', '未判定'], na: ['', '不适用'] };
+  const cells = fb.gates.map(g => {
+    const [cls, txt] = VT[g.verdict] || ['', g.verdict];
+    return `<span class="ml ${cls}" style="display:inline;margin-right:8px"
+      title="${esc(g.note || '')}">${GN[g.name] || g.name}·${txt}</span>`;
+  }).join('');
+  return `<div class="gate">机械核对(只有这四项):${cells}</div>`;
+}
+
+function aiBtn(label) {
+  return `<button class="ai" data-act="run">${label}</button>
+    <div class="mt" style="margin-top:5px"><span>模型只在你点的时候调用,结果落库,同一岗位不再花钱</span></div>`;
+}
 
 function fitRow(st) {
   const ai = st.match || st.ai;
   const vd = { worth: '值得投', maybe: '可以试试', skip: '别浪费时间' }[ai?.verdict] || '?';
-  const fb = st.facts_brief || {};
-  const GN = { city: '城市', experience: '经验', degree: '学历', salary: '薪资' };
-  const gate = (fb.hard_fail || []).length
-    ? `硬门槛:<b>${fb.hard_fail.map(x => GN[x] || x).join('、')}不符</b>(规则算的,模型改不了)`
-    : '硬门槛全过(规则算的)';
-  const cov = fb.rate == null ? '' :
-    ` · 技能覆盖 ${Math.round(fb.rate * 100)}%${fb.rate_confidence === 'low' ? '(分母小,不可靠)' : ''}`;
-  return `<div class="fitrow"><span class="fit">${ai?.fit ?? '?'}</span>
-      <span class="vd ${esc(ai?.verdict || '')}">${vd}</span></div>
+  const li = (arr, tag, cls) => (arr || []).length
+    ? `<div class="gate">${tag}${arr.slice(0, 3).map(x =>
+        `<span class="ml ${cls}" style="display:inline" title="原文:${esc(x.quote || '')}">${esc(x.point)}</span>`)
+        .join('<br>　')}</div>`
+    : '';
+  return `${gateBlock(st.facts_brief)}
+    <div class="fitrow" style="margin-top:7px"><span class="fit">${ai?.fit ?? '?'}</span>
+      <span class="vd ${esc(ai?.verdict || '')}">${vd}</span>
+      <span style="font-size:9px;color:var(--dim2)">AI 分析</span></div>
     <div class="why">${esc(ai?.fit_why || '')}</div>
-    <div class="gate">${gate}${cov}</div>
+    ${li(ai?.skills_hit, '技能对得上:', 'ok')}
+    ${li(ai?.skills_gap, '技能缺口:', 'bad')}
     <div class="mt">
-      <a data-act="detail">对照详情 ↗</a>
+      <a data-act="detail">完整分析 ↗</a>
       <a data-act="redo">重新分析</a>
-      ${ai?.quote_miss ? `<span>丢弃了 ${ai.quote_miss} 条引不出原文的判断</span>` : ''}
+      ${ai?.quote_miss ? `<span>丢弃 ${ai.quote_miss} 条引不出原文的判断</span>` : ''}
     </div>`;
 }
 
@@ -148,23 +167,15 @@ function bindScore(st) {
   const box = $('#score');
   box.querySelector('[data-act="detail"]')?.addEventListener('click', () =>
     chrome.tabs.create({ url: API + '/match.html#' + (st.job?.job_id || '') }));
-  box.querySelector('[data-act="redo"]')?.addEventListener('click', () => {
-    scoreFailed.delete(st.page_key);
-    analyzePage(st, true);
-  });
+  box.querySelector('[data-act="redo"]')?.addEventListener('click', () => analyzePage(st, true));
+  box.querySelector('[data-act="run"]')?.addEventListener('click', () => analyzePage(st, false));
   box.querySelector('[data-act="me"]')?.addEventListener('click', () =>
     chrome.tabs.create({ url: API + '/me.html' }));
-  box.querySelector('[data-act="retry"]')?.addEventListener('click', () => {
-    scoreFailed.delete(st.page_key);
-    analyzePage(st, false);
-  });
 }
 
 async function scorePage() {
   const box = $('#score');
-  // 只给岗位详情页打分。列表页一页十几个岗位,单个分数没有意义 ——
-  // 列表的分在知识库「岗位库」页看(那边一行一个)。
-  if (!page?.verdict?.is_job || page.kind !== 'detail') {
+  if (!page?.verdict?.is_job) {           // 岗位页才有匹配可谈(详情或列表都行)
     box.hidden = true; box.innerHTML = '';
     return;
   }
@@ -179,34 +190,36 @@ async function scorePage() {
   if (my !== scoreToken) return;               // 页面已经换了,别渲染旧结果
 
   box.hidden = false;
+  st.page_key = st.page_key || '';
   if (st.need_me) {
-    box.innerHTML = `<div class="busy">要打分,先录一次简历(只用录一次)
+    box.innerHTML = `<div class="busy">要匹配,先录一次简历(只用录一次)
       —— <a data-act="me" style="color:var(--accent-t);cursor:pointer;text-decoration:underline">去录 ↗</a></div>`;
     bindScore(st); return;
   }
-  if (st.match) { box.innerHTML = fitRow(st); bindScore(st); return; }
+  if (st.match) {                              // 已分析过:显示缓存,不调模型
+    box.innerHTML = fitRow(st); bindScore(st); return;
+  }
   if (st.ai?.state !== 'ok') {
-    box.innerHTML = `<div class="err">AI ${esc(st.ai?.label || '不可用')} ——
-      打分要模型。到知识库页「AI 模型」里配好再回来。</div>`;
+    box.innerHTML = `${gateBlock(st.facts_brief)}
+      <div class="err">AI ${esc(st.ai?.label || '不可用')} —— 分析要模型,
+      到知识库页「AI 模型」里配好再回来。</div>`;
     return;
   }
-  if (scoreFailed.has(st.page_key)) {
-    box.innerHTML = `<div class="err">这页刚才分析失败了,不自动重试(免得白花调用)。
-      <a data-act="retry" style="color:var(--accent-t);cursor:pointer;text-decoration:underline">重试</a></div>`;
-    bindScore(st); return;
-  }
-  analyzePage(st, false);
+  // 机械核对(有就显示)在上,醒目的 AI 按钮在下 —— 点了才花钱
+  box.innerHTML = `${gateBlock(st.facts_brief)}
+    ${st.job ? '' : '<div class="busy" style="margin:2px 0 4px">这页的岗位还没提取 —— 点下面一次搞定(提取 + 分析)</div>'}
+    ${aiBtn('AI 分析匹配' + (st.job ? '' : '(提取 + 分析)'))}`;
+  bindScore(st);
 }
 
 async function analyzePage(st, force) {
   const box = $('#score');
-  if (analyzing) { box.innerHTML = '<div class="busy">上一个岗位还在分析,马上轮到这个…</div>'; return; }
+  if (analyzing) return;
   analyzing = true;
   const my = scoreToken;
-  box.hidden = false;
-  box.innerHTML = `<div class="busy">${st.job
-    ? '岗位已在库里 —— 正在让模型打分…(约 10 秒)'
-    : '第一次见到这个岗位 —— 提取 + 打分中…(20~40 秒,存下来以后就秒出)'}</div>`;
+  const btn = box.querySelector('[data-act="run"]');
+  if (btn) { btn.disabled = true; btn.textContent = st.job ? '模型分析中…(约 10 秒)' : '提取 + 分析中…(20~40 秒)'; }
+  else box.innerHTML = `<div class="busy">分析中…</div>`;
   try {
     const d = await (await fetch(API + '/api/boss/page_analyze?force=' + !!force, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -214,9 +227,8 @@ async function analyzePage(st, force) {
     })).json();
     if (my !== scoreToken) return;             // 人已经翻到别的岗位了
     if (d.error) {
-      scoreFailed.add(st.page_key);
-      box.innerHTML = `<div class="err">${esc(d.error)}
-        <a data-act="retry" style="color:var(--accent-t);cursor:pointer;text-decoration:underline">重试</a></div>`;
+      box.innerHTML = `${gateBlock(st.facts_brief)}<div class="err">${esc(d.error)}</div>
+        ${aiBtn('再试一次')}`;
       bindScore(st);
     } else {
       box.innerHTML = fitRow({ ...d, match: d.ai, page_key: st.page_key });
@@ -225,7 +237,8 @@ async function analyzePage(st, force) {
     }
   } catch (e) {
     if (my === scoreToken)
-      box.innerHTML = `<div class="err">连不上本地服务 —— 跑 ./boss.sh</div>`;
+      box.innerHTML = `<div class="err">连不上本地服务 —— 跑 ./boss.sh</div>${aiBtn('再试一次')}`;
+    bindScore(st);
   } finally { analyzing = false; }
 }
 

@@ -175,38 +175,6 @@ function mark(id) {
     el => el.classList.toggle('on', el.dataset.id === id));
 }
 
-function covBlock(cov) {
-  if (!cov) return '';
-  const rate = cov.rate;
-  const head = rate === null || rate === undefined
-    // 零证据返回 null 不是 0。返回 0 会让这些岗位排最后、看起来像「不匹配」,
-    // 而那个错误会自我实现:排最后就不看,不看就永远补不上详情页。
-    ? '<b style="color:var(--warn-text)">算不出来</b> —— 这个岗位还没抓到技能信息(不是 0%)'
-    : `<b class="big" style="font-size:20px">${Math.round(rate * 100)}%</b>
-       <span style="font-size:11.5px;color:var(--dim)">命中 ${(cov.matched || []).length}/${cov.n_job_tech} 个技术/工具词</span>`
-      + (cov.rate_confidence === 'low'
-        ? ' <span class="pill warn">分母不足 3,这个百分比不可靠</span>' : '');
-  return `<div class="box">
-    <div>${head}</div>
-    <div class="hint" style="font-size:10.5px;color:var(--dim2);margin-top:6px">
-      分母只算技术/工具词 —— tags 是 AI 从页面抽的,混着「独立开发且上线经验」这类整句,
-      拿它算覆盖率是骗人(我简历里不会有这个字符串,但我明明有这个经历)。</div>
-    ${(cov.matched || []).length ? `<div class="sub"><label>我有的</label>
-      <div class="chips">${cov.matched.map(m =>
-        `<span class="chip hit" title="怎么配上的:${esc(m.how)} · 岗位原词「${esc(m.tok)}」· 来源 ${esc(m.src)}">${esc(m.canon)}</span>`).join('')}</div></div>` : ''}
-    ${(cov.missing || []).length ? `<div class="sub"><label>它要但我没写</label>
-      <div class="chips">${cov.missing.map(m =>
-        `<span class="chip miss" title="岗位原词「${esc(m.tok)}」· 来源 ${esc(m.src)}(tags=AI 从页面抽的,jd=在职位描述正文里命中)">${esc(m.canon)}</span>`).join('')}</div>
-      <div class="hint" style="font-size:10.5px;color:var(--dim2);margin-top:6px">
-        命中判定是**精确 → 别名 → 包含**,不用语义相似度 —— 实测「该算命中」和
-        「该算不同」在向量空间里交错(mysql↔postgresql 0.748 不该算,gitlab↔git 0.761 该算),
-        没有一个阈值分得开。鼠标停在词上能看到它是从哪儿来的。</div></div>` : ''}
-    ${(cov.qualitative || []).length ? `<div class="sub"><label>定性要求(不进覆盖率)</label>
-      <div class="chips">${cov.qualitative.map(m =>
-        `<span class="chip" title="${esc(m.kind)}">${esc(m.tok)}</span>`).join('')}</div></div>` : ''}
-  </div>`;
-}
-
 function aiBlock(ai, at) {
   if (!ai) return `<div class="box"><div class="empty" style="padding:16px 0">
     还没让模型看过这个岗位。</div></div>`;
@@ -231,6 +199,8 @@ function aiBlock(ai, at) {
       <div style="font-size:10.5px;margin-top:6px;opacity:.85">
         没有自动修正 —— 不一致本身是信息:要么规则的口径有问题,要么模型没把
         算出来的当事实。悄悄把结论改一致会让这个信号消失。</div></div>` : ''}
+    ${pts(ai.skills_hit, '技能:对得上的(依据逐条引自简历 —— 等价经历也算)')}
+    ${pts(ai.skills_gap, '技能缺口(岗位明确要求、简历找不到依据 —— 引自 JD 原文)')}
     ${pts(ai.highlights, '我最能打动它的')}
     ${pts(ai.risks, '最可能被挑的')}
     ${pts(ai.hidden, 'JD 里结构化不掉的要求')}
@@ -267,17 +237,16 @@ function render(d) {
           —— 实测写了的那些里 13/14/15/16/18 薪都有,**假设 12 薪会系统性低估 8%–50%**,
           所以门槛只用月薪、不用总包。</div>` : ''}
 
-    <h2>技能覆盖(算的,不是模型给的)</h2>
-    ${covBlock(f.coverage)}
-
-    <h2>模型判的:对不对路</h2>
-    <p class="lead">规则层判不了的那部分 —— 职责深浅、要专精还是全栈、我的经历对不对路。
-      **每条都要能从原文里逐字引出来**,引不出的直接丢弃并计数(上面会显示)。<br>
-      ⚠️ 这个分数**两次可能不一样**,所以落了库:页面上看到的一直是同一个数。
-      要重算得显式点。</p>
+    <h2>AI 分析匹配(模型判的 —— 技能匹配在这里,不做机械词表对照)</h2>
+    <p class="lead">机械核对只有上面四项;**技能匹配、职责对不对路、fit 分全归模型**,
+      它读岗位原文 + 简历原文判断,等价经历也算(简历写「从 0 到上线」=
+      岗位要的「独立开发且上线经验」,词表永远对不出这个)。<br>
+      **每条判断都要能从原文里逐字引出来**,引不出的直接丢弃并计数。
+      分数落库:页面上看到的一直是同一个数,重算得显式点。</p>
     ${aiBlock(d.ai, d.ai_at)}
     <div class="row">
-      <button class="btn go" id="run">${d.ai ? '重新分析(会花一次调用)' : '让模型分析这个岗位'}</button>
+      <button class="btn go" id="run" style="font-size:13px;padding:10px 18px">${
+        d.ai ? '重新分析(会花一次调用)' : 'AI 分析匹配(一次调用)'}</button>
       ${j.jd_state !== 'have' ? '<span class="pill warn">没有职位描述 —— 模型只能看标题和薪资,结论会很虚</span>' : ''}
     </div>
     <div class="msg" id="rmsg"></div>`;

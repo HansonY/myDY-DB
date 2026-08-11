@@ -505,13 +505,20 @@ def save_match(job_id: str, res: dict[str, Any], facts: dict[str, Any]) -> None:
         conn.commit()
 
 
-def list_matches(limit: int = 200) -> list[dict[str, Any]]:
+def list_matches(prompt_ver: str, limit: int = 200) -> list[dict[str, Any]]:
+    """只列**当前 prompt 版本**的分析。
+
+    表里各版本并存是为了对比 prompt 改好还是改坏(PK 带 prompt_ver 的用意),
+    但排序列表混着两版就是拿不可比的数在比 —— match1 的 78 和 match2 的 86
+    根本不是同一把尺子量的。
+    """
     with connect() as conn:
         return [dict(r) for r in conn.execute(
             "SELECT m.job_id, m.fit, m.verdict, m.quote_miss, m.computed_at, m.model,"
             "       j.title, j.company, j.city, j.salary_text, j.jd_state, j.job_state "
             "FROM job_match m JOIN jobs j ON j.job_id = m.job_id "
-            "ORDER BY m.fit DESC NULLS LAST LIMIT ?", (limit,))]
+            "WHERE m.prompt_ver = ? "
+            "ORDER BY m.fit DESC NULLS LAST LIMIT ?", (prompt_ver, limit))]
 
 
 def save_chat(job_id: str, hr_name: str | None, last_msg_at: str | None,

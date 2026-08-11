@@ -138,6 +138,14 @@ textarea:focus{outline:none;border-color:rgba(76,141,255,.45)}
 .score .mt a{color:var(--accent-t);cursor:pointer;text-decoration:underline}
 .score .busy{font-size:11px;color:var(--dim);line-height:1.6}
 .score .err{font-size:10.5px;color:var(--warn);line-height:1.55}
+/* AI 分析按钮 —— 醒目:模型调用只在这里发生,点了才花钱 */
+.score button.ai{width:100%;text-align:center;background:rgba(76,141,255,.22);
+  border:1px solid rgba(76,141,255,.55);border-radius:8px;padding:9px 10px;margin:6px 0 0;
+  color:var(--accent-t);font-weight:600;font-size:12.5px;cursor:pointer}
+.score button.ai:hover:not(:disabled){background:rgba(76,141,255,.3)}
+.score button.ai:disabled{opacity:.55;cursor:default}
+.score .ml{font-size:10px;font-family:var(--mono)}
+.score .ml.ok{color:var(--ok)} .score .ml.bad{color:var(--warn)}
 </style>
 
 <div class="top">

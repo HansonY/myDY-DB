@@ -166,6 +166,16 @@ ok(ai.conflicts({"fit_why": "覆盖率 60%"},
 ok(not ai.conflicts({"fit_why": "覆盖率 30%,一般"},
                     {"hard_fail": [], "coverage": {"rate": 0.30}}, "worth", []),
    "  复述规则算的那个数 → 不报(prompt 允许引用,不允许改)")
+ok(not ai.conflicts({"fit_why": "技能覆盖率约 60%"}, {"hard_fail": []}, "maybe", []),
+   "★ match2:facts 里根本没有覆盖率 → 不做百分比交叉检(那是模型自己的措辞,没得比)")
+
+# match2:技能匹配归模型,quote 校验同样管它 —— hit 引简历,gap 引 JD
+kept2, miss2 = ai.verify_claims([
+    {"point": "有 SwiftUI 实战", "quote": "我用 Swift 写过 两个 App"},
+    {"point": "编的技能依据", "quote": "精通量子计算"},
+], HAY, cap=6)
+ok(len(kept2) == 1 and miss2 == 1,
+   "★ skills_hit/gap 的 quote 同样逐字校验,编的依据一样丢弃")
 
 # 缓存键:两处必须用同一个函数,不然「每次点都重新花钱」而且不报错
 J, M = {"jd": "abc"}, {"resume_raw": "xyz"}
