@@ -40,9 +40,24 @@ function grab() {
   };
 }
 
+// 当前标签页上插件的页面脚本活着吗。**重载扩展不会让已打开的标签页拿到新代码**
+// —— content script 只在页面加载时注入。这是「自动存怎么都不生效」最常见的原因,
+// 而且从面板上完全看不出来,所以显式探一下。
+let bridgeAlive = null;      // null=还没探 / false=没在跑 / 数字=版本
+async function probeBridge(tabId) {
+  try {
+    const r = await chrome.tabs.sendMessage(tabId, { type: 'ping' });
+    bridgeAlive = r?.alive ? (r.v || 1) : false;
+  } catch (e) {
+    bridgeAlive = false;     // 没有接收方 = 这个标签页没跑我们的脚本
+  }
+}
+
 async function readPage() {
   const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
   tab = t;
+  if (t?.id != null && /zhipin\.com/.test(t.url || '')) await probeBridge(t.id);
+  else bridgeAlive = null;
   const box = $('#now');
   if (!t || !/zhipin\.com/.test(t.url || '')) {
     page = null;
@@ -150,7 +165,7 @@ async function save(auto) {
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || ('HTTP ' + r.status));
-    msg('manual', d.note || (d.queued ? '已入队' : '没入队'), d.queued ? 'ok' : '');
+    msg('manual', d.note || (d.queued ? '已入队' : '没入队'), d.queued ? 'ok' : '', 15000);
     refresh();
   } catch (e) {
     msg('manual', /Failed to fetch/.test(e.message)
@@ -169,9 +184,21 @@ async function save(auto) {
  *   batch  折叠区里的手动粘链接
  */
 const SLOT = { run: '#m1', auto: '#m2', manual: '#m3', batch: '#bstat' };
-function msg(slot, t, cls) {
+
+/* 「你点出来的结果」要压得住「定时刷新」。
+ *
+ * 定时器每 2.5 秒跑一次 autoStat/runStat,它们也会往这些格子里写状态 ——
+ * 于是你点「测一下」看到的结论 2.5 秒后就被冲掉,根本来不及读。
+ * 实测就是这样,自检按钮等于白做。
+ * 所以:人主动触发的消息带一个保护期(hold),期内后台刷新不许覆盖。
+ */
+const HOLD = {};
+function msg(slot, t, cls, holdMs) {
   const m = $(SLOT[slot]);
   if (!m) return;
+  const now = Date.now();
+  if (holdMs) HOLD[slot] = now + holdMs;
+  else if ((HOLD[slot] || 0) > now) return;   // 保护期内,后台刷新让路
   m.textContent = t || '';
   m.className = (slot === 'batch' ? 'prog ' : 'fb ') + (cls || '');
 }
@@ -203,6 +230,53 @@ $('#runOne').onclick = () => startRun($('#autonext').checked);
 $('#stop').onclick = () => chrome.runtime.sendMessage({ type: 'stopRun' });
 $('#open').onclick = () => chrome.tabs.create({ url: API + '/' });
 $('#recent').onclick = () => chrome.tabs.create({ url: API + '/' });
+
+/* 「测一下这条链路」—— 把自动存走的每一步当场跑一遍,断在哪就说哪。
+ *
+ * 为什么要它:「没存入」这一个现象,可能断在
+ *   ① 这个标签页没跑插件脚本(重载扩展后没刷新页面)
+ *   ② 开关没开
+ *   ③ 读不到页面文字
+ *   ④ 抓到的字太少
+ *   ⑤ 本地服务没开
+ * 五种表现一模一样。等页面变化再看太慢,给个按钮当场走一遍。
+ */
+$('#selftest').onclick = async () => {
+  const b = $('#selftest');
+  b.disabled = true; b.textContent = '测试中…';
+  const step = [];
+  try {
+    const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!t || !/zhipin\.com/.test(t.url || '')) throw new Error('当前不是 BOSS 页面 —— 先切到 zhipin.com');
+    step.push('① 当前页 ✓');
+
+    await probeBridge(t.id);
+    if (bridgeAlive === false) throw new Error('这个标签页没跑插件脚本 —— 按 ⌘R 刷新页面');
+    step.push(`② 页面脚本在跑(v${bridgeAlive})✓`);
+
+    const [r] = await chrome.scripting.executeScript({
+      target: { tabId: t.id }, func: grab, world: 'MAIN' });
+    const pg = r?.result;
+    if (!pg) throw new Error('读不到页面文字');
+    step.push(`③ 读到 ${pg.len} 字 ✓`);
+    if (pg.len < 200) throw new Error(`只有 ${pg.len} 字,像是还没渲染完`);
+
+    const resp = await fetch(API + '/api/boss/ingest_text', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...pg, auto: false, force: true }),
+    });
+    const d = await resp.json();
+    if (!resp.ok) throw new Error(d.detail || ('HTTP ' + resp.status));
+    step.push(`④ 存进去了 —— ${d.note || '已入队'} ✓`);
+    msg('auto', step.join('\n') + '\n整条链路是通的。', 'ok', 20000);
+    refresh();
+  } catch (e) {
+    const why = /Failed to fetch/.test(e.message)
+      ? '连不上本地服务 —— 在项目目录跑 ./boss.sh web' : e.message;
+    msg('auto', step.join('\n') + '\n✗ ' + why, 'bad', 20000);
+  }
+  b.disabled = false; b.textContent = '测一下这条链路';
+};
 $('#autochk').onchange = e => chrome.storage.local.set({ auto: e.target.checked });
 
 chrome.storage.local.get('auto').then(d => $('#autochk').checked = !!d.auto);
@@ -260,7 +334,10 @@ async function autoStat() {
   const src = st.bySrc || {};
   const srcLine = ['整页加载', 'SPA跳转', '内容变化']
     .map(k => `${k} ${src[k] || 0}`).join(' · ');
-  if (!$('#autochk').checked) {
+  if (bridgeAlive === false) {
+    msg('auto', '这个标签页还没加载插件脚本 —— 按 ⌘R 刷新一下页面。'
+      + '(重载扩展不会让已经打开的页面拿到新代码)', 'bad');
+  } else if (!$('#autochk').checked) {
     msg('auto', '没开 —— 打开后浏览岗位页会自动存', '');
   } else if (st.ok) {
     msg('auto', `已存 ${st.ok} 页`

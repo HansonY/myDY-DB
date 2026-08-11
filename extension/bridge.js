@@ -1,3 +1,6 @@
+/* 版本号:面板拿它判断这个标签页跑的是不是新代码。改了 bridge.js 就 +1。 */
+const BRIDGE_VERSION = 2;
+
 /* 隔离世界:两个职责
  *   1. 把主世界抄到的响应转给后台(主世界拿不到 chrome.runtime)
  *   2. 替后台发「补详情」的请求 —— 它跑在 zhipin 源上,cookie 天然带着,
@@ -11,6 +14,12 @@ window.addEventListener('message', (e) => {
 });
 
 chrome.runtime.onMessage.addListener((msg, _s, reply) => {
+  // 「这个标签页上,插件的页面脚本在跑吗?」
+  // **重载扩展不会让已经打开的标签页拿到新代码** —— content script 只在
+  // 页面加载时注入。用户重载了扩展但没刷新 BOSS 页面时,那个页面还跑着旧脚本
+  // (旧版根本没有内容变化观察器),表现就是「自动存怎么都不生效」,
+  // 而面板那边完全看不出来。所以给面板一个探针。
+  if (msg?.type === 'ping') { reply({ alive: true, v: BRIDGE_VERSION }); return; }
   if (msg?.type !== 'fetchOne') return;
   (async () => {
     try {
