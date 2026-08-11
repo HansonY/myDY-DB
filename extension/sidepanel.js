@@ -100,17 +100,38 @@ let running = false;
 function syncButtons() {
   const onList = page?.kind === 'list';
   const has = !!page && (page.len || 0) >= 80;
+  const auto = $('#autonext').checked;
   $('#save').disabled = running || !has;
   $('#runOne').disabled = running || !onList;
-  $('#runAll').disabled = running || !onList;
-  $('#pgrow').hidden = running || !onList;
-  $('#pickinfo').hidden = running || !onList;
+  $('#autonext').disabled = running || !onList;
+  // 「锁定下一页按钮」只在勾了自动翻页时才有意义 —— 不勾根本不会翻页
+  $('#nextbox').hidden = running || !onList || !auto;
   $('#stop').hidden = !running;
-  const why = !page ? '打开 zhipin.com 的岗位页再来'
-    : onList ? '' : '这两项要在岗位列表页用(推荐职位 / 搜索结果 / 我的收藏)';
-  $('#runOne').querySelector('i').textContent = why || '逐个打开这一页的每个岗位,存入原文';
-  $('#runAll').querySelector('i').textContent = why || '每页都这么抓,抓完自动翻下一页';
+
+  const b = $('#runOne').querySelector('b'), i = $('#runOne').querySelector('i');
+  if (!onList) {
+    // 说清为什么点不动,而不是让人干瞪眼
+    b.textContent = '抓取该页所有岗位列表存入';
+    i.textContent = !page ? '打开 zhipin.com 的岗位列表页再来'
+      : '这一项要在岗位列表页用(推荐职位 / 搜索结果 / 我的收藏)';
+  } else if (auto) {
+    b.textContent = `抓取该页所有岗位,再往后翻 ${$('#pgn').value} 页`;
+    i.textContent = '每页都逐个打开岗位存入,抓完自动点「下一页」';
+  } else {
+    b.textContent = '抓取该页所有岗位列表存入';
+    i.textContent = '逐个打开这一页的每个岗位,存入原文';
+  }
 }
+
+// 自动翻页开关:勾上才出现页数和「锁定下一页按钮」
+$('#autonext').onchange = e => {
+  chrome.storage.local.set({ autonext: e.target.checked });
+  syncButtons(); pickInfo();
+};
+$('#pgn').oninput = syncButtons;
+chrome.storage.local.get('autonext').then(d => {
+  $('#autonext').checked = !!d.autonext; syncButtons();
+});
 
 async function save(auto) {
   if (!page || !tab) return;
@@ -168,8 +189,7 @@ async function refresh() {
 // 面板只管抓,不管提取。顶部「知识库 ↗」是入口。
 
 $('#save').onclick = () => save(false);
-$('#runOne').onclick = () => startRun(false);
-$('#runAll').onclick = () => startRun(true);
+$('#runOne').onclick = () => startRun($('#autonext').checked);
 $('#stop').onclick = () => chrome.runtime.sendMessage({ type: 'stopRun' });
 $('#open').onclick = () => chrome.tabs.create({ url: API + '/' });
 $('#autochk').onchange = e => chrome.storage.local.set({ auto: e.target.checked });
@@ -203,6 +223,9 @@ async function autoStat() {
    *   ④ 抓到了但连不上本地服务
    * 所以四个环节都摊开显示,一眼就知道断在哪一环。 */
   const nav = st.nav || 0;
+  // **一次都没跑过就不铺那三行** —— 空着比摆一堆「还没…」干净。
+  // 注意别只清空就往下走:下面还会把 rows 写回去,那样等于没清。
+  const idle = !nav && !(st.ok || st.skip || st.fail);
   const rows = [];
   rows.push(nav
     ? `<div class="ml ok">① 已监听到翻页 ${nav} 次${st.lastVia ? ' · ' + esc(st.lastVia) : ''}</div>`
@@ -217,7 +240,7 @@ async function autoStat() {
   if (st.lastUrl) rows.push(`<div class="ml">最近:${esc(st.lastUrl.replace('https://www.zhipin.com',''))}</div>`);
   if (st.lastTitle) rows.push(`<div class="ml ok">存的是:${esc(st.lastTitle)}</div>`);
   if (st.lastErr) rows.push(`<div class="ml bad">${esc(st.lastErr)}</div>`);
-  $('#astat').innerHTML = rows.join('');
+  $('#astat').innerHTML = idle ? '' : rows.join('');
 
   // 手动粘链接那条路的进度(在折叠区里)。跑起来了就把折叠区自动展开 ——
   // 否则进度藏在收起来的地方,看着像什么都没发生。
@@ -276,19 +299,18 @@ $('#pick').onclick = async () => {
 async function pickInfo() {
   const d = await chrome.storage.local.get(['nextSel', 'pickState']);
   const box = $('#pickinfo');
-  if (d.nextSel?.sels?.length) {
-    box.innerHTML = `<span class="ok">已记住「${esc(d.nextSel.text || d.nextSel.tag)}」`
-      + `(${d.nextSel.sels.length + (d.nextSel.parentSels?.length || 0)} 种定位方式)</span>`
-      + ` <a id="forget">重新指</a>`;
-    $('#forget').onclick = async () => {
-      await chrome.runtime.sendMessage({ type: 'forgetNext' });
-      msg('已清掉,重新指一次。', ''); pickInfo();
-    };
-  } else if (d.pickState?.cancelled) {
-    box.innerHTML = '<span class="dimz">上次取消了 —— 还没记住任何按钮</span>';
-  } else {
-    box.innerHTML = '<span class="dimz">还没指过。不指也能跑(按文字猜),指一次更稳。</span>';
+  // **没记住就什么都不显示。** 常驻一行「还没指过…」只是噪音 ——
+  // 该说的话写在按钮的 title 里,需要时鼠标停一下就能看到。
+  if (!d.nextSel?.sels?.length) {
+    box.innerHTML = d.pickState?.cancelled ? '上次取消了,没记住' : '';
+    return;
   }
+  box.innerHTML = `<span class="ok">已锁定「${esc(d.nextSel.text || d.nextSel.tag)}」</span>`
+    + ` <a id="forget">重新锁定</a>`;
+  $('#forget').onclick = async () => {
+    await chrome.runtime.sendMessage({ type: 'forgetNext' });
+    msg('已清掉,重新锁定一次。', ''); pickInfo();
+  };
 }
 
 /* ── 批量存入:本页存完 → 翻下一页 ───────────────────────── */
@@ -324,11 +346,15 @@ async function runStat() {
   if (!r.rounds && !r.log?.length) { box.innerHTML = ''; return; }
   // 两层进度都要显示:第几页 + 这一页的第几个岗位。
   // 只显示一个总数的话,卡住时分不出是卡在翻页还是卡在某个岗位上。
-  box.innerHTML = `<div class="bp">${r.running ? '进行中' : '已结束'} · `
+  // 跑的时候给实时进度 + 最近几条;**跑完只留一行结果**。
+  // 整段日志一直挂在面板上是噪音 —— 要复盘就展开「诊断」看。
+  const headline = `<div class="bp">${r.running ? '进行中' : '已结束'} · `
     + `第 ${r.round || 0}/${r.rounds || 1} 页 · 岗位 ${r.jobsDone || 0}/${r.jobsTotal || 0}`
-    + ` · 已存 ${r.saved || 0}${r.failed ? ` · 失败 ${r.failed}` : ''}</div>`
-    + (r.log || []).slice(0, 8).map(l =>
-        `<div class="ml ${l.bad ? 'bad' : 'ok'}">${esc(l.t)}</div>`).join('');
+    + ` · 已存 ${r.saved || 0}${r.failed ? ` · 失败 ${r.failed}` : ''}</div>`;
+  box.innerHTML = r.running
+    ? headline + (r.log || []).slice(0, 5).map(l =>
+        `<div class="ml ${l.bad ? 'bad' : 'ok'}">${esc(l.t)}</div>`).join('')
+    : headline;
 }
 
 $('#harvest').onclick = async () => {

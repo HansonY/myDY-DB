@@ -102,6 +102,12 @@ textarea{width:100%;min-height:52px;resize:vertical;background:var(--surface);
   font:10.5px/1.5 var(--mono);margin:0 0 6px}
 textarea:focus{outline:none;border-color:rgba(76,141,255,.45)}
 
+/* 一组 = 一件事。按钮和它的选项包在一起,免得看成两个不相干的功能。 */
+.grp{border:1px solid var(--line);border-radius:9px;padding:7px;margin-bottom:8px}
+.grp button{margin-bottom:5px}
+.grp label.sw{border:0;background:transparent;padding:3px 4px 2px;margin:0}
+.grp .row{padding-left:4px;margin-bottom:4px}
+
 .sep{height:1px;background:var(--line);margin:13px 0 12px}
 .list{display:flex;flex-direction:column;gap:3px}
 .it{background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:6px 9px}
@@ -127,30 +133,37 @@ textarea:focus{outline:none;border-color:rgba(76,141,255,.45)}
 
 <div class="hd"><b>抓取</b><span>只存原文 · 提取在知识库页做</span></div>
 
-<!-- ① 被动:浏览时顺手存 -->
-<label class="sw"><input type="checkbox" id="autochk">
-  <span><b>自动浏览存入</b><i>你正常浏览,打开岗位页就自动存下原文</i></span></label>
-<div class="prog" id="astat"></div>
-
-<!-- ②③④ 主动:三种抓法各自一个按钮,按钮名就是它干的事 -->
-<button id="save"><b>抓取这页内容</b><i>只存当前这一页的原文</i></button>
-<button id="runOne"><b>抓取该页所有岗位</b><i>逐个打开这一页的每个岗位,存入原文</i></button>
-<button id="runAll"><b>自动翻页抓取</b><i>每页都这么抓,抓完自动翻下一页</i></button>
-<div class="row" id="pgrow">
-  <span class="lbl">最多</span>
-  <input id="pgn" type="number" min="1" max="20" value="5">
-  <span class="lbl">页</span>
-  <button class="tiny" id="pick">指一下「下一页」</button>
+<!-- ① 当前这一页。手动点 和 浏览时自动存 是同一件事,所以放一组。 -->
+<div class="grp">
+  <button id="save"><b>抓取该页岗位</b><i>存下当前这一页的原文</i></button>
+  <label class="sw"><input type="checkbox" id="autochk">
+    <span><b>浏览时自动存</b><i>不用点 —— 你正常浏览,打开岗位页就自动存</i></span></label>
 </div>
-<div id="pickinfo"></div>
+
+<!-- ② 整页的岗位。自动翻页是它的选项,勾上才出现「锁定下一页按钮」。 -->
+<div class="grp">
+  <button id="runOne"><b>抓取该页所有岗位列表存入</b><i>逐个打开这一页的每个岗位,存入原文</i></button>
+  <label class="sw"><input type="checkbox" id="autonext">
+    <span><b>自动翻页</b><i>这一页抓完,自动点「下一页」接着抓</i></span></label>
+  <div id="nextbox" hidden>
+    <div class="row">
+      <span class="lbl">最多</span>
+      <input id="pgn" type="number" min="1" max="20" value="5">
+      <span class="lbl">页</span>
+      <button class="tiny" id="pick">锁定「下一页」按钮</button>
+    </div>
+    <div id="pickinfo"></div>
+  </div>
+</div>
 
 <button class="stop" id="stop" hidden><b>停止</b></button>
 <div class="prog" id="rstat"></div>
 <div class="msg" id="msg"></div>
 
 <details id="more">
-  <summary>手动粘链接(平时用不到)</summary>
+  <summary>诊断与手动补链接</summary>
   <div class="in">
+    <div class="prog" id="astat"></div>
     <button class="wide" id="harvest"
       title="只读已经加载出来的页面,不发任何请求。列表是懒加载的,先往下滚几屏">抓本页岗位链接</button>
     <textarea id="links" placeholder="一行一个:
