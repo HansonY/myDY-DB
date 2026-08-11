@@ -111,15 +111,19 @@ CREATE TABLE IF NOT EXISTS fragments (
 
 CREATE INDEX IF NOT EXISTS idx_frag_kind ON fragments(kind);
 
--- ── 向量索引指纹 ────────────────────────────────────────────
--- 同维度不同模型**不会报错**(bge-m3 和 Qwen3-Embedding-0.6B 都是 1024 维),
--- 换模型不重建索引会让查询照跑、结果全是垃圾且看不出来。所以记模型名。
-CREATE TABLE IF NOT EXISTS vec_meta (
-    id         INTEGER PRIMARY KEY CHECK (id = 1),
-    model      TEXT NOT NULL,
-    dim        INTEGER NOT NULL,
-    built_at   TEXT NOT NULL
-);
+-- ── 向量索引指纹:**这里不建,由 kb/vecdb.py 独占** ──────────────
+--
+-- 以前这儿自己建了一份,少一列 `n_vectors`。而 `CREATE TABLE IF NOT EXISTS`
+-- **不补列** —— 于是 kb 那边的 write_meta 报 `no such column: n_vectors`,
+-- 而且老库怎么跑 init_db 都修不过来(表已存在,建表语句直接跳过)。
+--
+-- 更坏的是「只删数据不删定义」这种半修:现有库看着好了,而**全新库一定复现** ——
+-- boss_main 的 startup 先 bs.init_db() 把 4 列版落地,之后 vecdb 建表变 no-op。
+-- 「老库好了新库还坏」比原 bug 难查得多。
+--
+-- 所以规矩是:**vec_meta 只有一份定义,在 kb/vecdb.py 的 META_SQL 里。**
+-- 抖音的 schema.sql 从来就没有它,一直是这么办的。
+-- 顺带一条:永远不要给 vec_meta 加列,理由同上。要新字段就开新表。
 
 -- ── 采集记录(兼跨进程锁)────────────────────────────────────
 CREATE TABLE IF NOT EXISTS collect_runs (

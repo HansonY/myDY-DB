@@ -96,6 +96,10 @@ def search(space: Space, query: str, limit: int = 10,
             FROM hits{where} GROUP BY aweme_id ORDER BY best_d LIMIT ?
         """, (qv, k, limit)).fetchall()
 
+        # 分档线:适配器给了就用它的,没给就用全局(抖音那侧留 None → 逐位等价)
+        th_good = space.good if space.good is not None else settings.search_good
+        th_maybe = space.maybe if space.maybe is not None else settings.search_maybe
+
         good, maybe, below = [], [], []
         for r in rows:
             score = _cosine(r["best_d"])
@@ -109,8 +113,8 @@ def search(space: Space, query: str, limit: int = 10,
                 "n_matched_fragments": r["n_frags"],
                 "frag_id": r["best_frag"],
             }
-            (good if score >= settings.search_good
-             else maybe if score >= settings.search_maybe
+            (good if score >= th_good
+             else maybe if score >= th_maybe
              else below).append(item)
 
         # ⚠️ 这里有个**现存的形状不一致**,内核必须原样保留:
@@ -139,7 +143,7 @@ def search(space: Space, query: str, limit: int = 10,
             # 一条都没过线时把最接近的分数带上 —— 让人看到「差多少」,
             # 而不是只得到一句「没有」
             "nearest_below": [x["score"] for x in below[:3]] if verdict == "nothing" else [],
-            "thresholds": {"good": settings.search_good, "maybe": settings.search_maybe},
+            "thresholds": {"good": th_good, "maybe": th_maybe},
             "scope": scope,
             "model": emb.name,
         }

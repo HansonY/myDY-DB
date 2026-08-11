@@ -278,6 +278,61 @@ def get_job(job_id: str) -> dict[str, Any] | None:
     return dict(r) if r else None
 
 
+def get_jobs_meta(job_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """给检索结果补展示字段。一次 IN 查完,不逐条开连接。
+
+    键名是**给人看的那一套**,由这里定 —— 内核只把它 update 进返回体
+    (见 kb.space.MetaFetcher)。抖音那边同位置返回 title/author/url/cat/digg_count,
+    岗位这边返回 title/company/url/city/salary/jd_state:字段不同是应该的,
+    内核不该知道也不该翻译。
+    """
+    ids = [i for i in job_ids if i]
+    if not ids:
+        return {}
+    with connect() as conn:
+        rows = conn.execute(
+            f"SELECT job_id, title, company, city, district, salary_text, "
+            f"       jd_state, job_state, url "
+            f"FROM jobs WHERE job_id IN ({','.join('?' * len(ids))})", ids).fetchall()
+    out: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        out[r["job_id"]] = {
+            "title": r["title"] or "",
+            "company": r["company"],
+            "city": " · ".join(x for x in (r["city"], r["district"]) if x) or None,
+            "salary": r["salary_text"],
+            "url": r["url"],
+            # 这两个三态一起带出去 —— 检索结果里看到「还没看到职位描述」
+            # 才知道这条为什么信息少,不然会以为是岗位本身没写
+            "jd_state": r["jd_state"],
+            "job_state": r["job_state"],
+        }
+    return out
+
+
+def scope_pred(scope: str, alias: str = "jobs") -> str | None:
+    """检索范围的 SQL 谓词。`None` = 不过滤。
+
+    **「什么算我投过的」只在这里定义一处。** 抖音那边散开写过一次
+    (8 处裸 FROM videos 漏了过滤),而漏掉的地方不报错、只是给错数。
+
+    ⚠️ `applied` / `saved` 目前基本是空集(interactions 只有 3 行)——
+    所以 BOSS 的默认 scope 必须是 all。默认 applied 会让检索永远返回空,
+    而且长得和「库里没有」一模一样。
+    """
+    if scope == "all":
+        return None
+    if scope in ("applied", "saved", "chatted", "viewed"):
+        return (f"EXISTS (SELECT 1 FROM interactions i_s "
+                f"WHERE i_s.job_id = {alias}.aweme_id AND i_s.kind = '{scope}')")
+    if scope == "open":            # 只搜还开着的岗位
+        return (f"EXISTS (SELECT 1 FROM jobs j_s "
+                f"WHERE j_s.job_id = {alias}.aweme_id AND j_s.job_state <> 'closed')")
+    # 认不出来就不过滤。和抖音那侧「落到 mine_pred」的兜底思路一致:
+    # 检索是只读的,宁可多给也不要静默返回空集(空集会被读成「库里没有」)。
+    return None
+
+
 def save_interaction(job_id: str, kind: str, status: str = "unknown",
                      happened_at: str | None = None, note: str | None = None) -> None:
     """记「我和这个岗位发生过什么」。
