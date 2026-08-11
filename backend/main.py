@@ -411,7 +411,7 @@ async def post_following_role(body: dict[str, Any] = Body(...)) -> dict[str, Any
 
 _EDITABLE = {
     # LLM 供应商可换 —— 都是 OpenAI 兼容端点,差别只有这三项。
-    # 换完记得跑 ./boss.sh llmtest 验证一下,各家模型名改得挺勤。
+    # 换完在页面上点「测一下」验证 —— 各家模型名改得挺勤。
     "LLM_PROVIDER": "用哪家模型:qwen / minimax / deepseek / moonshot / zhipu / ollama",
     "LLM_API_KEY": "上面那家的 API Key(留空则回退去找该家专用键,如 DASHSCOPE_API_KEY)",
     "LLM_MODEL": "覆盖默认模型名(留空用默认;各家改版勤,不通就来这里改)",
