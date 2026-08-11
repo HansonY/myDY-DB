@@ -130,13 +130,17 @@ async function load() {
   eb.textContent = pend ? `提取这 ${pend} 页` : '没有待提取';
 
   const jobs = jb.items || [];
+  const VD = {worth: '值得投', maybe: '可以试试', skip: '别浪费'};
   $('#jobs').innerHTML = jobs.length
-    ? '<tr><th>岗位</th><th>公司</th><th>城市</th><th>薪资</th><th>职位描述</th><th>更新</th></tr>'
+    ? '<tr><th>岗位</th><th>公司</th><th>城市</th><th>薪资</th><th>匹配</th><th>职位描述</th><th>更新</th></tr>'
       + jobs.map(j => `<tr>
           <td>${esc(j.title) || '<span class="dim">(无标题)</span>'}</td>
           <td class="co">${esc(j.company || '')}</td>
           <td class="co">${esc(j.city || '')}</td>
           <td class="n">${esc(j.salary_text || '')}</td>
+          <td class="n">${j.fit != null
+              ? `<a class="lk" href="/match.html#${esc(j.job_id)}" title="${esc(VD[j.verdict] || '')}">${j.fit}</a>`
+              : `<a class="lk" href="/match.html#${esc(j.job_id)}" style="color:var(--dim2)" title="还没分析,点进去让模型打分">—</a>`}</td>
           <td><span class="pill${j.jd_state === 'have' ? ' have' : ''}">${
               {have: '有', none: '没有', unknown: '还没看到'}[j.jd_state] || '?'}</span></td>
           <td class="t">${esc((j.updated_at || '').replace('T', ' ').slice(5, 16))}</td>

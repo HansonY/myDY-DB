@@ -88,27 +88,14 @@ function schedule() {
 
 chrome.runtime.onMessage.addListener((msg, _s, reply) => {
   if (msg?.type === 'capture') {
-    buf.push({ url: msg.url, at: new Date().toISOString(), body: msg.body });
-    // 按接口计数 —— 光看总数分不出「抓到真数据」还是「抓了一堆噪音」
-    const k = String(msg.url).replace('https://www.zhipin.com', '');
-    stat.byUrl[k] = (stat.byUrl[k] || 0) + 1;
-    // 存一条「人能看懂的」摘要,让弹窗能回答「刚才存了什么」——
-    // 只给总数的话,用户没法判断存的是真数据还是噪音(前面就这么被骗过)
-    stat.recent.unshift({
-      at: Date.now(),
-      url: k,
-      n: countItems(msg.body),
-      sample: firstTitle(msg.body),
-    });
-    stat.recent = stat.recent.slice(0, 12);
-    harvest(msg.body);          // 列表里的 id 收进来
-    learn(msg.url);             // 你手动点详情时,顺手学会模板
-    if (tmpl && msg.url.includes('/')) {
-      // 已经补过的记下来,免得重复打
-      for (const id of ids) if (msg.url.includes(id)) done.add(id);
-    }
-    schedule();
-    reply?.({ ok: true });
+    // 接口响应这条路也归「面板开着才抓」管 —— 用户定的规则是整个抓取一个开关,
+    // 不是「文字归面板管、接口不归」。异步查完再入队。
+    (async () => {
+      if (!(await isPanelOpen())) { reply?.({ ok: false, gated: true }); return; }
+      captureOne(msg);
+      reply?.({ ok: true });
+    })();
+    return true;
   }
   if (msg?.type === 'status') {
     chrome.storage.local.get(['stat', 'pending']).then(d => reply({
@@ -121,6 +108,29 @@ chrome.runtime.onMessage.addListener((msg, _s, reply) => {
   if (msg?.type === 'fill') { startFill(msg.tabId).then(r => reply?.(r)); return true; }
   if (msg?.type === 'stopFill') { filling = false; reply?.({ ok: true }); }
 });
+
+function captureOne(msg) {
+  buf.push({ url: msg.url, at: new Date().toISOString(), body: msg.body });
+  // 按接口计数 —— 光看总数分不出「抓到真数据」还是「抓了一堆噪音」
+  const k = String(msg.url).replace('https://www.zhipin.com', '');
+  stat.byUrl[k] = (stat.byUrl[k] || 0) + 1;
+  // 存一条「人能看懂的」摘要,让弹窗能回答「刚才存了什么」——
+  // 只给总数的话,用户没法判断存的是真数据还是噪音(前面就这么被骗过)
+  stat.recent.unshift({
+    at: Date.now(),
+    url: k,
+    n: countItems(msg.body),
+    sample: firstTitle(msg.body),
+  });
+  stat.recent = stat.recent.slice(0, 12);
+  harvest(msg.body);          // 列表里的 id 收进来
+  learn(msg.url);             // 你手动点详情时,顺手学会模板
+  if (tmpl && msg.url.includes('/')) {
+    // 已经补过的记下来,免得重复打
+    for (const id of ids) if (msg.url.includes(id)) done.add(id);
+  }
+  schedule();
+}
 
 
 /** 数一数这个响应里有多少条记录 —— 找最长的对象数组。 */
@@ -180,16 +190,16 @@ async function startFill(tabId) {
 /* ══════════════════════════════════════════════════════════════
  * 自动存 + 批量按链接存
  *
- * **为什么搬到 background 来。** 原来这段在 sidepanel.js 里,有三个问题:
- *   1. 侧边栏关掉就完全不工作 —— 而人浏览时不会一直开着面板;
- *   2. 只听 tabs.onUpdated 的 'complete'。**BOSS 是单页应用**,
+ * 监听逻辑在 background(不在面板):
+ *   1. 只听 tabs.onUpdated 的 'complete' 不够。**BOSS 是单页应用**,
  *      从列表点进详情走的是 history API,不产生整页加载,
  *      'complete' 根本不触发 —— 这是「打开岗位详情却没自动存」的主因;
- *   3. 自动存时没带 force,被后端的判断挡掉了。
+ *   2. 自动存时没带 force 会被后端的判断挡掉 —— 一律 force
+ *      (用户明确说「存错了没关系」,存的是原文,后面由 AI 过滤)。
  *
- * 现在:两种跳转都听(整页加载 + SPA 换 URL),面板开不开都跑,
- * 而且**一律存**(用户明确说「存错了没关系」)—— 后端只记判定结果不拦。
- * 存的是页面原文,后面由 AI 过滤,所以宁可多存。
+ * **但抓不抓,由「面板开没开」决定 —— 这是用户定的产品规则:**
+ * 「侧边栏打开才抓取,不是这个网站只要浏览就一直抓」。
+ * 关掉面板 = 完全停止,不用记着去关任何开关。
  * ══════════════════════════════════════════════════════════════ */
 
 const TEXT_API = 'http://localhost:8001/api/boss/ingest_text';
@@ -198,15 +208,21 @@ const TEXT_API = 'http://localhost:8001/api/boss/ingest_text';
 const SPA_SETTLE_MS = 1400;
 const MIN_CHARS = 200;      // 比这还少基本是导航骨架,不是「存错了」而是「存了个空的」
 
-/* ⚠️ 开关**每次都从 storage 现读**,不缓存在模块变量里。
+/* 「面板开着吗」—— 决定抓不抓的唯一开关。
  *
- * 这是个已经踩过的坑:MV3 的 service worker 空闲约 30 秒就被杀,事件来了再重启。
- * 缓存成模块变量的话,worker 一重启它就回到初始值 false,而重新读 storage 是异步的
- * —— 事件先到就直接 return,于是「自动存完全不起作用」。
- * 模块变量在 MV3 里**活不过一次空闲**,凡是要跨事件保持的状态都必须放 storage。 */
-async function isAutoOn() {
-  const d = await chrome.storage.local.get('auto');
-  return !!d.auto;
+ * 判法:面板每 8 秒往 storage.session 写一次心跳,这里看时间戳新不新鲜。
+ * 不用 port 连接判断 —— MV3 的 service worker 空闲约 30 秒就被杀,
+ * port 跟着断,worker 重启后一片空白;而 storage.session 活得比 worker 长
+ * (跨 worker 重启,浏览器关了才清)。面板关掉 → 心跳停 → 25 秒内判定为关。
+ *
+ * ⚠️ **每次都现读,不缓存在模块变量里** —— 模块变量活不过一次 worker 空闲,
+ * 这个坑已经踩过(「自动存完全不起作用」的根因)。 */
+const PANEL_FRESH_MS = 25000;
+async function isPanelOpen() {
+  try {
+    const d = await chrome.storage.session.get('panelSeen');
+    return Date.now() - (d.panelSeen || 0) < PANEL_FRESH_MS;
+  } catch (e) { return false; }
 }
 
 // 同理:统计和去重记录也不能只存内存 —— worker 一重启就归零,
@@ -303,8 +319,8 @@ async function autoSave(tabId, url, via, sig) {
 
   if (!/^https:\/\/[^/]*zhipin\.com\//.test(url || ''))
     return finish({ lastErr: '不是 zhipin 页面,跳过' });
-  if (!(await isAutoOn()))
-    return finish({ lastErr: '「自动存」没勾上' });
+  if (!(await isPanelOpen()))
+    return finish({ lastErr: '侧边栏没开 —— 面板开着才抓取,关掉就完全停' });
   if (batch.running || filling || run.running)
     return finish({ lastErr: '批量/翻页任务在跑,自动存让路' });
 

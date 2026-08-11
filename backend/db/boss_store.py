@@ -385,6 +385,12 @@ def get_me() -> dict[str, Any] | None:
     if not r:
         return None
     d = dict(r)
+    # **全空的行也当 None。** 实测踩过:一次 POST {} 冒烟测试建出一行
+    # 只有时间戳的空壳,于是 need_me=False、四个门槛全 unknown ——
+    # 页面上看着「简历录过了、全都合适」,而其实什么都没录。
+    if not any(d.get(k) for k in ("resume_raw", "resume", "skills", "years_exp",
+                                  "degree", "cities", "salary_floor")):
+        return None
     for k in _ME_JSON:
         try:
             d[k] = json.loads(d[k]) if d.get(k) else []
@@ -435,6 +441,24 @@ def set_me(**fields: Any) -> dict[str, Any]:
                 list(d.values()))
         conn.commit()
     return get_me() or {}
+
+
+# ── 页面 → 岗位 映射(插件「当前页打分」用)──────────────────
+
+def map_page(page_key: str, job_id: str) -> None:
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO page_map (page_key, job_id, at) VALUES (?,?,?) "
+            "ON CONFLICT(page_key) DO UPDATE SET job_id=excluded.job_id, at=excluded.at",
+            (page_key, job_id, _now()))
+        conn.commit()
+
+
+def page_job(page_key: str) -> str | None:
+    with connect() as conn:
+        r = conn.execute("SELECT job_id FROM page_map WHERE page_key=?",
+                         (page_key,)).fetchone()
+    return r["job_id"] if r else None
 
 
 # ── 匹配分析缓存 ────────────────────────────────────────────

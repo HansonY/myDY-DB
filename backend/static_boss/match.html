@@ -319,5 +319,9 @@ async function run(id, again) {
   await open(id);
 }
 
-loadList();
+// 岗位库列表和插件侧边栏都用 /match.html#<job_id> 直达某个岗位
+loadList().then(() => {
+  const id = decodeURIComponent(location.hash.slice(1));
+  if (id) open(id);
+});
 </script>

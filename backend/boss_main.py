@@ -182,7 +182,11 @@ async def do_extract(
     pages, keep = [], []
     for f in files:
         try:
-            pages.append(json.loads(f.read_text(encoding="utf-8")))
+            p = json.loads(f.read_text(encoding="utf-8"))
+            # 文件名就是 ingest_text 算的去重键 —— 带在页面上,
+            # 提取完把「页面 ↔ 岗位」记进 page_map(插件当页打分要查它)
+            p["_key"] = f.stem
+            pages.append(p)
             keep.append(f)
         except ValueError:
             f.unlink(missing_ok=True)
@@ -202,49 +206,10 @@ async def do_extract(
 
         for item in got:
             page = batch[item["idx"]]
-            for j in item["jobs"]:
-                jid = _job_key(j, page.get("url"))
-                exists = bs.get_job(jid)
-                # 「我做了什么」和「岗位什么状态」拆开 —— 以前两者都被塞进
-                # interactions.note,混在一列里(实测老数据的 note 一条是
-                # 「已投递」一条是「职位已关闭」),导致「我投了多少」算不出来。
-                acts, job_state = bs.map_my_status(j.get("my_status"))
-
-                bs.upsert_jobs([{
-                    "job_id": jid, "url": page.get("url"),
-                    "title": j.get("title"), "company": j.get("company"),
-                    "city": j.get("city"), "district": j.get("district"),
-                    "salary_text": j.get("salary_text"),
-                    "salary_min": j.get("salary_min"), "salary_max": j.get("salary_max"),
-                    "salary_months": j.get("salary_months"),
-                    "experience": j.get("experience"), "degree": j.get("degree"),
-                    "jd": j.get("jd"),
-                    # 三态,不是两态。原来是 `have if jd else unknown`,
-                    # 于是 none 成了死代码 —— 而「详情页确认没写 JD」和
-                    # 「还没打开过详情页」混成一个 unknown 之后,
-                    # 「该去补还是该认命」谁也说不清,那正是三态的设计初衷。
-                    "jd_state": (bs.JD_HAVE if (j.get("jd") or "").strip()
-                                 else bs.JD_NONE if page.get("kind") == "detail"
-                                 else bs.JD_UNKNOWN),
-                    "job_state": job_state or bs.JOB_STATE_UNKNOWN,
-                    "tags": j.get("tags") or [],
-                    "hr_name": j.get("hr_name"), "hr_title": j.get("hr_title"),
-                    "raw": {"from_page": page.get("url"), "extracted": j},
-                }])
-
-                if acts:
-                    for kind, status in acts:
-                        bs.save_interaction(jid, kind, status,
-                                            note=str(j["my_status"])[:60])
-                elif j.get("my_status"):
-                    # 认不出来就退回原来的行为,**并且留原文** ——
-                    # 这套之所以还能救回来,就是因为原文一直在 note 里。
-                    bs.save_interaction(jid, "viewed", note=str(j["my_status"])[:60])
-                # 片段:JD 全文是核心,标题/公司/薪资兜底
-                job = bs.get_job(jid) or {}
-                bs.save_fragments(jid, bfr.build(job))
-                skipped += 1 if exists else 0
-                saved += 0 if exists else 1
+            new_n, upd_n, ids = _ingest_jobs(page, item["jobs"])
+            saved += new_n
+            skipped += upd_n
+            _map_page_to_job(page, ids)
         # 这一批处理完了,从队列移除
         for p_ in batch:
             idx = pages.index(p_)
@@ -254,6 +219,88 @@ async def do_extract(
     return {"extracted": saved, "updated": skipped, "ai_calls": calls,
             "pending": len(list(PENDING_DIR.glob("*.json"))),
             "jobs_total": st["jobs"], "failed": failed}
+
+
+def _ingest_jobs(page: dict[str, Any],
+                 jobs: list[dict[str, Any]]) -> tuple[int, int, list[str]]:
+    """把一页提取出来的岗位落库(jobs + interactions + fragments)。→ (新增, 更新, ids)
+
+    批量提取(/extract)和插件的单页即时打分(/page_analyze)**共用这一份** ——
+    各写一份的话,jd_state 三分支这类口径迟早漂移,而漂移不报错,
+    只是同一个岗位从两条路进来长得不一样。
+    """
+    from knowledge import boss_fragments as bfr
+
+    new_n = upd_n = 0
+    ids: list[str] = []
+    for j in jobs:
+        jid = _job_key(j, page.get("url"))
+        exists = bs.get_job(jid)
+        # 「我做了什么」和「岗位什么状态」拆开 —— 以前两者都被塞进
+        # interactions.note,混在一列里(实测老数据的 note 一条是
+        # 「已投递」一条是「职位已关闭」),导致「我投了多少」算不出来。
+        acts, job_state = bs.map_my_status(j.get("my_status"))
+
+        bs.upsert_jobs([{
+            "job_id": jid, "url": page.get("url"),
+            "title": j.get("title"), "company": j.get("company"),
+            "city": j.get("city"), "district": j.get("district"),
+            "salary_text": j.get("salary_text"),
+            "salary_min": j.get("salary_min"), "salary_max": j.get("salary_max"),
+            "salary_months": j.get("salary_months"),
+            "experience": j.get("experience"), "degree": j.get("degree"),
+            "jd": j.get("jd"),
+            # 三态,不是两态。原来是 `have if jd else unknown`,
+            # 于是 none 成了死代码 —— 而「详情页确认没写 JD」和
+            # 「还没打开过详情页」混成一个 unknown 之后,
+            # 「该去补还是该认命」谁也说不清,那正是三态的设计初衷。
+            "jd_state": (bs.JD_HAVE if (j.get("jd") or "").strip()
+                         else bs.JD_NONE if page.get("kind") == "detail"
+                         else bs.JD_UNKNOWN),
+            "job_state": job_state or bs.JOB_STATE_UNKNOWN,
+            "tags": j.get("tags") or [],
+            "hr_name": j.get("hr_name"), "hr_title": j.get("hr_title"),
+            "raw": {"from_page": page.get("url"), "extracted": j},
+        }])
+
+        if acts:
+            for kind, status in acts:
+                bs.save_interaction(jid, kind, status,
+                                    note=str(j["my_status"])[:60])
+        elif j.get("my_status"):
+            # 认不出来就退回原来的行为,**并且留原文** ——
+            # 这套之所以还能救回来,就是因为原文一直在 note 里。
+            bs.save_interaction(jid, "viewed", note=str(j["my_status"])[:60])
+        # 片段:JD 全文是核心,标题/公司/薪资兜底
+        job = bs.get_job(jid) or {}
+        bs.save_fragments(jid, bfr.build(job))
+        upd_n += 1 if exists else 0
+        new_n += 0 if exists else 1
+        ids.append(jid)
+    return new_n, upd_n, ids
+
+
+def _primary_job(ids: list[str]) -> str | None:
+    """一页可能抽出很多岗位(左右分栏页连左列一起抽)——
+    「当前看的岗位」= 有职位描述的那个(右侧详情才有 JD,左列卡片没有)。"""
+    with_jd = [i for i in ids if (bs.get_job(i) or {}).get("jd_state") == "have"]
+    if with_jd:
+        return with_jd[0]
+    return ids[0] if len(ids) == 1 else None
+
+
+def _map_page_to_job(page: dict[str, Any], ids: list[str]) -> None:
+    """记「这个页面 ↔ 这个岗位」,让插件下次免费查。只对详情页记 ——
+    列表页对应十几个岗位,记哪个都是错的。"""
+    if page.get("kind") != "detail" or not ids:
+        return
+    jid = _primary_job(ids)
+    if not jid:
+        return
+    import boss_detect as bd
+    key = page.get("_key") or bd.dedupe_key(
+        page.get("title") or "", page.get("url") or "", page.get("text") or "")
+    bs.map_page(key, jid)
 
 
 def _norm(s: str) -> str:
@@ -279,11 +326,19 @@ def _job_key(j: dict[str, Any], url: str | None) -> str:
 
 @app.get("/api/boss/jobs")
 async def list_jobs(limit: int = Query(30, ge=1, le=200)) -> dict[str, Any]:
-    """已入库的岗位。侧边栏和状态页都用它。"""
+    """已入库的岗位。侧边栏和状态页都用它。
+
+    带上当前 prompt 版本的匹配分 —— 用户要的是「岗位列表对应显示匹配」。
+    LEFT JOIN:没分析过的 fit 是 NULL,前端显示成「—」,不是 0。
+    """
     with bs.connect() as c:
         rows = [dict(r) for r in c.execute(
-            "SELECT job_id, title, company, city, salary_text, jd_state, updated_at "
-            "FROM jobs ORDER BY updated_at DESC LIMIT ?", (limit,))]
+            "SELECT j.job_id, j.title, j.company, j.city, j.salary_text, j.jd_state, "
+            "       j.updated_at, m.fit, m.verdict "
+            "FROM jobs j LEFT JOIN job_match m "
+            "  ON m.job_id = j.job_id AND m.prompt_ver = ? "
+            "ORDER BY j.updated_at DESC LIMIT ?",
+            (boss_matchai.PROMPT_VER, limit))]
         total = c.execute("SELECT COUNT(*) n FROM jobs").fetchone()["n"]
     pend = len(list(PENDING_DIR.glob("*.json"))) if PENDING_DIR.exists() else 0
     return {"items": rows, "total": total, "pending": pend}
@@ -591,6 +646,114 @@ async def match_run(job_id: str, force: bool = Query(False)) -> dict[str, Any]:
         return {"error": f"{type(e).__name__}: {e}", "facts": facts}
     bs.save_match(job_id, r, facts)
     return {"ai": r, "facts": facts, "cached": False}
+
+
+# ── 插件侧边栏的「当前页打分」────────────────────────────────
+#
+# 两个接口,一免费一花钱,**面板先问免费的**:
+#   page_state    只读。这个页面库里认不认识、有没有缓存的分。毫秒级、零 AI。
+#   page_analyze  没提取就提取(1 次 AI),没打过分就打(1 次 AI,缓存命中免费)。
+# 分开是为了让「打开面板看一眼」永远不花钱 —— 花钱的那步在面板上看得见。
+
+
+def _facts_brief(facts: dict[str, Any]) -> dict[str, Any]:
+    """给侧边栏的精简版规则结论 —— 面板只有 300px 宽,摆不下全量。"""
+    cov = facts.get("coverage") or {}
+    return {"hard_fail": facts.get("hard_fail") or [],
+            "hard_unknown": facts.get("hard_unknown") or [],
+            "rate": cov.get("rate"), "rate_confidence": cov.get("rate_confidence"),
+            "remote": facts.get("remote")}
+
+
+def _page_ctx(body: dict[str, Any]) -> tuple[str, str, str, dict[str, Any], str]:
+    import boss_detect as bd
+    title = str(body.get("title") or "")
+    url = str(body.get("url") or "")
+    text = str(body.get("text") or "")
+    return title, url, text, bd.classify(text, url, title), bd.dedupe_key(title, url, text)
+
+
+@app.post("/api/boss/page_state")
+async def page_state(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """「我正看着的页面,库里知道多少」。只读、零 AI。"""
+    import llm as _llm
+    title, url, text, v, key = _page_ctx(body)
+    me = bs.get_me()
+    out: dict[str, Any] = {"detect": v, "page_key": key,
+                           "need_me": not me, "ai": _llm.status()}
+    jid = bs.page_job(key)
+    if not jid:
+        return out
+    job = bs.get_job(jid)
+    if not job:
+        return out
+    out["job"] = {k: job.get(k) for k in
+                  ("job_id", "title", "company", "salary_text", "jd_state", "job_state")}
+    if me:
+        facts = _facts(job, me)
+        out["facts_brief"] = _facts_brief(facts)
+        jh, rh = boss_matchai.hashes(job, me)
+        c = bs.get_match(jid, boss_matchai.PROMPT_VER, jh, rh)
+        if c:
+            out["match"] = c["detail"].get("ai")
+            out["match_at"] = c["computed_at"]
+    return out
+
+
+@app.post("/api/boss/page_analyze")
+async def page_analyze(body: dict[str, Any] = Body(...),
+                       force: bool = Query(False)) -> dict[str, Any]:
+    """当前页 → 出分。没提取先提取,没打分再打分,全部落库(下次免费)。"""
+    import boss_extract as bx
+
+    me = bs.get_me()
+    if not me:
+        return {"error": "还没录简历 —— 匹配的一半在你这边", "need_me": True}
+    if not bx.available():
+        return {"error": "AI 还不能用 —— 到知识库页「AI 模型」里配一个"}
+
+    title, url, text, v, key = _page_ctx(body)
+    jid = bs.page_job(key)
+    extracted = False
+    if not jid:
+        if not v["is_job"]:
+            return {"error": f"这页不像岗位页({v['why']}),不花提取调用"}
+        page = {"url": url, "title": title, "text": text,
+                "kind": v["kind"], "_key": key}
+        try:
+            got = await asyncio.to_thread(bx.extract_batch, [page])
+        except Exception as e:                    # noqa: BLE001
+            return {"error": f"提取失败:{type(e).__name__}: {str(e)[:90]}"}
+        jobs = [j for item in got for j in item["jobs"]]
+        if not jobs:
+            return {"error": "AI 没从这页抽出岗位 —— 可能还没渲染完,翻一下再试"}
+        _ingest_jobs(page, jobs)
+        _map_page_to_job(page, [_job_key(j, url) for j in jobs])
+        jid = bs.page_job(key)
+        if not jid:
+            return {"error": f"这页抽出 {len(jobs)} 个岗位但没有职位描述 —— "
+                             f"像列表页:用「抓取该页所有岗位」逐个存详情"}
+        # 已经当场提取了,批量队列里的同一页就不用再花一次 AI
+        (PENDING_DIR / f"{key}.json").unlink(missing_ok=True)
+        extracted = True
+
+    job = bs.get_job(jid)
+    facts = _facts(job, me)
+    jh, rh = boss_matchai.hashes(job, me)
+    cached = None if force else bs.get_match(jid, boss_matchai.PROMPT_VER, jh, rh)
+    if cached:
+        ai_res = cached["detail"].get("ai")
+    else:
+        try:
+            ai_res = await asyncio.to_thread(boss_matchai.analyze, job, me, facts)
+        except Exception as e:                    # noqa: BLE001
+            return {"error": f"打分失败:{type(e).__name__}: {str(e)[:90]}",
+                    "extracted": extracted}
+        bs.save_match(jid, ai_res, facts)
+    return {"job": {k: job.get(k) for k in
+                    ("job_id", "title", "company", "salary_text", "jd_state", "job_state")},
+            "facts_brief": _facts_brief(facts), "ai": ai_res,
+            "extracted": extracted, "cached": bool(cached)}
 
 
 @app.get("/api/boss/matches")

@@ -8,6 +8,16 @@ const $ = s => document.querySelector(s);
 const API = 'http://localhost:8001';
 let tab = null, page = null;
 
+/* ── 心跳:「面板开着」就是抓取的总开关 ──────────────────────
+ * background 抓不抓,看 storage.session 里这个时间戳新不新鲜(25 秒)。
+ * 面板关掉 → 这段代码停止运行 → 心跳停 → 抓取全停。
+ * 用户定的产品规则:侧边栏打开才抓取,不是装了插件就一直抓。 */
+function heartbeat() {
+  try { chrome.storage.session.set({ panelSeen: Date.now() }); } catch (e) {}
+}
+heartbeat();
+setInterval(heartbeat, 8000);
+
 const esc = s => String(s ?? '').replace(/[&<>"]/g,
   m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
 
@@ -101,6 +111,122 @@ async function readPage() {
     <div class="t">${esc(page.h1 || page.title) || '(没有标题)'}</div>
     <div class="m">${page.len ?? 0} 字${sig}</div>`;
   syncButtons();
+  scorePage();
+}
+
+/* ── 当前岗位的匹配分 ─────────────────────────────────────
+ * 两步,一免费一花钱:
+ *   ① page_state  这页库里认不认识、有没有缓存的分 —— 零 AI,每次页面变都问;
+ *   ② page_analyze 没提取先提取、没打分再打分 —— 最多两次 AI 调用,
+ *      结果落库,同一个岗位以后都免费。
+ * 同一时刻只跑一个 ②;失败过的页面不自动重试(点「重试」才再花钱)。 */
+let scoreToken = 0, analyzing = false;
+const scoreFailed = new Set();
+
+function fitRow(st) {
+  const ai = st.match || st.ai;
+  const vd = { worth: '值得投', maybe: '可以试试', skip: '别浪费时间' }[ai?.verdict] || '?';
+  const fb = st.facts_brief || {};
+  const GN = { city: '城市', experience: '经验', degree: '学历', salary: '薪资' };
+  const gate = (fb.hard_fail || []).length
+    ? `硬门槛:<b>${fb.hard_fail.map(x => GN[x] || x).join('、')}不符</b>(规则算的,模型改不了)`
+    : '硬门槛全过(规则算的)';
+  const cov = fb.rate == null ? '' :
+    ` · 技能覆盖 ${Math.round(fb.rate * 100)}%${fb.rate_confidence === 'low' ? '(分母小,不可靠)' : ''}`;
+  return `<div class="fitrow"><span class="fit">${ai?.fit ?? '?'}</span>
+      <span class="vd ${esc(ai?.verdict || '')}">${vd}</span></div>
+    <div class="why">${esc(ai?.fit_why || '')}</div>
+    <div class="gate">${gate}${cov}</div>
+    <div class="mt">
+      <a data-act="detail">对照详情 ↗</a>
+      <a data-act="redo">重新分析</a>
+      ${ai?.quote_miss ? `<span>丢弃了 ${ai.quote_miss} 条引不出原文的判断</span>` : ''}
+    </div>`;
+}
+
+function bindScore(st) {
+  const box = $('#score');
+  box.querySelector('[data-act="detail"]')?.addEventListener('click', () =>
+    chrome.tabs.create({ url: API + '/match.html#' + (st.job?.job_id || '') }));
+  box.querySelector('[data-act="redo"]')?.addEventListener('click', () => {
+    scoreFailed.delete(st.page_key);
+    analyzePage(st, true);
+  });
+  box.querySelector('[data-act="me"]')?.addEventListener('click', () =>
+    chrome.tabs.create({ url: API + '/me.html' }));
+  box.querySelector('[data-act="retry"]')?.addEventListener('click', () => {
+    scoreFailed.delete(st.page_key);
+    analyzePage(st, false);
+  });
+}
+
+async function scorePage() {
+  const box = $('#score');
+  // 只给岗位详情页打分。列表页一页十几个岗位,单个分数没有意义 ——
+  // 列表的分在知识库「岗位库」页看(那边一行一个)。
+  if (!page?.verdict?.is_job || page.kind !== 'detail') {
+    box.hidden = true; box.innerHTML = '';
+    return;
+  }
+  const my = ++scoreToken;
+  let st;
+  try {
+    st = await (await fetch(API + '/api/boss/page_state', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: page.title, url: page.url, text: page.text }),
+    })).json();
+  } catch (e) { box.hidden = true; return; }   // 服务没开 —— #svc 那行已经在说了
+  if (my !== scoreToken) return;               // 页面已经换了,别渲染旧结果
+
+  box.hidden = false;
+  if (st.need_me) {
+    box.innerHTML = `<div class="busy">要打分,先录一次简历(只用录一次)
+      —— <a data-act="me" style="color:var(--accent-t);cursor:pointer;text-decoration:underline">去录 ↗</a></div>`;
+    bindScore(st); return;
+  }
+  if (st.match) { box.innerHTML = fitRow(st); bindScore(st); return; }
+  if (st.ai?.state !== 'ok') {
+    box.innerHTML = `<div class="err">AI ${esc(st.ai?.label || '不可用')} ——
+      打分要模型。到知识库页「AI 模型」里配好再回来。</div>`;
+    return;
+  }
+  if (scoreFailed.has(st.page_key)) {
+    box.innerHTML = `<div class="err">这页刚才分析失败了,不自动重试(免得白花调用)。
+      <a data-act="retry" style="color:var(--accent-t);cursor:pointer;text-decoration:underline">重试</a></div>`;
+    bindScore(st); return;
+  }
+  analyzePage(st, false);
+}
+
+async function analyzePage(st, force) {
+  const box = $('#score');
+  if (analyzing) { box.innerHTML = '<div class="busy">上一个岗位还在分析,马上轮到这个…</div>'; return; }
+  analyzing = true;
+  const my = scoreToken;
+  box.hidden = false;
+  box.innerHTML = `<div class="busy">${st.job
+    ? '岗位已在库里 —— 正在让模型打分…(约 10 秒)'
+    : '第一次见到这个岗位 —— 提取 + 打分中…(20~40 秒,存下来以后就秒出)'}</div>`;
+  try {
+    const d = await (await fetch(API + '/api/boss/page_analyze?force=' + !!force, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: page.title, url: page.url, text: page.text }),
+    })).json();
+    if (my !== scoreToken) return;             // 人已经翻到别的岗位了
+    if (d.error) {
+      scoreFailed.add(st.page_key);
+      box.innerHTML = `<div class="err">${esc(d.error)}
+        <a data-act="retry" style="color:var(--accent-t);cursor:pointer;text-decoration:underline">重试</a></div>`;
+      bindScore(st);
+    } else {
+      box.innerHTML = fitRow({ ...d, match: d.ai, page_key: st.page_key });
+      bindScore({ ...d, page_key: st.page_key });
+      refresh();                               // 库里多了岗位,统计跟着动
+    }
+  } catch (e) {
+    if (my === scoreToken)
+      box.innerHTML = `<div class="err">连不上本地服务 —— 跑 ./boss.sh</div>`;
+  } finally { analyzing = false; }
 }
 
 /* 三个抓取动作各自一个按钮,按钮名就是它干的事:
@@ -277,11 +403,16 @@ $('#selftest').onclick = async () => {
   }
   b.disabled = false; b.textContent = '测一下这条链路';
 };
-$('#autochk').onchange = e => chrome.storage.local.set({ auto: e.target.checked });
-
-chrome.storage.local.get('auto').then(d => $('#autochk').checked = !!d.auto);
 // 换标签页 / 页面跳转都重新识别 —— 侧边栏是常驻的,内容得跟着走
 chrome.tabs.onActivated.addListener(() => readPage());
+// 左右分栏点左边换右边:URL 不变,靠页面里的 bridge 发「内容变化」。
+// background 收它去自动存;这里也收,让「当前岗位 + 匹配分」跟着换。
+let pcTimer = null;
+chrome.runtime.onMessage.addListener(msg => {
+  if (msg?.type !== 'pageChanged') return;
+  clearTimeout(pcTimer);
+  pcTimer = setTimeout(readPage, 900);   // 等内容稳定,别抓到渲染一半的
+});
 // 自动存**不在这里做**,在 background.js。原因:
 //   · 面板关着时也要工作(人浏览时不会一直开着面板);
 //   · BOSS 是单页应用,从列表点进详情走 history API,
@@ -315,9 +446,8 @@ async function autoStat() {
   rows.push(nav
     ? `<div class="ml ok">① 已监听到翻页 ${nav} 次${st.lastVia ? ' · ' + esc(st.lastVia) : ''}</div>`
     : `<div class="ml bad">① 没监听到翻页 —— 扩展可能没重载,或还没在 BOSS 上翻过页</div>`);
-  rows.push($('#autochk').checked
-    ? '<div class="ml ok">② 开关已打开</div>'
-    : '<div class="ml bad">② 上面那个开关没勾 ← 问题在这</div>');
+  // 开关就是「面板开着」—— 你能看到这行字,说明开关是开的
+  rows.push('<div class="ml ok">② 面板开着,抓取生效中(关掉面板就全停)</div>');
   const acted = (st.ok || 0) + (st.skip || 0) + (st.fail || 0);
   rows.push(acted
     ? `<div class="ml ${st.ok ? 'ok' : 'bad'}">③ 存了 ${st.ok || 0} · 跳过 ${st.skip || 0} · 失败 ${st.fail || 0}</div>`
@@ -337,8 +467,6 @@ async function autoStat() {
   if (bridgeAlive === false) {
     msg('auto', '这个标签页还没加载插件脚本 —— 按 ⌘R 刷新一下页面。'
       + '(重载扩展不会让已经打开的页面拿到新代码)', 'bad');
-  } else if (!$('#autochk').checked) {
-    msg('auto', '没开 —— 打开后浏览岗位页会自动存', '');
   } else if (st.ok) {
     msg('auto', `已存 ${st.ok} 页`
       + (st.skip ? ` · 跳过 ${st.skip}` : '') + (st.fail ? ` · 失败 ${st.fail}` : '')

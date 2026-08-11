@@ -191,6 +191,18 @@ CREATE TABLE IF NOT EXISTS me (
 --
 -- jd_hash / resume_hash:JD 是只升不降补上来的,简历也会改 ——
 -- 任一变了,旧结论就该失效。没这两列你会拿列表页时代的结论去配详情页的 JD。
+-- ── 页面 → 岗位 的映射 ──────────────────────────────────────
+--
+-- 插件侧边栏要回答「我正看着的这个页面,对应库里哪个岗位」。
+-- 页面键 = boss_detect.dedupe_key(标题+正文指纹);岗位键 = 公司+岗位名。
+-- 两个键都稳定,但**互相算不出来** —— 页面原文里的公司名要靠 AI 抽,
+-- 只有提取那一刻两边都在手上,所以当场记下,以后免费查。
+CREATE TABLE IF NOT EXISTS page_map (
+    page_key TEXT PRIMARY KEY,
+    job_id   TEXT NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
+    at       TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS job_match (
     job_id      TEXT NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
     prompt_ver  TEXT NOT NULL,

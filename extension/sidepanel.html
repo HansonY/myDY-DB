@@ -119,6 +119,25 @@ textarea:focus{outline:none;border-color:rgba(76,141,255,.45)}
 
 .sep{height:1px;background:var(--line);margin:13px 0 12px}
 #svc:not(:empty){margin-top:6px}
+
+/* ── 当前岗位的匹配分 —— 这块是亮点,放最显眼的位置 ── */
+.score{border:1px solid rgba(76,141,255,.35);border-radius:9px;background:var(--accent-dim);
+  padding:10px 11px;margin:-6px 0 12px}
+.score[hidden]{display:none}
+.score .fitrow{display:flex;gap:10px;align-items:center}
+.score .fit{font:600 27px/1 var(--mono);color:var(--accent-t)}
+.score .vd{font-size:10.5px;padding:2px 8px;border-radius:5px;border:1px solid var(--line2);color:var(--dim)}
+.score .vd.worth{color:var(--ok);border-color:rgba(92,184,122,.45)}
+.score .vd.maybe{color:#bca6ff;border-color:rgba(167,139,250,.45)}
+.score .vd.skip{color:var(--warn);border-color:rgba(255,122,69,.45)}
+.score .why{font-size:10.5px;color:var(--dim);line-height:1.55;margin-top:6px;
+  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.score .gate{font-size:10px;margin-top:6px;line-height:1.5;color:var(--dim2)}
+.score .gate b{color:var(--warn);font-weight:500}
+.score .mt{font-size:9.5px;color:var(--dim2);margin-top:7px;display:flex;gap:10px;flex-wrap:wrap}
+.score .mt a{color:var(--accent-t);cursor:pointer;text-decoration:underline}
+.score .busy{font-size:11px;color:var(--dim);line-height:1.6}
+.score .err{font-size:10.5px;color:var(--warn);line-height:1.55}
 </style>
 
 <div class="top">
@@ -136,14 +155,24 @@ textarea:focus{outline:none;border-color:rgba(76,141,255,.45)}
 <div class="now" id="now"><div class="k">当前页面</div>
   <div class="t" style="color:var(--dim);font-weight:400">读取中…</div></div>
 
-<div class="hd"><b>抓取</b><span>只存原文 · 提取在知识库页做</span></div>
+<!-- 当前岗位的匹配分。浏览到岗位详情页就自动出分:
+     已提取过的秒出(缓存),第一次见到的自动 提取→打分(两次 AI,落库后免费)。 -->
+<div class="score" id="score" hidden></div>
 
-<!-- 三种抓法,各有各的适用场景,各有各的反馈区。
-     以前提示全挤在一个公共区,看不出是哪个操作给的 —— 那就是「凌乱」的来源。 -->
+<div class="hd"><b>抓取</b><span>面板开着才抓 · 关掉就完全停</span></div>
+
+<!-- ⓪ 浏览自动存:没有开关 —— 面板开着就是开着。
+     以前是一个「打开就存」的勾选框,加上面板开关等于两层开关,
+     哪层没开都表现成「没存」,查不清。现在只有一层:面板。 -->
+<div class="grp">
+  <div class="gh"><b>浏览自动存</b><em>面板开着,你每看一个岗位页就自动存原文;关掉面板就全停</em></div>
+  <button class="tiny" id="selftest" style="margin:0 0 0 3px">测一下这条链路</button>
+  <div class="fb" id="m2"></div>
+</div>
 
 <!-- ① 列表页整页抓 -->
 <div class="grp">
-  <div class="gh"><b>① 抓取该页所有岗位</b><em>适合个人中心的列表:沟通过 / 已投递 / 感兴趣</em></div>
+  <div class="gh"><b>批量抓取</b><em>在岗位列表页用:逐个打开每个岗位存原文,可自动翻页</em></div>
   <button id="runOne"><b>抓取该页所有岗位列表存入</b><i>逐个打开这一页的每个岗位,存入原文</i></button>
   <label class="sw"><input type="checkbox" id="autonext">
     <span><b>自动翻页</b><i>这一页抓完,自动点「下一页」接着抓</i></span></label>
@@ -160,18 +189,9 @@ textarea:focus{outline:none;border-color:rgba(76,141,255,.45)}
   <div class="fb" id="m1"></div>
 </div>
 
-<!-- ② 浏览时自动存 -->
+<!-- ② 手动兜底 -->
 <div class="grp">
-  <div class="gh"><b>② 浏览存入</b><em>适合左右分栏:左边点岗位,右边出详情</em></div>
-  <label class="sw"><input type="checkbox" id="autochk">
-    <span><b>打开就存</b><i>你正常浏览,页面内容一换就自动存下原文</i></span></label>
-  <button class="tiny" id="selftest" style="margin:2px 0 0 3px">测一下这条链路</button>
-  <div class="fb" id="m2"></div>
-</div>
-
-<!-- ③ 手动兜底 -->
-<div class="grp">
-  <div class="gh"><b>③ 手动存入</b><em>适合拿不准的页面 —— 上面两个都不对路时,自己点</em></div>
+  <div class="gh"><b>手动存入</b><em>拿不准的页面 —— 上面两个都不对路时,自己点</em></div>
   <button id="save"><b>存这一页</b><i>不管我判它是什么,原样存下来</i></button>
   <div class="fb" id="m3"></div>
 </div>

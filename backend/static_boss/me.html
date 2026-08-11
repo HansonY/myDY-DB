@@ -145,6 +145,29 @@ function msg(id, t, cls) {
   m.className = 'msg ' + (cls || ''); m.innerHTML = bold(t || '');
 }
 
+/* 所有请求走这一个口。**非 200 必须变成一句人话**,不能静默 ——
+ * 之前服务是旧代码时接口 404,保存就「点了没反应」:
+ * 响应是 {detail:"Not Found"},代码只查 d.error,没查 res.ok,
+ * 然后拿 undefined 当数据往下跑,在半路抛错被吞掉。 */
+async function req(url, body) {
+  let r;
+  try {
+    r = await fetch(url, body === undefined ? undefined : {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    throw new Error('连不上本地服务 —— 在项目目录跑 ./boss.sh');
+  }
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    throw new Error(r.status === 404
+      ? '接口不存在(404)—— 服务是旧代码,重启一下:kill 掉 8001 再跑 ./boss.sh'
+      : `HTTP ${r.status}:${d.detail || JSON.stringify(d).slice(0, 80)}`);
+  }
+  return d;
+}
+
 let AXES = [], SKILLS = [], AVOID = [], STORED_RAW = '';
 
 function drawSkills() {
@@ -183,7 +206,9 @@ function fill(me) {
 }
 
 async function load() {
-  const d = await (await fetch('/api/boss/me')).json();
+  let d;
+  try { d = await req('/api/boss/me'); }
+  catch (e) { msg('#pmsg', e.message, 'bad'); drawAvoid(); return; }
   AXES = d.axes || [];
   const a = d.ai || {};
   const pill = $('#ai');
@@ -211,19 +236,18 @@ $('#parse').onclick = async () => {
   const b = $('#parse'), old = b.textContent;
   b.disabled = true; b.textContent = '抽取中…(一次调用,十几秒)'; msg('#pmsg', '');
 
-  let d = await (await fetch('/api/boss/me/parse', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({text}),
-  })).json();
-
-  if (d.needs_confirm) {
-    // 不静默覆盖也不静默丢弃 —— 换原文是个有后果的动作,必须问一次
-    if (confirm(d.error + '\n\n确定替换?')) {
-      d = await (await fetch('/api/boss/me/parse', {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({text, replace: true}),
-      })).json();
-    } else { b.disabled = false; b.textContent = old; return; }
+  let d;
+  try {
+    d = await req('/api/boss/me/parse', {text});
+    if (d.needs_confirm) {
+      // 不静默覆盖也不静默丢弃 —— 换原文是个有后果的动作,必须问一次
+      if (confirm(d.error + '\n\n确定替换?')) {
+        d = await req('/api/boss/me/parse', {text, replace: true});
+      } else { b.disabled = false; b.textContent = old; return; }
+    }
+  } catch (e) {
+    b.disabled = false; b.textContent = old;
+    msg('#pmsg', e.message, 'bad'); return;
   }
   b.disabled = false; b.textContent = old;
 
@@ -291,10 +315,9 @@ $('#save').onclick = async () => {
     avoid: AVOID,
   };
   const b = $('#save'); b.disabled = true;
-  const d = await (await fetch('/api/boss/me', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(body),
-  })).json();
+  let d;
+  try { d = await req('/api/boss/me', body); }
+  catch (e) { b.disabled = false; msg('#smsg', e.message, 'bad'); return; }
   b.disabled = false;
   if (d.error) { msg('#smsg', d.error, 'bad'); return; }
   fill(d.me);
