@@ -157,6 +157,14 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
             # 混在「我做了什么」里 —— 那会让「我投了多少」凭空多算。
             "job_state": "TEXT NOT NULL DEFAULT 'unknown'",
         },
+        # me 表实测 0 行,但**表本身已经存在** —— 所以改 CREATE TABLE 不够,
+        # 还得 ALTER 补列(CREATE TABLE IF NOT EXISTS 会整段跳过)。
+        "me": {
+            "resume_raw": "TEXT", "parsed_json": "TEXT", "parsed_by": "TEXT",
+            "edited_at": "TEXT", "years_exp": "REAL", "degree": "TEXT",
+            "cities": "TEXT", "salary_floor": "INTEGER", "salary_want": "INTEGER",
+            "avoid": "TEXT", "want_axes": "TEXT",
+        },
     }
     for table, cols in wanted.items():
         try:
@@ -356,6 +364,77 @@ def save_interaction(job_id: str, kind: str, status: str = "unknown",
             "  note=COALESCE(excluded.note, interactions.note)",
             (job_id, kind, happened_at, status, note, _now()))
         conn.commit()
+
+
+# ── 我的画像(简历 + 求职偏好)────────────────────────────────
+
+_ME_FIELDS = ("resume", "skills", "years_exp", "degree", "cities",
+              "salary_floor", "salary_want", "avoid", "want_axes")
+_ME_JSON = ("skills", "cities", "avoid", "want_axes")
+
+
+def get_me() -> dict[str, Any] | None:
+    """取我的画像。JSON 列已经解好,调用方不用再 loads。
+
+    没录入过返回 None —— **不返回一个空壳**。空壳会让匹配层以为
+    「偏好是空的」然后放过所有硬门槛,那比报错糟:分数照样算出来,
+    只是每一条都通过,看着像「全都合适」。
+    """
+    with connect() as conn:
+        r = conn.execute("SELECT * FROM me WHERE id=1").fetchone()
+    if not r:
+        return None
+    d = dict(r)
+    for k in _ME_JSON:
+        try:
+            d[k] = json.loads(d[k]) if d.get(k) else []
+        except ValueError:
+            d[k] = []
+    return d
+
+
+def set_me(**fields: Any) -> dict[str, Any]:
+    """写我的画像。只更新传进来的字段,没传的保持原值。
+
+    两条硬规矩:
+      · `resume_raw` **只在为空时写入**。原文永不被覆盖 —— 抽取口径以后会改,
+        原文在就能重抽。想换简历就显式传 `replace_raw=True`。
+      · 手改过任何**生效字段**就记 `edited_at`。之后 `parsed_json` 和生效值的差
+        就是「哪些是我改的」,而那个差本身是信息(AI 抽错什么 =
+        简历里哪儿写得不清楚)。
+    """
+    replace_raw = bool(fields.pop("replace_raw", False))
+    now = _now()
+    with connect() as conn:
+        cur = conn.execute("SELECT * FROM me WHERE id=1").fetchone()
+        old = dict(cur) if cur else {}
+
+        d = {k: v for k, v in fields.items() if k in _ME_FIELDS
+             or k in ("resume_raw", "parsed_json", "parsed_by")}
+        for k in _ME_JSON:
+            if k in d and isinstance(d[k], (list, tuple)):
+                d[k] = json.dumps(list(d[k]), ensure_ascii=False)
+
+        if "resume_raw" in d and old.get("resume_raw") and not replace_raw:
+            d.pop("resume_raw")        # 原文已有且没说要换 → 不动
+
+        # 生效字段被改动过就记时间(和 AI 刚抽完那一次区分开)
+        touched_live = any(k in d for k in _ME_FIELDS)
+        if touched_live and "parsed_json" not in d:
+            d["edited_at"] = now
+        d["updated_at"] = now
+
+        if not old:
+            cols = ["id"] + list(d)
+            conn.execute(
+                f"INSERT INTO me ({','.join(cols)}) "
+                f"VALUES (1,{','.join('?' * len(d))})", list(d.values()))
+        elif d:
+            conn.execute(
+                f"UPDATE me SET {','.join(f'{k}=?' for k in d)} WHERE id=1",
+                list(d.values()))
+        conn.commit()
+    return get_me() or {}
 
 
 def save_chat(job_id: str, hr_name: str | None, last_msg_at: str | None,

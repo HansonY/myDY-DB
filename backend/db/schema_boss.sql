@@ -144,9 +144,37 @@ CREATE TABLE IF NOT EXISTS collect_runs (
 -- ── 我的画像(用来和 JD 比对)────────────────────────────────
 -- 只有一行。存我的简历要点,这样才能回答「我和我投的岗位差在哪」。
 -- 手填或从简历粘,不去抓 —— 那是我自己的东西,没必要过平台。
+-- 录入方式:页面粘简历原文 → AI 抽成结构化 → **摊在页面上逐项可手改**。
+-- 「可手改」是整套匹配可信的前提:AI 抽错了你能纠,分数才有意义。
 CREATE TABLE IF NOT EXISTS me (
-    id         INTEGER PRIMARY KEY CHECK (id = 1),
-    resume     TEXT,
-    skills     TEXT,                   -- JSON 数组
-    updated_at TEXT
+    id           INTEGER PRIMARY KEY CHECK (id = 1),
+
+    -- 粘进来的原文。**永不覆盖、永不删。**
+    -- 理由同 raw_z:抽取口径以后一定会改(prompt 会调、字段会加),
+    -- 原文在就能重抽,原文丢了就得重新翻简历。
+    resume_raw   TEXT,
+    parsed_json  TEXT,                 -- AI 那一次的**原始**输出,整份留着
+    parsed_by    TEXT,                 -- 模型 + prompt 版本,用来判断要不要重抽
+    edited_at    TEXT,                 -- 手改过的时间
+
+    -- 下面这些是**最终生效**的值(手改之后的)。
+    -- 和 parsed_json 分开存,是为了能 diff 出「哪些是我改的」——
+    -- 那个 diff 本身是信息:AI 抽错什么,说明简历里哪儿写得不清楚。
+    resume       TEXT,                 -- 保留老列名。清理过的简历正文
+    skills       TEXT,                 -- JSON 数组,技能词(已按 norm_skill 归一)
+    years_exp    REAL,                 -- 工作年限。硬门槛要它
+    degree       TEXT,                 -- 走和 jobs.degree 同一张序关系表
+
+    -- 求职偏好。**老 schema 完全没有这几项**,而整个硬门槛层都依赖它们 ——
+    -- 没有期望城市就判不了城市,没有底线薪资就判不了薪资。
+    cities       TEXT,                 -- JSON 数组,期望城市
+    salary_floor INTEGER,              -- 千元/月。低于这个算不合格
+    salary_want  INTEGER,              -- 千元/月。理想值,只进排序不做门槛
+    avoid        TEXT,                 -- JSON 数组:不接受什么(现场坐班/出差/大小周…)
+    want_axes    TEXT,                 -- JSON 数组:想要什么
+    -- ⚠️ avoid / want_axes 的取值必须和 boss_match.AXES 是**同一张枚举** ——
+    -- 不然 JD 隐性要求那一层算出来的 clash 永远匹配不上,而且不会报错,
+    -- 只是永远显示「没有冲突」。
+
+    updated_at   TEXT
 );
