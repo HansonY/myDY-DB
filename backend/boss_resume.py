@@ -22,6 +22,7 @@ DashScope + qwen-plus,绕过了多供应商抽象,会出现「提取能用但这
 from __future__ import annotations
 
 import re
+from datetime import date
 from typing import Any
 
 import boss_match as bm
@@ -40,8 +41,10 @@ PROMPT = """你从一份简历原文里提取结构化信息,给一个求职匹�
    **不要**把「独立开发经验」「跨部门协同」这类描述性短句放进 skills,
    它们放到 highlights 里。
 2. years_exp:工作年限(数字,可带小数)。**必须在 years_basis 里列出你是
-   按哪几段经历算的**,让人能核对。
+   按哪几段经历算的**(每段写「起-止 = N 年」),让人能核对。
    ⚠️ **不要按毕业年份推算** —— 实习、gap、在读都会让这个数算错。
+   ⚠️ 「至今 / 现在 / present」这种没写结束时间的,**按我在正文开头给你的今天日期算**。
+   把每段的年数加起来,**再把这个和写进 years_basis 的最后一项**。
    算不出来就两个都留 null。
 3. degree:最高学历,用「大专/本科/硕士/博士」之一的原词。没写留 null。
 4. cities:简历里写明的期望城市。没写留空数组,**不要拿现居地当期望地**。
@@ -81,7 +84,13 @@ def parse(resume_raw: str) -> dict[str, Any]:
     if not llm.available():
         raise llm.NoKey("抽简历要 LLM。到网页「AI 模型」里配一个,或者直接手填。")
 
-    raw = llm.chat_json(PROMPT, text[:24000], timeout=180)
+    # ⚠️ **必须把今天的日期告诉它。** 模型不知道今天几号,而简历里「2023.06 - 至今」
+    # 这种段落算不算得对全靠今天是哪天。实测不给日期时它给出 4.9 年
+    # (真实是 7.0 年)—— 一个凭空少 2 年的数字,而且看不出是算的还是抄的。
+    # 更糟的是这个数直接进硬门槛:4.9 会让「5 年以上」的岗位判 fail,
+    # 于是一个够格的岗位被静默否掉,理由还完全合理。
+    head = f"今天是 {date.today().isoformat()}。下面是简历原文:\n\n"
+    raw = llm.chat_json(PROMPT, head + text[:24000], timeout=180)
     if not isinstance(raw, dict):
         raise RuntimeError(f"模型返回的不是对象:{str(raw)[:120]}")
 
@@ -121,7 +130,12 @@ def parse(resume_raw: str) -> dict[str, Any]:
         "parsed": raw,                      # 原始输出整份留着
         "live": live,                       # 清洗后的生效值(还要过人眼)
         "skills_display": seen,             # canon → 原文写法
-        "years_basis": raw.get("years_basis"),
+        # 实测它有时给字符串、有时给数组 —— 在这儿归一,别让页面两种都处理。
+        # 这一项**必须显示出来**:一个算出来的年限和一个抄来的年限长得一样,
+        # 不给依据没法核对,而这个数直接进硬门槛。
+        "years_basis": (" · ".join(str(x) for x in raw["years_basis"])
+                        if isinstance(raw.get("years_basis"), list)
+                        else raw.get("years_basis")),
         "titles": _list(raw.get("titles")),
         "highlights": _list(raw.get("highlights"))[:5],
         # 简历里写的限制,**照原文带出来**。归到 avoid 的哪一个 axis 由人在页面上勾 ——

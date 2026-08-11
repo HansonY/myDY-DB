@@ -29,6 +29,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+import boss_match as bm
+import boss_matchai
+import boss_resume
 from config import ROOT
 from db import boss_store as bs
 
@@ -418,6 +421,190 @@ async def stats() -> dict[str, Any]:
     import llm as _llm
     s["ai"] = _llm.status()
     return s
+
+
+# ══════════════════════════════════════════════════════════════
+# 我的简历 + 岗位匹配
+# ══════════════════════════════════════════════════════════════
+#
+# 两层分工,**页面上必须并排显示、不许调和**:
+#   · 规则层(boss_match)—— 城市/经验/学历/薪资/技能覆盖。跑两次结果一样。
+#   · 模型层(boss_matchai)—— 把岗位原文 + 简历一起交给大模型判「对不对路」。
+#     两次可能不一样,所以**落库缓存**,页面显示的是同一个数。
+#
+# 两者不一致时那是信息:要么规则口径有问题,要么模型在编。藏起来才是真的错。
+
+
+def _all_jobs() -> list[dict[str, Any]]:
+    with bs.connect() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT job_id, title, company, city, district, salary_text, "
+            "       salary_min, salary_max, salary_months, experience, degree, "
+            "       jd, jd_state, job_state, tags, url FROM jobs")]
+
+
+# 词表按「库的内容」缓存,不按时间。库没变就不重算 —— 227 条 JD 十几万字,
+# 每次匹配都重扫一遍纯浪费。指纹用 (条数, 最大 updated_at):
+# 只要有岗位被 upsert,updated_at 就会变,所以漏不掉。
+_VOCAB: dict[str, Any] = {"fp": None, "vocab": set(), "jobs": []}
+
+
+def _vocab_and_jobs(extra: set[str] | None = None) -> tuple[set[str], list[dict[str, Any]]]:
+    with bs.connect() as c:
+        r = c.execute("SELECT COUNT(*) n, MAX(updated_at) m FROM jobs").fetchone()
+    fp = f"{r['n']}/{r['m']}"
+    if _VOCAB["fp"] != fp:
+        jobs = _all_jobs()
+        _VOCAB.update(fp=fp, jobs=jobs, vocab=bm.build_vocab(jobs))
+    # 我的技能每次都并进去(简历改了词表就该跟着变),但不进缓存的那份
+    return (_VOCAB["vocab"] | {bm.norm_skill(s) for s in (extra or ())},
+            _VOCAB["jobs"])
+
+
+@app.get("/api/boss/me")
+async def get_me() -> dict[str, Any]:
+    """我的画像。没录入过 `me` 是 `null` —— **不给空壳**。
+
+    空壳会让硬门槛层以为「偏好是空的」然后放过所有岗位:分数照样算出来,
+    只是每一条都通过,看着像「全都合适」。
+    """
+    import llm as _llm
+    me = bs.get_me()
+    return {
+        "me": me,
+        # 勾选项的枚举**从 boss_match 拿**,不在前端写一份 ——
+        # 两份枚举不一致不会报错,只是隐性要求那一层永远匹配不上。
+        "axes": [{"key": k, "label": v} for k, v in bm.AXES],
+        "ai": _llm.status(),
+    }
+
+
+@app.post("/api/boss/me/parse")
+async def parse_resume(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """粘简历原文 → AI 抽结构化。**只返回建议值,不写生效字段。**
+
+    生效值要等人在页面上过一遍再 POST /api/boss/me —— 「可手改」是整套匹配
+    可信的前提:AI 抽错了你能纠,分数才有意义。
+
+    原文倒是立刻存(`resume_raw`),因为它永不覆盖、永不删:抽取口径以后会改,
+    原文在就能重抽,原文丢了得重新翻简历。
+    """
+    text = str(body.get("text") or "").strip()
+    replace = bool(body.get("replace"))
+    old = bs.get_me() or {}
+    if old.get("resume_raw") and old["resume_raw"].strip() != text and not replace:
+        # 不静默覆盖也不静默丢弃 —— 让页面问一次
+        return {"error": "库里已经有一份简历原文了,和这次粘的不一样。"
+                         "确认要换的话再提交一次(会替换,旧的不留备份)。",
+                "needs_confirm": True, "old_chars": len(old["resume_raw"])}
+    try:
+        r = boss_resume.parse(text)
+    except (ValueError, RuntimeError) as e:
+        return {"error": str(e)}
+    except Exception as e:                       # noqa: BLE001  LLM 侧各种异常
+        return {"error": f"{type(e).__name__}: {e}"}
+
+    bs.set_me(resume_raw=text, replace_raw=True,
+              parsed_json=json.dumps(r["parsed"], ensure_ascii=False),
+              parsed_by=r["parsed_by"])
+    return r
+
+
+@app.post("/api/boss/me")
+async def save_me(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """存手改后的生效值。白名单字段,类型在这里兜住。"""
+    d: dict[str, Any] = {}
+    for k in ("resume", "degree"):
+        if k in body:
+            d[k] = str(body[k] or "") or None
+    for k in ("skills", "cities", "avoid", "want_axes"):
+        if k in body:
+            v = body[k]
+            d[k] = [str(x).strip() for x in v if str(x).strip()] if isinstance(v, list) else []
+    # 技能统一走 norm_skill 归一 —— 简历侧和岗位侧必须同一把尺子,
+    # 不然「reactnative」配不上「react native」,覆盖率悄悄偏低而且不报错。
+    if "skills" in d:
+        d["skills"] = sorted({bm.norm_skill(s) for s in d["skills"] if bm.norm_skill(s)})
+    for k in ("years_exp", "salary_floor", "salary_want"):
+        if k in body:
+            v = body[k]
+            try:
+                n = float(v) if str(v).strip() not in ("", "None") else None
+            except (TypeError, ValueError):
+                n = None
+            d[k] = n if k == "years_exp" else (int(n) if n else None)
+    me = bs.set_me(**d)
+    return {"me": me, "saved": sorted(d)}
+
+
+def _facts(job: dict[str, Any], me: dict[str, Any]) -> dict[str, Any]:
+    vocab, _ = _vocab_and_jobs(set(me.get("skills") or []))
+    return boss_matchai.facts_for(job, me, vocab)
+
+
+@app.get("/api/boss/match/{job_id}")
+async def match_get(job_id: str) -> dict[str, Any]:
+    """规则层**立刻**给,模型层只给缓存里有的。
+
+    **这个接口不调模型** —— 打开页面就自动花钱是个坏默认,而且模型有随机性,
+    刷新一次分数就变。要模型判断得显式 POST。
+    """
+    job = bs.get_job(job_id)
+    if not job:
+        return {"error": "库里没有这个岗位"}
+    me = bs.get_me()
+    if not me:
+        return {"error": "还没录简历。先到「我的简历」页粘一份。", "need_me": True}
+    facts = _facts(job, me)
+    jh, rh = boss_matchai.hashes(job, me)
+    cached = bs.get_match(job_id, boss_matchai.PROMPT_VER, jh, rh)
+    return {"job": {k: job.get(k) for k in
+                    ("job_id", "title", "company", "city", "district", "salary_text",
+                     "experience", "degree", "jd", "jd_state", "job_state", "url")},
+            "facts": facts,
+            "ai": (cached or {}).get("detail", {}).get("ai"),
+            "ai_at": (cached or {}).get("computed_at")}
+
+
+@app.post("/api/boss/match/{job_id}")
+async def match_run(job_id: str, force: bool = Query(False)) -> dict[str, Any]:
+    """岗位原文 + 简历一起交给大模型分析匹配值。结果落库。
+
+    `force=false` 时命中缓存直接返回(不花钱、分数不跳);`force=true` 重算。
+    """
+    job = bs.get_job(job_id)
+    if not job:
+        return {"error": "库里没有这个岗位"}
+    me = bs.get_me()
+    if not me:
+        return {"error": "还没录简历。先到「我的简历」页粘一份。", "need_me": True}
+    jh, rh = boss_matchai.hashes(job, me)
+    facts = _facts(job, me)
+    if not force:
+        c = bs.get_match(job_id, boss_matchai.PROMPT_VER, jh, rh)
+        if c:
+            return {"ai": c["detail"].get("ai"), "facts": facts,
+                    "cached": True, "ai_at": c["computed_at"]}
+    try:
+        r = await asyncio.to_thread(boss_matchai.analyze, job, me, facts)
+    except Exception as e:                       # noqa: BLE001
+        return {"error": f"{type(e).__name__}: {e}", "facts": facts}
+    bs.save_match(job_id, r, facts)
+    return {"ai": r, "facts": facts, "cached": False}
+
+
+@app.get("/api/boss/matches")
+async def match_list(limit: int = Query(100, ge=1, le=300)) -> dict[str, Any]:
+    """分析过的岗位,按模型给的 fit 降序。
+
+    ⚠️ `fit` 是**模型给的(inferred)**,不是算出来的。规则层的排序键是另一回事
+    (还没校准,见计划 §四)。这里不混在一起排。
+    """
+    rows = bs.list_matches(limit)
+    with bs.connect() as c:
+        total = c.execute("SELECT COUNT(*) n FROM jobs").fetchone()["n"]
+    return {"items": rows, "analyzed": len(rows), "total_jobs": total,
+            "prompt_ver": boss_matchai.PROMPT_VER}
 
 
 if STATIC_DIR.exists():

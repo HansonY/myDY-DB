@@ -437,6 +437,59 @@ def set_me(**fields: Any) -> dict[str, Any]:
     return get_me() or {}
 
 
+# ── 匹配分析缓存 ────────────────────────────────────────────
+
+def get_match(job_id: str, prompt_ver: str, jd_hash: str,
+              resume_hash: str) -> dict[str, Any] | None:
+    """取缓存。**JD 或简历变了就当没有** —— 旧结论必须失效。
+
+    不比对 hash 的话,你会拿列表页时代抽的结论去配后来补全的 JD,
+    而那个结论看起来完全正常。
+    """
+    with connect() as conn:
+        r = conn.execute(
+            "SELECT * FROM job_match WHERE job_id=? AND prompt_ver=?",
+            (job_id, prompt_ver)).fetchone()
+    if not r:
+        return None
+    if r["jd_hash"] != jd_hash or r["resume_hash"] != resume_hash:
+        return None
+    d = dict(r)
+    try:
+        d["detail"] = json.loads(d.pop("detail_json") or "{}")
+    except ValueError:
+        d["detail"] = {}
+    return d
+
+
+def save_match(job_id: str, res: dict[str, Any], facts: dict[str, Any]) -> None:
+    """存一次分析。规则算的事实一起留痕 —— 两者不一致时能查出是谁变了。"""
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO job_match (job_id, prompt_ver, model, jd_hash, resume_hash,"
+            " fit, verdict, detail_json, quote_miss, computed_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(job_id, prompt_ver) DO UPDATE SET "
+            "  model=excluded.model, jd_hash=excluded.jd_hash,"
+            "  resume_hash=excluded.resume_hash, fit=excluded.fit,"
+            "  verdict=excluded.verdict, detail_json=excluded.detail_json,"
+            "  quote_miss=excluded.quote_miss, computed_at=excluded.computed_at",
+            (job_id, res["prompt_ver"], res["model"], res["jd_hash"],
+             res["resume_hash"], res["fit"], res["verdict"],
+             json.dumps({"ai": res, "facts": facts}, ensure_ascii=False, default=str),
+             res["quote_miss"], _now()))
+        conn.commit()
+
+
+def list_matches(limit: int = 200) -> list[dict[str, Any]]:
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT m.job_id, m.fit, m.verdict, m.quote_miss, m.computed_at, m.model,"
+            "       j.title, j.company, j.city, j.salary_text, j.jd_state, j.job_state "
+            "FROM job_match m JOIN jobs j ON j.job_id = m.job_id "
+            "ORDER BY m.fit DESC NULLS LAST LIMIT ?", (limit,))]
+
+
 def save_chat(job_id: str, hr_name: str | None, last_msg_at: str | None,
               snippet: str | None, unread: int = 0) -> None:
     with connect() as conn:

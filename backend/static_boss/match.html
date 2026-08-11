@@ -1,0 +1,323 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>岗位匹配</title>
+<link rel="stylesheet" href="/shell.css">
+<style>
+ html,body{overflow:hidden}
+ body{padding:0}
+ .app{display:flex;flex-direction:column;height:100vh}
+ .top{flex:0 0 auto;display:flex;align-items:center;gap:12px;padding:14px 24px;
+   border-bottom:1px solid var(--line);background:var(--surface)}
+ .top h1{margin:0;font-size:15px;font-weight:600}
+ .top .sp{margin-left:auto;display:flex;gap:10px;align-items:center}
+ .cols{flex:1 1 auto;display:flex;min-height:0}
+ .left{flex:0 0 320px;border-right:1px solid var(--line);overflow-y:auto;background:var(--surface)}
+ .right{flex:1 1 auto;overflow-y:auto;padding:20px 24px 70px}
+ .rw{max-width:820px}
+ .jb{padding:10px 14px;border-bottom:1px solid var(--line);cursor:pointer;font-size:12.5px}
+ .jb:hover{background:var(--surface2)}
+ .jb.on{background:var(--accent-dim);border-left:2px solid var(--accent)}
+ .jb .t{color:var(--fg);line-height:1.4}
+ .jb .m{font-size:10.5px;color:var(--dim2);margin-top:3px;display:flex;gap:7px;flex-wrap:wrap}
+ .jb .fit{float:right;font-family:var(--mono);font-size:12px;color:var(--accent-text)}
+ h2{font-size:12px;font-weight:600;color:var(--dim);letter-spacing:.4px;margin:22px 0 4px}
+ h2:first-child{margin-top:0}
+ .lead{font-size:11.5px;color:var(--dim2);line-height:1.65;margin:0 0 10px}
+ .box{border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:14px 16px}
+ .gate{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+ .g{border:1px solid var(--line);border-radius:9px;padding:9px 11px;background:var(--bg)}
+ .g b{display:block;font-size:12.5px;margin-bottom:2px}
+ .g span{font-size:10.5px;color:var(--dim2);line-height:1.5;display:block}
+ .g.pass{border-color:var(--ok-line);background:var(--ok-dim)} .g.pass b{color:var(--ok)}
+ .g.fail{border-color:var(--warn-line);background:var(--warn-dim)} .g.fail b{color:var(--warn-text)}
+ .g.unknown b{color:var(--dim)}
+ .g.na b{color:var(--violet-text)}
+ .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}
+ .chip{font-size:11px;font-family:var(--mono);padding:3px 8px;border-radius:6px;
+   border:1px solid var(--line2);background:var(--bg);color:var(--dim)}
+ .chip.hit{border-color:var(--ok-line);background:var(--ok-dim);color:var(--ok)}
+ .chip.miss{border-color:var(--warn-line);color:var(--warn-text)}
+ .big{font-family:var(--mono);font-size:30px;font-weight:600;line-height:1;color:var(--accent-text)}
+ .fitrow{display:flex;gap:16px;align-items:flex-start}
+ .fitrow .why{font-size:12px;color:var(--dim);line-height:1.65;flex:1}
+ .pill{display:inline-block;font-size:10px;padding:1.5px 6px;border-radius:5px;
+   border:1px solid var(--line);color:var(--dim2)}
+ .pill.have,.pill.worth{border-color:var(--ok-line);background:var(--ok-dim);color:var(--ok)}
+ .pill.warn,.pill.skip{border-color:var(--warn-line);background:var(--warn-dim);color:var(--warn-text)}
+ .pill.maybe{border-color:var(--violet-line);background:var(--violet-dim);color:var(--violet-text)}
+ ul.pts{margin:6px 0 0;padding-left:0;list-style:none}
+ ul.pts li{font-size:12.5px;color:var(--fg);line-height:1.6;margin-bottom:9px}
+ ul.pts q{display:block;font-size:11px;color:var(--dim2);line-height:1.6;margin-top:3px;
+   padding-left:9px;border-left:2px solid var(--line2);font-style:normal}
+ ul.pts q:before{content:"原文:"}
+ .btn{background:var(--surface2);border:1px solid var(--line);border-radius:8px;
+   padding:8px 14px;color:var(--fg);font-size:12px;cursor:pointer}
+ .btn:hover:not(:disabled){border-color:var(--accent-line)}
+ .btn:disabled{opacity:.45;cursor:default}
+ .btn.go{background:var(--accent-dim);border-color:var(--accent-line)}
+ .btn.sm{padding:5px 10px;font-size:11px}
+ .row{display:flex;gap:9px;align-items:center;margin-top:12px;flex-wrap:wrap}
+ .msg{font-size:11.5px;line-height:1.65;margin-top:10px;padding:10px 12px;border-radius:8px;
+   border:1px solid var(--line);background:var(--bg);display:none}
+ .msg.ok{border-color:var(--ok-line);background:var(--ok-dim);color:var(--ok)}
+ .msg.bad{border-color:var(--warn-line);background:var(--warn-dim);color:var(--warn-text)}
+ .empty{padding:30px 20px;color:var(--dim);font-size:12.5px;line-height:1.9;text-align:center}
+ a.lk{color:var(--accent-text);text-decoration:none;font-size:12px}
+ a.lk:hover{text-decoration:underline}
+ .jd{font-size:11.5px;color:var(--dim);line-height:1.75;white-space:pre-wrap;
+   max-height:200px;overflow-y:auto}
+ .sub{margin-top:13px;padding-top:13px;border-top:1px solid var(--line)}
+ label{display:block;font-size:10.5px;color:var(--dim2);margin-bottom:3px}
+</style>
+
+<div class="app">
+  <div class="top">
+    <h1>岗位匹配</h1>
+    <span class="pill" id="mest"></span>
+    <span class="pill" id="ai">AI …</span>
+    <div class="sp">
+      <a class="lk" href="/me.html">我的简历</a>
+      <a class="lk" href="/">岗位库</a>
+    </div>
+  </div>
+
+  <div class="cols">
+    <div class="left" id="list"><div class="empty">读取中…</div></div>
+    <div class="right"><div class="rw" id="pane">
+      <div class="empty">左边挑一个岗位。<br>
+        规则算的部分(城市/经验/学历/薪资/技能覆盖)立刻就有;<br>
+        要模型判「对不对路」得显式点一下 —— 打开就花钱是个坏默认。</div>
+    </div></div>
+  </div>
+</div>
+
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g,
+  m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+const bold = t => esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+
+let JOBS = [], FITS = {}, CUR = null, HAS_ME = false;
+
+const GV = {pass: ['pass', '符合'], fail: ['fail', '不符合'],
+            unknown: ['unknown', '未判定'], na: ['na', '不适用']};
+const GN = {city: '城市', experience: '经验', degree: '学历', salary: '薪资'};
+
+async function loadList() {
+  const [jb, ms, me] = await Promise.all([
+    fetch('/api/boss/jobs?limit=200').then(r => r.json()),
+    fetch('/api/boss/matches').then(r => r.json()),
+    fetch('/api/boss/me').then(r => r.json()),
+  ]);
+  JOBS = jb.items || [];
+  FITS = {};
+  for (const m of (ms.items || [])) FITS[m.job_id] = m;
+
+  const a = me.ai || {};
+  const pill = $('#ai');
+  pill.className = 'pill' + (a.state === 'ok' ? ' have' : ' warn');
+  pill.textContent = 'AI ' + (a.label || '?');
+  pill.title = a.error || '';
+
+  HAS_ME = !!me.me;
+  const m = me.me || {};
+  const gaps = [];
+  if (!(m.cities || []).length) gaps.push('期望城市');
+  if (!m.salary_floor) gaps.push('薪资底线');
+  if (m.years_exp == null) gaps.push('年限');
+  if (!m.degree) gaps.push('学历');
+  const st = $('#mest');
+  if (!HAS_ME) {
+    st.className = 'pill warn';
+    st.innerHTML = '还没录简历';
+  } else {
+    st.className = 'pill' + (gaps.length ? ' warn' : ' have');
+    st.textContent = gaps.length ? '简历缺:' + gaps.join('·') : '简历齐了';
+    st.title = gaps.length ? '这几项空着 → 对应硬门槛对所有岗位判「未判定」' : '';
+  }
+
+  // ⚠️ **分析过的必须从 /matches 那份取,不能从 /jobs 里筛。**
+  // /jobs 是按 updated_at 取前 200 条,而库里 227 条 —— 实测有一条分析过的岗位
+  // 排在第 218 位,于是它的分析结果在页面上**凭空消失**,库里明明有。
+  // 那正是这个项目反复吃过的那种 bug:看着一切正常,只是少了几条。
+  const doneIds = new Set(Object.keys(FITS));
+  const done = (ms.items || []);                  // 已按 fit 降序,自带展示字段
+  const todo = JOBS.filter(j => !doneIds.has(j.job_id));
+
+  const row = (j, f) => `<div class="jb" data-id="${esc(j.job_id)}">
+      ${f ? `<span class="fit">${f.fit ?? '?'}</span>` : ''}
+      <div class="t">${esc(j.title || '(无标题)')}</div>
+      <div class="m"><span>${esc(j.company || '')}</span>
+        <span>${esc(j.city || '')}</span>
+        <span>${esc(j.salary_text || '')}</span>
+        ${j.jd_state === 'have' ? '' : '<span class="pill">没职位描述</span>'}</div>
+    </div>`;
+
+  // 未分析的那半边**确实是截断的** —— 把截断说出来,别让「列完了」和「只列了一部分」长得一样
+  const cut = (ms.total_jobs || 0) - done.length - todo.length;
+  $('#list').innerHTML = (done.length + todo.length)
+    ? done.map(f => row(f, f)).join('')
+      + (done.length && todo.length
+        ? '<div class="jb" style="cursor:default;background:var(--bg);color:var(--dim2);'
+          + `font-size:10.5px">↓ 下面 ${todo.length} 个还没分析`
+          + (cut > 0 ? `(库里另有 ${cut} 个更早的没列出来)` : '') + '</div>'
+        : '')
+      + todo.map(j => row(j, null)).join('')
+    : '<div class="empty">库里还没有岗位</div>';
+
+  $('#list').querySelectorAll('.jb').forEach(el => el.onclick = () => open(el.dataset.id));
+  if (CUR) mark(CUR);
+}
+
+function mark(id) {
+  $('#list').querySelectorAll('.jb').forEach(
+    el => el.classList.toggle('on', el.dataset.id === id));
+}
+
+function covBlock(cov) {
+  if (!cov) return '';
+  const rate = cov.rate;
+  const head = rate === null || rate === undefined
+    // 零证据返回 null 不是 0。返回 0 会让这些岗位排最后、看起来像「不匹配」,
+    // 而那个错误会自我实现:排最后就不看,不看就永远补不上详情页。
+    ? '<b style="color:var(--warn-text)">算不出来</b> —— 这个岗位还没抓到技能信息(不是 0%)'
+    : `<b class="big" style="font-size:20px">${Math.round(rate * 100)}%</b>
+       <span style="font-size:11.5px;color:var(--dim)">命中 ${(cov.matched || []).length}/${cov.n_job_tech} 个技术/工具词</span>`
+      + (cov.rate_confidence === 'low'
+        ? ' <span class="pill warn">分母不足 3,这个百分比不可靠</span>' : '');
+  return `<div class="box">
+    <div>${head}</div>
+    <div class="hint" style="font-size:10.5px;color:var(--dim2);margin-top:6px">
+      分母只算技术/工具词 —— tags 是 AI 从页面抽的,混着「独立开发且上线经验」这类整句,
+      拿它算覆盖率是骗人(我简历里不会有这个字符串,但我明明有这个经历)。</div>
+    ${(cov.matched || []).length ? `<div class="sub"><label>我有的</label>
+      <div class="chips">${cov.matched.map(m =>
+        `<span class="chip hit" title="怎么配上的:${esc(m.how)} · 岗位原词「${esc(m.tok)}」· 来源 ${esc(m.src)}">${esc(m.canon)}</span>`).join('')}</div></div>` : ''}
+    ${(cov.missing || []).length ? `<div class="sub"><label>它要但我没写</label>
+      <div class="chips">${cov.missing.map(m =>
+        `<span class="chip miss" title="岗位原词「${esc(m.tok)}」· 来源 ${esc(m.src)}(tags=AI 从页面抽的,jd=在职位描述正文里命中)">${esc(m.canon)}</span>`).join('')}</div>
+      <div class="hint" style="font-size:10.5px;color:var(--dim2);margin-top:6px">
+        命中判定是**精确 → 别名 → 包含**,不用语义相似度 —— 实测「该算命中」和
+        「该算不同」在向量空间里交错(mysql↔postgresql 0.748 不该算,gitlab↔git 0.761 该算),
+        没有一个阈值分得开。鼠标停在词上能看到它是从哪儿来的。</div></div>` : ''}
+    ${(cov.qualitative || []).length ? `<div class="sub"><label>定性要求(不进覆盖率)</label>
+      <div class="chips">${cov.qualitative.map(m =>
+        `<span class="chip" title="${esc(m.kind)}">${esc(m.tok)}</span>`).join('')}</div></div>` : ''}
+  </div>`;
+}
+
+function aiBlock(ai, at) {
+  if (!ai) return `<div class="box"><div class="empty" style="padding:16px 0">
+    还没让模型看过这个岗位。</div></div>`;
+  const vd = {worth: '值得投', maybe: '可以试试', skip: '别浪费时间'}[ai.verdict] || '没给结论';
+  const pts = (arr, title) => (arr || []).length ? `<div class="sub"><label>${title}</label>
+    <ul class="pts">${arr.map(x =>
+      `<li>${esc(x.point)}<q>${esc(x.quote)}</q></li>`).join('')}</ul></div>` : '';
+  return `<div class="box">
+    <div class="fitrow">
+      <div><div class="big">${ai.fit ?? '?'}</div>
+        <span class="pill ${ai.verdict || ''}" style="margin-top:5px">${vd}</span></div>
+      <div class="why">${esc(ai.fit_why || '')}
+        <div style="font-size:10.5px;color:var(--dim2);margin-top:7px">
+          ${esc(ai.model || '')} · ${esc(ai.prompt_ver || '')}
+          ${at ? '· ' + String(at).replace('T', ' ').slice(5, 16) : ''}
+          ${ai.quote_miss ? `<span class="pill warn" title="模型写了但引不出原文,已丢弃">
+              ${ai.quote_miss}/${ai.quote_total} 条引不出原文,已丢弃</span>` : ''}
+        </div></div>
+    </div>
+    ${(ai.conflicts || []).length ? `<div class="msg bad" style="display:block;margin-top:12px">
+      <b>模型和上面算出来的事实对不上:</b><br>· ${ai.conflicts.map(esc).join('<br>· ')}
+      <div style="font-size:10.5px;margin-top:6px;opacity:.85">
+        没有自动修正 —— 不一致本身是信息:要么规则的口径有问题,要么模型没把
+        算出来的当事实。悄悄把结论改一致会让这个信号消失。</div></div>` : ''}
+    ${pts(ai.highlights, '我最能打动它的')}
+    ${pts(ai.risks, '最可能被挑的')}
+    ${pts(ai.hidden, 'JD 里结构化不掉的要求')}
+    ${(ai.unclear || []).length ? `<div class="sub"><label>它说不确定的</label>
+      <ul class="pts">${ai.unclear.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
+  </div>`;
+}
+
+function render(d) {
+  const j = d.job || {}, f = d.facts || {}, g = f.gate_items || [];
+  $('#pane').innerHTML = `
+    <h2>${esc(j.title || '(无标题)')}</h2>
+    <p class="lead">${esc(j.company || '')} · ${esc(j.city || '')}${
+      j.district ? ' · ' + esc(j.district) : ''} · ${esc(j.salary_text || '薪资未写')}
+      · 经验 ${esc(j.experience || '未写')} · 学历 ${esc(j.degree || '未写')}
+      ${j.url ? ` · <a class="lk" href="${esc(j.url)}" target="_blank" rel="noreferrer">看原页</a>` : ''}
+      ${j.job_state === 'closed' ? ' <span class="pill warn">职位已关闭</span>' : ''}</p>
+
+    <h2>规则算的(跑两次一样)</h2>
+    <p class="lead">四态不是布尔:**「不符合」和「还不知道」必须分开** ——
+      混成一个之后,「该去补数据还是该认命」谁也说不清。未判定**不算不合格**。</p>
+    <div class="gate">${g.map(it => {
+      const [cls, txt] = GV[it.verdict] || ['unknown', it.verdict];
+      return `<div class="g ${cls}"><b>${GN[it.name] || it.name} · ${txt}</b>
+        <span>${it.need != null ? '要求 ' + esc(JSON.stringify(it.need)) + ' / 我 ' + esc(it.got ?? '?') : esc(it.got ?? '')}</span>
+        ${it.note ? `<span>${esc(it.note)}</span>` : ''}</div>`;
+    }).join('')}</div>
+    ${(f.hard_fail || []).length
+      ? `<div class="msg bad" style="display:block">硬门槛不符合:<b>${
+          f.hard_fail.map(x => GN[x] || x).join(' · ')}</b> ——
+          技能再合也去不了,所以这条**不给排序分数**。</div>` : ''}
+    ${f.salary && f.salary.months_src === 'assumed_12'
+      ? `<div class="msg" style="display:block">这个岗位没写几薪,总包按 12 薪估
+          —— 实测写了的那些里 13/14/15/16/18 薪都有,**假设 12 薪会系统性低估 8%–50%**,
+          所以门槛只用月薪、不用总包。</div>` : ''}
+
+    <h2>技能覆盖(算的,不是模型给的)</h2>
+    ${covBlock(f.coverage)}
+
+    <h2>模型判的:对不对路</h2>
+    <p class="lead">规则层判不了的那部分 —— 职责深浅、要专精还是全栈、我的经历对不对路。
+      **每条都要能从原文里逐字引出来**,引不出的直接丢弃并计数(上面会显示)。<br>
+      ⚠️ 这个分数**两次可能不一样**,所以落了库:页面上看到的一直是同一个数。
+      要重算得显式点。</p>
+    ${aiBlock(d.ai, d.ai_at)}
+    <div class="row">
+      <button class="btn go" id="run">${d.ai ? '重新分析(会花一次调用)' : '让模型分析这个岗位'}</button>
+      ${j.jd_state !== 'have' ? '<span class="pill warn">没有职位描述 —— 模型只能看标题和薪资,结论会很虚</span>' : ''}
+    </div>
+    <div class="msg" id="rmsg"></div>`;
+  document.querySelectorAll('.lead').forEach(e => {
+    if (e.dataset.b) return; e.dataset.b = 1;
+    e.innerHTML = e.innerHTML.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+  });
+  document.querySelectorAll('.msg,.hint').forEach(e =>
+    e.innerHTML = e.innerHTML.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>'));
+  $('#run').onclick = () => run(d.job.job_id, !!d.ai);
+}
+
+async function open(id) {
+  CUR = id; mark(id);
+  $('#pane').innerHTML = '<div class="empty">读取中…</div>';
+  const d = await (await fetch('/api/boss/match/' + encodeURIComponent(id))).json();
+  if (d.need_me) {
+    $('#pane').innerHTML = `<div class="empty">还没录简历 —— 匹配的一半在你这边。<br>
+      <a class="lk" href="/me.html">去粘一份简历 →</a></div>`;
+    return;
+  }
+  if (d.error) { $('#pane').innerHTML = `<div class="empty">${esc(d.error)}</div>`; return; }
+  render(d);
+}
+
+async function run(id, again) {
+  const b = $('#run'), old = b.textContent;
+  b.disabled = true; b.textContent = '分析中…(一次调用,十几秒)';
+  const d = await (await fetch(
+    `/api/boss/match/${encodeURIComponent(id)}?force=${again ? 'true' : 'false'}`,
+    {method: 'POST'})).json();
+  b.disabled = false; b.textContent = old;
+  if (d.error) {
+    const m = $('#rmsg');
+    m.style.display = 'block'; m.className = 'msg bad'; m.textContent = d.error;
+    return;
+  }
+  await loadList();
+  await open(id);
+}
+
+loadList();
+</script>

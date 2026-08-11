@@ -178,3 +178,30 @@ CREATE TABLE IF NOT EXISTS me (
 
     updated_at   TEXT
 );
+
+
+-- ── 匹配分析的缓存 ──────────────────────────────────────────
+--
+-- **为什么必须落库,不是每次算。** 模型给的分数两次可能不一样;
+-- 不缓存的话每次刷新那个数就变,而一个会自己变的分数没法用来排序,
+-- 也没法说「这个岗位比那个更合」。
+--
+-- PK 带 prompt_ver 是为了让两版**并存** —— 换了 prompt / 换了模型之后
+-- 能直接 join 出「哪些岗位的判断变了」,那是判断 prompt 改好还是改坏的唯一办法。
+--
+-- jd_hash / resume_hash:JD 是只升不降补上来的,简历也会改 ——
+-- 任一变了,旧结论就该失效。没这两列你会拿列表页时代的结论去配详情页的 JD。
+CREATE TABLE IF NOT EXISTS job_match (
+    job_id      TEXT NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
+    prompt_ver  TEXT NOT NULL,
+    model       TEXT NOT NULL,
+    jd_hash     TEXT NOT NULL,
+    resume_hash TEXT NOT NULL,
+    fit         INTEGER,                -- 0-100,模型给的。**inferred**
+    verdict     TEXT,                   -- worth | maybe | skip
+    detail_json TEXT NOT NULL,          -- 全部结构 + 规则算出的事实,一起留痕
+    quote_miss  INTEGER NOT NULL DEFAULT 0,
+    computed_at TEXT NOT NULL,
+    PRIMARY KEY (job_id, prompt_ver)
+);
+CREATE INDEX IF NOT EXISTS idx_match_fit ON job_match(fit DESC);

@@ -18,6 +18,7 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "backend"))
 
 import boss_match as bm        # noqa: E402
+import boss_matchai as ai      # noqa: E402
 
 R: list[tuple[bool, str]] = []
 
@@ -132,6 +133,47 @@ ok(cov3["rate"] is not None and all(m["how"] in ("exact", "alias", "contains")
                                     for m in cov3["matched"]),
    "★ 覆盖率**零模型**可算,命中方式全是确定性规则")
 ok(any(m["canon"] == "kotlin" for m in cov3["missing"]), "  kotlin 算缺口(我不会)")
+
+# ══════════════════════════════════════════════════════════════
+# 模型层的两道闸(boss_matchai)。**零网络** —— 测的是校验逻辑,不是模型。
+# ══════════════════════════════════════════════════════════════
+#
+# 这两条最该有回归测试:它们坏掉的表现是「幻觉照样显示出来」和
+# 「模型推翻了算出来的事实但没人看见」—— 两种都不报错,页面看着更好看。
+
+HAY = ai.haystack({"title": "iOS 开发工程师", "jd": "要求 3 年以上 Swift 经验,\n熟悉 UIKit"},
+                  {"resume_raw": "我用 Swift 写过\n两个 App"})
+kept, miss = ai.verify_claims([
+    {"point": "引得出", "quote": "3 年以上 Swift 经验"},
+    {"point": "编的", "quote": "必须精通 Rust 和汇编"},
+    {"point": "没给 quote", "quote": ""},
+    {"point": "只差换行", "quote": "我用 Swift 写过 两个 App"},
+], HAY)
+ok([k["point"] for k in kept] == ["引得出", "只差换行"],
+   "★ quote 引不出原文的**直接丢弃**;只差空白/换行的算引得出")
+ok(miss == 2, "★ 丢弃数要计出来(它高了 = 模型在编,除此之外看不出来)")
+
+F_FAIL = {"hard_fail": ["salary"], "coverage": {"rate": 0.30}}
+ok(ai.conflicts({"fit_why": "各方面都不错"}, F_FAIL, "worth", []),
+   "★ 硬门槛 fail 却给 worth → 报冲突(结构化比对,不看文字)")
+ok(not ai.conflicts({"fit_why": "薪资偏低"}, F_FAIL, "maybe", []),
+   "  同样 fail 但给 maybe → 不报")
+ok(ai.conflicts({"fit_why": "技能覆盖率约 80%"}, F_FAIL, "maybe", []),
+   "★ 模型自己又报一个覆盖率且和规则算的不符 → 报冲突")
+ok(ai.conflicts({"fit_why": "覆盖率 60%"},
+                {"hard_fail": [], "coverage": {"rate": None}}, "maybe", []),
+   "★ rate 是 None(算不出来)模型却报了百分比 → 报冲突(不是当 0 处理)")
+ok(not ai.conflicts({"fit_why": "覆盖率 30%,一般"},
+                    {"hard_fail": [], "coverage": {"rate": 0.30}}, "worth", []),
+   "  复述规则算的那个数 → 不报(prompt 允许引用,不允许改)")
+
+# 缓存键:两处必须用同一个函数,不然「每次点都重新花钱」而且不报错
+J, M = {"jd": "abc"}, {"resume_raw": "xyz"}
+ok(ai.hashes(J, M) == ai.hashes(dict(J), dict(M)), "hashes 对同样内容稳定")
+ok(ai.hashes({"jd": "abc2"}, M)[0] != ai.hashes(J, M)[0],
+   "★ JD 变了 jd_hash 就变 → 旧结论失效(JD 是只升不降补上来的)")
+ok(ai.hashes(J, {"resume": "xyz"})[1] == ai.hashes(J, M)[1],
+   "  resume_raw 缺失时回落 resume,口径一致")
 
 bad = [x for x in R if not x[0]]
 for good, label in R:

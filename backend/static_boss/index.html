@@ -48,6 +48,8 @@
  .msg.bad{border-color:var(--warn-line);background:var(--warn-dim);color:var(--warn-text)}
  .empty{padding:26px 20px;text-align:center;color:var(--dim);font-size:12px;line-height:1.8}
  .dot{width:6px;height:6px;border-radius:50%;display:inline-block;margin-right:5px}
+ a.lk{color:var(--accent-text);text-decoration:none;font-size:12px}
+ a.lk:hover{text-decoration:underline}
 </style>
 
 <div class="app">
@@ -55,6 +57,8 @@
     <h1>我的岗位库</h1>
     <span class="dbp" id="db"></span>
     <div class="sp">
+      <a class="lk" href="/me.html">我的简历</a>
+      <a class="lk" href="/match.html">岗位匹配</a>
       <span class="pill" id="ai">AI …</span>
       <button class="btn go" id="extract" disabled>提取</button>
     </div>
